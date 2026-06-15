@@ -1,0 +1,23 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36401.2 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "QuantPulseAI", "QuantPulseAI.pyproj", "{2D74BA4A-8E3E-4119-B1DE-7EE7687BAB9C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2D74BA4A-8E3E-4119-B1DE-7EE7687BAB9C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2D74BA4A-8E3E-4119-B1DE-7EE7687BAB9C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {ADB4A2D8-D76D-4331-ADC8-40321DC5E08C}
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,309 @@
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>2d74ba4a-8e3e-4119-b1de-7ee7687bab9c</ProjectGuid>
+    <ProjectHome>.</ProjectHome>
+    <StartupFile>
+    </StartupFile>
+    <SearchPath>
+    </SearchPath>
+    <WorkingDirectory>.</WorkingDirectory>
+    <OutputPath>.</OutputPath>
+    <Name>QuantPulseAI</Name>
+    <RootNamespace>QuantPulseAI</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <ItemGroup>
+    <Folder Include="backend\" />
+    <Folder Include="backend\alembic\" />
+    <Folder Include="backend\alembic\versions\" />
+    <Folder Include="backend\alembic\versions\__pycache__\" />
+    <Folder Include="backend\alembic\__pycache__\" />
+    <Folder Include="backend\app\" />
+    <Folder Include="backend\app\api\" />
+    <Folder Include="backend\app\api\v2\" />
+    <Folder Include="backend\app\api\v1\" />
+    <Folder Include="backend\app\collectors\" />
+    <Folder Include="backend\app\collectors\binances\" />
+    <Folder Include="backend\app\collectors\Bybit\" />
+    <Folder Include="backend\app\database\models\" />
+    <Folder Include="backend\app\engines\" />
+    <Folder Include="backend\app\intelligence\fusion\" />
+    <Folder Include="backend\app\intelligence\memory\" />
+    <Folder Include="backend\app\ml\" />
+    <Folder Include="backend\app\database\" />
+    <Folder Include="backend\app\jobs\" />
+    <Folder Include="backend\app\features\" />
+    <Folder Include="backend\app\intelligence\" />
+    <Folder Include="backend\app\backtesting\" />
+    <Folder Include="backend\app\ml\models\" />
+    <Folder Include="backend\app\ml\ensemble\" />
+    <Folder Include="backend\app\ml\prediction\" />
+    <Folder Include="backend\app\ml\registry\" />
+    <Folder Include="backend\app\ml\training\" />
+    <Folder Include="backend\app\models\" />
+    <Folder Include="backend\app\storage\" />
+    <Folder Include="backend\app\risk\" />
+    <Folder Include="backend\app\storage\models\" />
+    <Folder Include="backend\app\storage\models\BTCUSDT\" />
+    <Folder Include="backend\app\storage\models\ETHUSDT\" />
+    <Folder Include="backend\app\trading\" />
+    <Folder Include="backend\app\smc\" />
+    <Folder Include="backend\app\orderflow\" />
+    <Folder Include="backend\app\regimes\" />
+    <Folder Include="backend\app\scheduler\" />
+    <Folder Include="backend\app\repositories\" />
+    <Folder Include="backend\app\trading\planner\" />
+    <Folder Include="backend\app\utils\" />
+    <Folder Include="backend\app\services\" />
+    <Folder Include="frontend\" />
+    <Folder Include="frontend\database\" />
+    <Folder Include="frontend\database\seed\" />
+    <Folder Include="frontend\database\procedures\" />
+    <Folder Include="frontend\database\tables\" />
+    <Folder Include="frontend\quantpulse-dashboard\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="backend\alembic\env.py" />
+    <Compile Include="backend\app\api\v1\ai_scores_api.py" />
+    <Compile Include="backend\app\api\v1\backtest_api.py" />
+    <Compile Include="backend\app\api\v1\dataset_api.py" />
+    <Compile Include="backend\app\api\v1\features_api.py" />
+    <Compile Include="backend\app\api\v1\health_api.py" />
+    <Compile Include="backend\app\api\v1\indicators_api.py" />
+    <Compile Include="backend\app\api\v1\intelligence_api.py" />
+    <Compile Include="backend\app\api\v1\market_api.py" />
+    <Compile Include="backend\app\api\v1\ml_api.py" />
+    <Compile Include="backend\app\api\v1\ml_label_api.py" />
+    <Compile Include="backend\app\api\v1\prediction_api.py" />
+    <Compile Include="backend\app\api\v1\risk_api.py" />
+    <Compile Include="backend\app\api\v2\fusion_ai_api.py" />
+    <Compile Include="backend\app\api\v2\master_ai_v2_api.py" />
+    <Compile Include="backend\app\api\v1\orderflow_api.py" />
+    <Compile Include="backend\app\api\v1\regime_api.py" />
+    <Compile Include="backend\app\api\v1\signals_api.py" />
+    <Compile Include="backend\app\api\v1\smc_api.py" />
+    <Compile Include="backend\app\backtesting\backtest_engine.py" />
+    <Compile Include="backend\app\backtesting\trade_simulator.py" />
+    <Compile Include="backend\app\backtesting\performance_engine.py" />
+    <Compile Include="backend\app\backtesting\__init__.py" />
+    <Compile Include="backend\app\collectors\binances\candle_collector.py" />
+    <Compile Include="backend\app\collectors\binances\funding_collector.py" />
+    <Compile Include="backend\app\collectors\binances\liquidation_collector.py" />
+    <Compile Include="backend\app\collectors\binances\open_interest_collector.py" />
+    <Compile Include="backend\app\collectors\binances\orderbook_collector.py" />
+    <Compile Include="backend\app\collectors\binances\whale_collector.py" />
+    <Compile Include="backend\app\collectors\binances\__init__.py" />
+    <Compile Include="backend\app\collectors\Bybit\candle_collector.py" />
+    <Compile Include="backend\app\config.py" />
+    <Compile Include="backend\app\database\base.py" />
+    <Compile Include="backend\app\database\models\ai_scores.py" />
+    <Compile Include="backend\app\database\models\ai_signals.py" />
+    <Compile Include="backend\app\database\models\backtest_results.py" />
+    <Compile Include="backend\app\database\models\funding_rates.py" />
+    <Compile Include="backend\app\database\models\liquidations.py" />
+    <Compile Include="backend\app\database\models\liquidation_heatmaps.py" />
+    <Compile Include="backend\app\database\models\liquidity_signals.py" />
+    <Compile Include="backend\app\database\models\market_candles.py" />
+    <Compile Include="backend\app\database\models\market_data.py" />
+    <Compile Include="backend\app\database\models\market_features.py" />
+    <Compile Include="backend\app\database\models\market_order_flow.py" />
+    <Compile Include="backend\app\database\models\market_regimes.py" />
+    <Compile Include="backend\app\database\models\market_smc.py" />
+    <Compile Include="backend\app\database\models\master_signals.py" />
+    <Compile Include="backend\app\database\models\ml_label.py" />
+    <Compile Include="backend\app\database\models\ml_training_data.py" />
+    <Compile Include="backend\app\database\models\open_interest.py" />
+    <Compile Include="backend\app\database\models\order_flow_signal.py" />
+    <Compile Include="backend\app\database\models\regimes.py" />
+    <Compile Include="backend\app\database\models\risk_decision.py" />
+    <Compile Include="backend\app\database\models\risk_signal.py" />
+    <Compile Include="backend\app\database\models\signals.py" />
+    <Compile Include="backend\app\database\models\symbols.py" />
+    <Compile Include="backend\app\database\models\trades.py" />
+    <Compile Include="backend\app\database\models\trade_memory.py" />
+    <Compile Include="backend\app\database\models\trade_plan.py" />
+    <Compile Include="backend\app\database\models\whale_signals.py" />
+    <Compile Include="backend\app\database\models\whale_trades.py" />
+    <Compile Include="backend\app\database\models\__init__.py" />
+    <Compile Include="backend\app\database\sqlserver.py" />
+    <Compile Include="backend\app\database\__init__.py" />
+    <Compile Include="backend\app\dependencies.py" />
+    <Compile Include="backend\app\engines\atr_engine.py" />
+    <Compile Include="backend\app\engines\backtest_engine.py" />
+    <Compile Include="backend\app\engines\derivative_engine.py" />
+    <Compile Include="backend\app\engines\fusion_engine.py" />
+    <Compile Include="backend\app\engines\liquidation_heatmap_engine.py" />
+    <Compile Include="backend\app\engines\liquidity_engine.py" />
+    <Compile Include="backend\app\engines\master_ai_engine.py" />
+    <Compile Include="backend\app\engines\orderflow_engine.py" />
+    <Compile Include="backend\app\engines\orderflow_score_engine.py" />
+    <Compile Include="backend\app\engines\regime_engine.py" />
+    <Compile Include="backend\app\engines\scoring_engine.py" />
+    <Compile Include="backend\app\engines\sentiment_engine.py" />
+    <Compile Include="backend\app\database\models\signal_quality.py" />
+    <Compile Include="backend\app\engines\signal_quality_engine.py" />
+    <Compile Include="backend\app\engines\smart_money_engine.py" />
+    <Compile Include="backend\app\engines\smart_money_fusion_engine.py" />
+    <Compile Include="backend\app\engines\smc_engine.py" />
+    <Compile Include="backend\app\engines\technical_engine.py" />
+    <Compile Include="backend\app\engines\volatility_engine.py" />
+    <Compile Include="backend\app\engines\whale_engine.py" />
+    <Compile Include="backend\app\features\feature_factory.py" />
+    <Compile Include="backend\app\features\feature_service.py" />
+    <Compile Include="backend\app\features\liquidity_features.py" />
+    <Compile Include="backend\app\features\market_feature_builder.py" />
+    <Compile Include="backend\app\features\momentum_features.py" />
+    <Compile Include="backend\app\features\trend_features.py" />
+    <Compile Include="backend\app\features\volatility_features.py" />
+    <Compile Include="backend\app\features\__init__.py" />
+    <Compile Include="backend\app\intelligence\confidence_engine.py" />
+    <Compile Include="backend\app\intelligence\fusion\decision_engine.py" />
+    <Compile Include="backend\app\intelligence\fusion\fusion_engine.py" />
+    <Compile Include="backend\app\intelligence\fusion\fusion_models.py" />
+    <Compile Include="backend\app\intelligence\fusion\reasoning_engine.py" />
+    <Compile Include="backend\app\intelligence\fusion\weight_engine.py" />
+    <Compile Include="backend\app\intelligence\master_ai_engine.py" />
+    <Compile Include="backend\app\intelligence\memory\model_feedback_engine.py" />
+    <Compile Include="backend\app\intelligence\memory\outcome_tracker.py" />
+    <Compile Include="backend\app\intelligence\memory\performance_analyzer.py" />
+    <Compile Include="backend\app\intelligence\memory\trade_memory_engine.py" />
+    <Compile Include="backend\app\intelligence\risk_engine.py" />
+    <Compile Include="backend\app\intelligence\signal_quality_engine.py" />
+    <Compile Include="backend\app\intelligence\__init__.py" />
+    <Compile Include="backend\app\jobs\ai_signal_job.py" />
+    <Compile Include="backend\app\jobs\backtest_job.py" />
+    <Compile Include="backend\app\jobs\derivative_job.py" />
+    <Compile Include="backend\app\jobs\feature_jobs.py" />
+    <Compile Include="backend\app\jobs\fusion_job.py" />
+    <Compile Include="backend\app\jobs\heatmap_job.py" />
+    <Compile Include="backend\app\jobs\intelligence_job.py" />
+    <Compile Include="backend\app\jobs\liquidation_job.py" />
+    <Compile Include="backend\app\jobs\market_job.py" />
+    <Compile Include="backend\app\jobs\master_ai_job.py" />
+    <Compile Include="backend\app\jobs\memory_job.py" />
+    <Compile Include="backend\app\jobs\ml_dataset_job.py" />
+    <Compile Include="backend\app\jobs\ml_label_job.py" />
+    <Compile Include="backend\app\jobs\orderflow_jobs.py" />
+    <Compile Include="backend\app\jobs\regime_jobs.py" />
+    <Compile Include="backend\app\jobs\risk_job.py" />
+    <Compile Include="backend\app\jobs\signal_quality_job.py" />
+    <Compile Include="backend\app\jobs\smc_job.py" />
+    <Compile Include="backend\app\jobs\trade_plan_job.py" />
+    <Compile Include="backend\app\jobs\whale_intelligence_job.py" />
+    <Compile Include="backend\app\jobs\whale_job.py" />
+    <Compile Include="backend\app\jobs\__init__.py" />
+    <Compile Include="backend\app\main.py" />
+    <Compile Include="backend\app\ml\dataset_builder.py" />
+    <Compile Include="backend\app\ml\ensemble\ensemble_engine.py" />
+    <Compile Include="backend\app\ml\feature_encoder.py" />
+    <Compile Include="backend\app\ml\label_generator.py" />
+    <Compile Include="backend\app\ml\models\base_model.py" />
+    <Compile Include="backend\app\ml\models\lightgbm_model.py" />
+    <Compile Include="backend\app\ml\models\random_forest_model.py" />
+    <Compile Include="backend\app\ml\models\xgboost_model.py" />
+    <Compile Include="backend\app\ml\prediction\ml_prediction_service.py" />
+    <Compile Include="backend\app\ml\predictor.py" />
+    <Compile Include="backend\app\ml\models\__init__.py" />
+    <Compile Include="backend\app\ml\registry\model_registry.py" />
+    <Compile Include="backend\app\ml\trainer.py" />
+    <Compile Include="backend\app\ml\training\model_trainer.py" />
+    <Compile Include="backend\app\database\models\fusion_signal.py" />
+    <Compile Include="backend\app\orderflow\absorption_engine.py" />
+    <Compile Include="backend\app\orderflow\cvd_engine.py" />
+    <Compile Include="backend\app\orderflow\delta_engine.py" />
+    <Compile Include="backend\app\orderflow\orderflow_engine.py" />
+    <Compile Include="backend\app\orderflow\orderflow_service.py" />
+    <Compile Include="backend\app\orderflow\__init__.py" />
+    <Compile Include="backend\app\regimes\regime_engine.py" />
+    <Compile Include="backend\app\regimes\regime_service.py" />
+    <Compile Include="backend\app\regimes\rules.py" />
+    <Compile Include="backend\app\repositories\ai_signal_repository.py" />
+    <Compile Include="backend\app\repositories\backtest_repository.py" />
+    <Compile Include="backend\app\repositories\candle_repository.py" />
+    <Compile Include="backend\app\repositories\derivative_repository.py" />
+    <Compile Include="backend\app\repositories\feature_repository.py" />
+    <Compile Include="backend\app\repositories\fusion_repository.py" />
+    <Compile Include="backend\app\repositories\fusion_signal_repository.py" />
+    <Compile Include="backend\app\repositories\heatmap_repository.py" />
+    <Compile Include="backend\app\repositories\intelligence_repository.py" />
+    <Compile Include="backend\app\repositories\liquidation_repository.py" />
+    <Compile Include="backend\app\repositories\liquidity_repository.py" />
+    <Compile Include="backend\app\repositories\market_price_repository.py" />
+    <Compile Include="backend\app\repositories\market_repository.py" />
+    <Compile Include="backend\app\repositories\master_signal_repository.py" />
+    <Compile Include="backend\app\repositories\ml_label_repository.py" />
+    <Compile Include="backend\app\repositories\orderflow_repository.py" />
+    <Compile Include="backend\app\repositories\risk_repository.py" />
+    <Compile Include="backend\app\repositories\signal_quality_repository.py" />
+    <Compile Include="backend\app\repositories\smc_repository.py" />
+    <Compile Include="backend\app\repositories\symbol_repository.py" />
+    <Compile Include="backend\app\repositories\trade_plan_repository.py" />
+    <Compile Include="backend\app\repositories\whale_repository.py" />
+    <Compile Include="backend\app\repositories\whale_signal_repository.py" />
+    <Compile Include="backend\app\risk\drawdown_engine.py" />
+    <Compile Include="backend\app\risk\position_sizing.py" />
+    <Compile Include="backend\app\risk\risk_engine.py" />
+    <Compile Include="backend\app\risk\stop_loss_engine.py" />
+    <Compile Include="backend\app\risk\target_engine.py" />
+    <Compile Include="backend\app\risk\__init__.py" />
+    <Compile Include="backend\app\scheduler\scheduler.py" />
+    <Compile Include="backend\app\scheduler\scheduler_old.py" />
+    <Compile Include="backend\app\services\fusion_service.py" />
+    <Compile Include="backend\app\services\market_price_service.py" />
+    <Compile Include="backend\app\smc\bos_detector.py" />
+    <Compile Include="backend\app\smc\choch_detector.py" />
+    <Compile Include="backend\app\smc\fvg_detector.py" />
+    <Compile Include="backend\app\smc\fvg_engine.py" />
+    <Compile Include="backend\app\smc\liquidity_sweep_detector.py" />
+    <Compile Include="backend\app\smc\liquidity_sweep_engine.py" />
+    <Compile Include="backend\app\smc\order_block_detector.py" />
+    <Compile Include="backend\app\smc\order_block_engine.py" />
+    <Compile Include="backend\app\smc\smc_engine.py" />
+    <Compile Include="backend\app\smc\smc_service.py" />
+    <Compile Include="backend\app\smc\structure_engine.py" />
+    <Compile Include="backend\app\smc\__init__.py" />
+    <Compile Include="backend\app\trading\planner\entry_engine.py" />
+    <Compile Include="backend\app\trading\planner\invalidation_engine.py" />
+    <Compile Include="backend\app\trading\planner\position_engine.py" />
+    <Compile Include="backend\app\trading\planner\stop_engine.py" />
+    <Compile Include="backend\app\trading\planner\target_engine.py" />
+    <Compile Include="backend\app\trading\planner\trade_planner.py" />
+    <Compile Include="backend\app\trading\trade_plan_engine.py" />
+    <Compile Include="backend\app\trading\__init__.py" />
+    <Compile Include="backend\app\__init__.py" />
+    <Compile Include="backend\create_tables.py" />
+    <Compile Include="backend\run.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="backend\alembic.ini" />
+    <Content Include="backend\alembic\README" />
+    <Content Include="backend\alembic\script.py.mako" />
+    <Content Include="backend\alembic\__pycache__\env.cpython-313.pyc" />
+    <Content Include="backend\app\storage\models\BTCUSDT\lightgbm.pkl" />
+    <Content Include="backend\app\storage\models\BTCUSDT\randomforest.pkl" />
+    <Content Include="backend\app\storage\models\BTCUSDT\xgboost.pkl" />
+    <Content Include="backend\app\storage\models\ETHUSDT\lightgbm.pkl" />
+    <Content Include="backend\app\storage\models\ETHUSDT\randomforest.pkl" />
+    <Content Include="backend\app\storage\models\ETHUSDT\xgboost.pkl" />
+    <Content Include="backend\requirements.txt" />
+    <Content Include="README.md" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
+  <!-- Uncomment the CoreCompile target to enable the Build command in
+       Visual Studio and specify your pre- and post-build commands in
+       the BeforeBuild and AfterBuild targets below. -->
+  <!--<Target Name="CoreCompile" />-->
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+</Project>
