@@ -1,4 +1,4 @@
-from app.regimes.rules import detect_regime
+from app.regimes.regime_engine import analyze_market
 
 
 class RegimeEngine:
@@ -11,4 +11,4 @@ class RegimeEngine:
                 "reason": "No feature input supplied",
             }
 
-        return detect_regime(feature)
+        return analyze_market(feature)

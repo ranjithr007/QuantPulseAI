@@ -1,33 +1,204 @@
+REGIME_DEFINITIONS = {
+    "TRENDING_BULL": {
+        "strategy": "BUY_PULLBACK",
+        "bias": "BULLISH",
+        "risk_mode": "NORMAL",
+    },
+    "TRENDING_BEAR": {
+        "strategy": "SHORT_RALLY",
+        "bias": "BEARISH",
+        "risk_mode": "NORMAL",
+    },
+    "BULL_PULLBACK": {
+        "strategy": "WAIT_FOR_LONG_RECLAIM",
+        "bias": "BULLISH_PULLBACK",
+        "risk_mode": "REDUCED",
+    },
+    "BEAR_RALLY": {
+        "strategy": "WAIT_FOR_SHORT_REJECTION",
+        "bias": "BEARISH_RALLY",
+        "risk_mode": "REDUCED",
+    },
+    "RANGE_ACCUMULATION": {
+        "strategy": "BUY_RANGE_LOW_OR_BREAKOUT",
+        "bias": "ACCUMULATION",
+        "risk_mode": "REDUCED",
+    },
+    "RANGE_DISTRIBUTION": {
+        "strategy": "SELL_RANGE_HIGH_OR_BREAKDOWN",
+        "bias": "DISTRIBUTION",
+        "risk_mode": "REDUCED",
+    },
+    "RANGE_NEUTRAL": {
+        "strategy": "WAIT_RANGE_EXTREMES",
+        "bias": "NEUTRAL",
+        "risk_mode": "REDUCED",
+    },
+    "HIGH_VOLATILITY_BREAKOUT": {
+        "strategy": "BUY_BREAKOUT_CONFIRMATION",
+        "bias": "BULLISH_VOLATILE",
+        "risk_mode": "STRICT",
+    },
+    "HIGH_VOLATILITY_BREAKDOWN": {
+        "strategy": "SHORT_BREAKDOWN_CONFIRMATION",
+        "bias": "BEARISH_VOLATILE",
+        "risk_mode": "STRICT",
+    },
+    "LOW_VOLATILITY_COMPRESSION": {
+        "strategy": "WAIT_EXPANSION",
+        "bias": "NEUTRAL_COMPRESSION",
+        "risk_mode": "STRICT",
+    },
+    "LIQUIDITY_GRAB_BULLISH": {
+        "strategy": "BUY_AFTER_SWEEP_RECLAIM",
+        "bias": "BULLISH_REVERSAL",
+        "risk_mode": "STRICT",
+    },
+    "LIQUIDITY_GRAB_BEARISH": {
+        "strategy": "SHORT_AFTER_SWEEP_REJECTION",
+        "bias": "BEARISH_REVERSAL",
+        "risk_mode": "STRICT",
+    },
+    "MANIPULATION_PHASE": {
+        "strategy": "WAIT",
+        "bias": "DANGEROUS_NEUTRAL",
+        "risk_mode": "BLOCK",
+    },
+}
+
+
 def detect_regime(features):
+    trend = _score(features, "TrendScore")
+    momentum = _score(features, "MomentumScore")
+    volatility = _score(features, "VolatilityScore")
+    liquidity = _score(features, "LiquidityScore")
+    final_score = _score(features, "FinalScore")
 
-    trend = features.TrendScore
+    if liquidity >= 88 and volatility >= 82:
+        if momentum >= 58 and trend >= 45:
+            return _result(
+                "LIQUIDITY_GRAB_BULLISH",
+                84,
+                "High liquidity and volatility with bullish reclaim pressure",
+            )
+        if momentum <= 42 and trend <= 55:
+            return _result(
+                "LIQUIDITY_GRAB_BEARISH",
+                84,
+                "High liquidity and volatility with bearish rejection pressure",
+            )
 
-    momentum = features.MomentumScore
+        return _result(
+            "MANIPULATION_PHASE",
+            86,
+            "Liquidity and volatility are both extreme without clean direction",
+        )
 
-    volatility = features.VolatilityScore
+    if volatility >= 82 and trend >= 64 and momentum >= 58:
+        return _result(
+            "HIGH_VOLATILITY_BREAKOUT",
+            82,
+            "High volatility expansion with bullish trend and momentum",
+        )
 
-    liquidity = features.LiquidityScore
+    if volatility >= 82 and trend <= 36 and momentum <= 42:
+        return _result(
+            "HIGH_VOLATILITY_BREAKDOWN",
+            82,
+            "High volatility expansion with bearish trend and momentum",
+        )
 
-    # Bull trend
+    if volatility <= 25 and 38 <= trend <= 62:
+        return _result(
+            "LOW_VOLATILITY_COMPRESSION",
+            76,
+            "Volatility compression inside a non-trending structure",
+        )
 
-    if trend > 70 and momentum > 60:
+    if trend >= 72 and momentum >= 62:
+        return _result(
+            "TRENDING_BULL",
+            _confidence(78, trend, momentum),
+            "Trend and momentum are strongly bullish",
+        )
 
-        return {"regime": "TRENDING_BULL", "confidence": 85, "strategy": "BUY_PULLBACK"}
+    if trend <= 28 and momentum <= 38:
+        return _result(
+            "TRENDING_BEAR",
+            _confidence(78, 100 - trend, 100 - momentum),
+            "Trend and momentum are strongly bearish",
+        )
 
-    # Bear trend
+    if trend >= 60 and momentum < 52:
+        return _result(
+            "BULL_PULLBACK",
+            _confidence(66, trend, 100 - momentum),
+            "Bullish trend with lower-timeframe momentum pullback",
+        )
 
-    if trend < 40 and momentum < 40:
+    if trend <= 40 and momentum > 48:
+        return _result(
+            "BEAR_RALLY",
+            _confidence(66, 100 - trend, momentum),
+            "Bearish trend with counter-trend rally pressure",
+        )
 
-        return {"regime": "TRENDING_BEAR", "confidence": 85, "strategy": "SHORT_RALLY"}
+    if 40 <= trend <= 62 and momentum >= 52 and liquidity >= 55:
+        return _result(
+            "RANGE_ACCUMULATION",
+            _confidence(62, momentum, liquidity),
+            "Range structure with accumulation pressure",
+        )
 
-    # Manipulation
+    if 38 <= trend <= 60 and momentum <= 48 and liquidity >= 55:
+        return _result(
+            "RANGE_DISTRIBUTION",
+            _confidence(62, 100 - momentum, liquidity),
+            "Range structure with distribution pressure",
+        )
 
-    if liquidity > 80 and volatility > 75:
+    if final_score >= 64:
+        return _result(
+            "RANGE_ACCUMULATION",
+            _confidence(60, final_score, liquidity),
+            "Positive composite score without clean trend confirmation",
+        )
 
-        return {"regime": "MANIPULATION_PHASE", "confidence": 90, "strategy": "WAIT"}
+    if final_score <= 36:
+        return _result(
+            "RANGE_DISTRIBUTION",
+            _confidence(60, 100 - final_score, liquidity),
+            "Negative composite score without clean trend confirmation",
+        )
+
+    return _result(
+        "RANGE_NEUTRAL",
+        58,
+        "Mixed feature state without directional regime confirmation",
+    )
+
+
+def _result(regime, confidence, reason):
+    definition = REGIME_DEFINITIONS[regime]
 
     return {
-        "regime": "RANGE_ACCUMULATION",
-        "confidence": 60,
-        "strategy": "WAIT_BREAKOUT",
+        "regime": regime,
+        "confidence": min(95, max(0, round(float(confidence), 2))),
+        "strategy": definition["strategy"],
+        "bias": definition["bias"],
+        "risk_mode": definition["risk_mode"],
+        "reason": reason,
     }
+
+
+def _confidence(base, primary, secondary):
+    return base + max(0, primary - 50) * 0.18 + max(0, secondary - 50) * 0.12
+
+
+def _score(features, name):
+    value = getattr(features, name, None)
+
+    if value is None:
+        return 50.0
+
+    return float(value)

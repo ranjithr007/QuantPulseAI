@@ -5,4 +5,4 @@ def run_regime_job():
 
     print("Running Regime Engine...")
 
-    run_regime_analysis()
+    return run_regime_analysis()

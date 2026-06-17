@@ -39,6 +39,14 @@ class Phase0PlaceholderCleanupTests(unittest.TestCase):
             with self.subTest(router=router):
                 self.assertIn(router, source)
 
+    def test_regime_api_exposes_v3_catalog_and_diagnostics(self):
+        source = (APP_ROOT / "api" / "v1" / "regime_api.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("v3_regime_catalog", source)
+        self.assertIn("v3_regime_diagnostics", source)
+
 
 if __name__ == "__main__":
     unittest.main()

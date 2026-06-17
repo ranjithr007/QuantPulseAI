@@ -65,12 +65,24 @@ def score_master_signal_components(feature, regime, orderflow, smc):
         state = _get_value(regime, "Regime", "regime")
         components["regime"]["value"] = state
 
-        if state == "TRENDING_BULL":
+        if state in {
+            "TRENDING_BULL",
+            "BULL_PULLBACK",
+            "RANGE_ACCUMULATION",
+            "HIGH_VOLATILITY_BREAKOUT",
+            "LIQUIDITY_GRAB_BULLISH",
+        }:
 
             components["regime"]["score"] = 25
             components["regime"]["reason"] = "Bull regime"
 
-        elif state == "TRENDING_BEAR":
+        elif state in {
+            "TRENDING_BEAR",
+            "BEAR_RALLY",
+            "RANGE_DISTRIBUTION",
+            "HIGH_VOLATILITY_BREAKDOWN",
+            "LIQUIDITY_GRAB_BEARISH",
+        }:
 
             components["regime"]["score"] = -25
             components["regime"]["reason"] = "Bear regime"

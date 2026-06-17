@@ -72,6 +72,23 @@ Write-Host "Mode: $Mode"
 Write-Host "Output: $RunDir"
 
 Save-ValidationResult "health" "GET" "$BaseUrl/health"
+
+$HealthResult = $Summary[$Summary.Count - 1]
+if ($HealthResult.status -eq "FAIL") {
+    $SummaryPath = Join-Path $RunDir "summary.json"
+    $Summary | ConvertTo-Json -Depth 20 | Set-Content -Path $SummaryPath -Encoding UTF8
+
+    Write-Host ""
+    Write-Host "Phase 1 validation stopped: API health check failed"
+    Write-Host "The backend is not reachable at $BaseUrl."
+    Write-Host "Start the backend, wait for /health to respond, then rerun validation."
+    Write-Host "Output folder: $RunDir"
+    Write-Host "Summary: $SummaryPath"
+    Write-Host "Passed: 0"
+    Write-Host "Failed: 1"
+    exit 1
+}
+
 Save-ValidationResult "scheduler_jobs" "GET" "$BaseUrl/scheduler/jobs"
 Save-ValidationResult "signal_current" "GET" "$BaseUrl/signals/$Symbol"
 Save-ValidationResult "master_ai_current" "GET" "$BaseUrl/master-ai/$Symbol"

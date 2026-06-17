@@ -27,6 +27,10 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
         self.assertEqual(regime.module, "app.jobs.regime_jobs")
         self.assertEqual(regime.function, "run_regime_job")
         self.assertEqual(regime.minutes, 1)
+        self.assertIn("return run_regime_analysis()", self._source("app/jobs/regime_jobs.py"))
+
+    def _source(self, relative_path):
+        return (PROJECT_ROOT / "backend" / relative_path).read_text(encoding="utf-8")
 
     def test_watchlist_persist_job_is_registered_for_ready_setups(self):
         job = get_job_definition("watchlist-persist")
