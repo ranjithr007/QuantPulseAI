@@ -1,13 +1,8 @@
-from app.database.models.market_candles import MarketCandle
+from app.repositories.candle_repository import get_latest_candle
 
 
 class MarketPriceRepository:
 
-    def get_latest_candle(self, db, symbol):
+    def get_latest_candle(self, db, symbol, timeframe="5m"):
 
-        return (
-            db.query(MarketCandle)
-            .filter(MarketCandle.symbol == symbol)
-            .order_by(MarketCandle.timestamp.desc())
-            .first()
-        )
+        return get_latest_candle(db, symbol, timeframe)

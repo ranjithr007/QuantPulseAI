@@ -2,15 +2,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import declarative_base
 
-SERVER = "(localdb)\\MSSQLLocalDB"
-DATABASE = "QuantPulseAI"
+from app.config import get_settings
 
 
-DATABASE_URL = (
-    f"mssql+pyodbc://@{SERVER}/{DATABASE}"
-    "?driver=ODBC+Driver+17+for+SQL+Server"
-    "&trusted_connection=yes"
-)
+DATABASE_URL = get_settings().database_url
 
 
 engine = create_engine(

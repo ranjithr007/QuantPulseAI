@@ -8,3 +8,12 @@ class MasterSignalRepository:
         db.add(MasterSignal(**data))
 
         db.commit()
+
+    def latest(self, db, symbol):
+
+        return (
+            db.query(MasterSignal)
+            .filter(MasterSignal.symbol == symbol)
+            .order_by(MasterSignal.created_at.desc())
+            .first()
+        )

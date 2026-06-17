@@ -3,7 +3,7 @@ from app.repositories.symbol_repository import SymbolRepository
 from app.orderflow.orderflow_service import generate_orderflow
 
 
-TIMEFRAMES = ["5m", "15m", "1h"]
+TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
 
 
 def run_orderflow_job():

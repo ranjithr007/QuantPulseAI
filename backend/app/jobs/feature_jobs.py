@@ -3,7 +3,7 @@ from app.database.sqlserver import SessionLocal
 from app.repositories.symbol_repository import SymbolRepository
 
 
-TIMEFRAMES = ["5m", "15m", "1h"]
+TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
 
 
 def run_feature_job():

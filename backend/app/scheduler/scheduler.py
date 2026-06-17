@@ -1,186 +1,47 @@
-﻿from apscheduler.schedulers.background import BackgroundScheduler
+from app.config import get_settings
+from app.scheduler.registry import get_job_definition
+from app.scheduler.registry import resolve_job_ids
 
 
-from app.jobs.market_job import run_market_job
-from app.jobs.intelligence_job import run_intelligence_job
-from app.jobs.heatmap_job import run_heatmap_job
-from app.jobs.whale_job import run_whale_job
-from app.jobs.whale_intelligence_job import run_whale_intelligence_job
-from app.jobs.master_ai_job import run_master_ai_job
-from app.jobs.signal_quality_job import run_signal_quality_job
-from app.jobs.backtest_job import run_backtest_job
-from app.jobs.feature_jobs import run_feature_job
-from app.jobs.regime_jobs import run_regime_job
-from app.jobs.orderflow_jobs import run_orderflow_job
-from app.jobs.smc_job import run_smc_job
-from app.jobs.ml_dataset_job import run_ml_dataset_job
-from app.jobs.ml_label_job import run_ml_label_job
-from app.jobs.fusion_job import run_fusion_job
-from app.jobs.trade_plan_job import run_trade_plan_job
-from app.jobs.memory_job import run_memory_job
-from app.jobs.risk_job import run_risk_job
-
-scheduler = BackgroundScheduler(timezone="Asia/Kolkata", daemon=True)
+scheduler = None
 
 
-def start_scheduler():
+def get_scheduler():
+    return scheduler
+
+
+def start_scheduler(job_ids=None):
+    global scheduler
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except ModuleNotFoundError as exc:
+        print(f"Scheduler disabled: missing dependency {exc.name}")
+        return False
+
+    if scheduler is None:
+        scheduler = BackgroundScheduler(timezone="Asia/Kolkata", daemon=True)
 
     if scheduler.running:
-
         print("Scheduler already running")
+        return True
 
-        return
+    settings = get_settings()
+    selected_job_ids = resolve_job_ids(job_ids or settings.scheduler_job_ids)
 
     scheduler.remove_all_jobs()
 
-    print("🚀 Starting QuantPulse Scheduler")
+    print("Starting QuantPulse Scheduler:", ", ".join(selected_job_ids))
 
-    scheduler.add_job(
-        run_market_job,
-        "interval",
-        seconds=30,
-        id="market",
-        max_instances=1,
-        replace_existing=True,
-    )
+    for job_id in selected_job_ids:
+        definition = get_job_definition(job_id)
 
-    scheduler.add_job(
-        run_whale_job,
-        "interval",
-        seconds=20,
-        id="whales",
-        max_instances=1,
-        replace_existing=True,
-    )
+        if definition is None:
+            print(f"Skipping unknown scheduler job: {job_id}")
+            continue
 
-    scheduler.add_job(
-        run_intelligence_job,
-        "interval",
-        seconds=30,
-        id="intelligence",
-        max_instances=1,
-        replace_existing=True,
-    )
+        job_function = definition.load()
+        scheduler.add_job(job_function, **definition.schedule_kwargs())
 
-    scheduler.add_job(
-        run_heatmap_job,
-        "interval",
-        seconds=40,
-        id="heatmap",
-        max_instances=1,
-        replace_existing=True,
-    )
-
-    scheduler.add_job(
-        run_whale_intelligence_job,
-        "interval",
-        seconds=50,
-        id="whale_ai",
-        max_instances=1,
-        replace_existing=True,
-    )
-
-    scheduler.add_job(
-        run_master_ai_job,
-        "interval",
-        seconds=60,
-        id="master_ai",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_signal_quality_job,
-        "interval",
-        seconds=90,
-        id="quality",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_backtest_job,
-        "interval",
-        minutes=1,
-        id="backtest",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_feature_job,
-        "interval",
-        minutes=1,
-        id="feature",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_regime_job,
-        "interval",
-        minutes=1,
-        id="regime",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_orderflow_job,
-        "interval",
-        minutes=1,
-        id="orderflow",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_smc_job,
-        "interval",
-        minutes=1,
-        id="smcengin",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_ml_dataset_job,
-        "interval",
-        minutes=15,
-        id="ml_dataset_job",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        run_ml_label_job,
-        "interval",
-        minutes=5,
-        id="ml_label_job",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_fusion_job,
-        trigger="interval",
-        seconds=60,
-        id="fusion_ai_job",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_trade_plan_job,
-        trigger="interval",
-        seconds=120,
-        id="trade_plan_job",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_memory_job,
-        trigger="interval",
-        minutes=5,
-        id="ai_memory_job",
-        max_instances=1,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_risk_job,
-        "interval",
-        minutes=1,
-        id="risk_job",
-        max_instances=2,
-        replace_existing=True,
-    )
     scheduler.start()
+    return True

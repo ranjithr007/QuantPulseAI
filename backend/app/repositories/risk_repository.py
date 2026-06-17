@@ -10,19 +10,20 @@ class RiskRepository:
         db = SessionLocal()
 
         try:
+            targets = data.get("targets") or {}
 
             risk = RiskDecision(
                 symbol=data["symbol"],
-                signal=data["signal"],
-                decision=data["decision"],
-                entry_price=data["entry"],
-                stop_loss=data["stop_loss"],
-                target1=data["targets"]["t1"],
-                target2=data["targets"]["t2"],
-                position_size=data["position_size"],
-                risk_reward=data["risk_reward"],
-                confidence=data["confidence"],
-                risk_percent=1,
+                signal=data.get("signal"),
+                decision=data.get("decision"),
+                entry_price=data.get("entry"),
+                stop_loss=data.get("stop_loss"),
+                target1=targets.get("t1"),
+                target2=targets.get("t2"),
+                position_size=data.get("position_size"),
+                risk_reward=data.get("risk_reward"),
+                confidence=data.get("confidence"),
+                risk_percent=data.get("risk_percent", 1),
             )
 
             db.add(risk)
@@ -32,3 +33,24 @@ class RiskRepository:
         finally:
 
             db.close()
+
+    def latest(self, symbol):
+
+        db = SessionLocal()
+
+        try:
+
+            return self.latest_for_symbol(db, symbol)
+
+        finally:
+
+            db.close()
+
+    def latest_for_symbol(self, db, symbol):
+
+        return (
+            db.query(RiskDecision)
+            .filter(RiskDecision.symbol == symbol)
+            .order_by(RiskDecision.created_at.desc())
+            .first()
+        )

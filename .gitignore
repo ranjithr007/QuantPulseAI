@@ -3,6 +3,28 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+# QuantPulse/Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+backend/app/storage/models/
+frontend/node_modules/
+frontend/*/node_modules/
+frontend/*/dist/
+frontend/*/build/
+
 # User-specific files
 *.rsuser
 *.suo

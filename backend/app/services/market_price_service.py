@@ -21,7 +21,7 @@ class MarketPriceService:
 
                 return None
 
-            return float(candle.close)
+            return float(candle.close_price)
 
         finally:
 

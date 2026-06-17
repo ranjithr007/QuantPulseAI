@@ -34,4 +34,4 @@ class MasterSignal(Base):
 
     reasons = Column(String(1000))
 
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=datetime.utcnow)

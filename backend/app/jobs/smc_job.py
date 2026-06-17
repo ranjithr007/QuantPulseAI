@@ -8,7 +8,7 @@ from app.repositories.smc_repository import SMCRepository
 
 from app.engines.smc_engine import SMCEngine
 
-TIMEFRAMES = ["5m", "15m", "1h"]
+TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
 market_repo = MarketRepository()
 smc_repo = SMCRepository()
 

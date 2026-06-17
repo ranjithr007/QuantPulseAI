@@ -7,6 +7,7 @@ class FusionSignalRepository:
 
         record = FusionSignal(
             symbol=data["symbol"],
+            timeframe=data.get("timeframe"),
             decision=data["decision"],
             confidence=data["confidence"],
             ml_score=data.get("ml_score", 0),
@@ -27,13 +28,9 @@ class FusionSignalRepository:
 
     def get_latest_signals(self, db, limit=20):
 
-        try:
-            return (
-                db.query(FusionSignal)
-                .order_by(FusionSignal.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-
-        finally:
-            db.close()
+        return (
+            db.query(FusionSignal)
+            .order_by(FusionSignal.created_at.desc())
+            .limit(limit)
+            .all()
+        )

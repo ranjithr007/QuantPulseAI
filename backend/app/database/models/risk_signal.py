@@ -32,4 +32,4 @@ class RiskSignal(Base):
 
     reason = Column(String(500))
 
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=datetime.utcnow)

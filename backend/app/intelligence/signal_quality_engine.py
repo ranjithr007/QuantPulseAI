@@ -1,4 +1,12 @@
 
+def _get_value(obj, *names):
+    for name in names:
+        value = getattr(obj, name, None)
+        if value is not None:
+            return value
+    return None
+
+
 def validate_signal(signal, confidence, trade_plan, regime, orderflow, smc):
 
     score = 0
@@ -29,11 +37,13 @@ def validate_signal(signal, confidence, trade_plan, regime, orderflow, smc):
 
     if regime:
 
-        if signal == "LONG" and regime.regime == "TRENDING_BULL":
+        regime_state = _get_value(regime, "Regime", "regime")
+
+        if signal == "LONG" and regime_state == "TRENDING_BULL":
 
             score += 20
 
-        elif signal == "SHORT" and regime.regime == "TRENDING_BEAR":
+        elif signal == "SHORT" and regime_state == "TRENDING_BEAR":
 
             score += 20
 
@@ -45,11 +55,13 @@ def validate_signal(signal, confidence, trade_plan, regime, orderflow, smc):
 
     if orderflow:
 
-        if signal == "LONG" and orderflow.flow_signal == "BUYERS_CONTROL":
+        flow_signal = _get_value(orderflow, "FlowSignal", "flow_signal")
+
+        if signal == "LONG" and flow_signal == "BUYERS_CONTROL":
 
             score += 20
 
-        elif signal == "SHORT" and orderflow.flow_signal == "SELLERS_CONTROL":
+        elif signal == "SHORT" and flow_signal == "SELLERS_CONTROL":
 
             score += 20
 

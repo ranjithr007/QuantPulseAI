@@ -50,4 +50,4 @@ class MarketSMCSignal(Base):
 
     confidence = Column(Float)
 
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,0 +1,78 @@
+import unittest
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SIGNALS_API = PROJECT_ROOT / "backend" / "app" / "api" / "v1" / "signals_api.py"
+
+
+class Phase0SignalsApiStaticTests(unittest.TestCase):
+    def test_signals_endpoint_is_not_hardcoded_wait(self):
+        source = SIGNALS_API.read_text(encoding="utf-8")
+
+        self.assertIn("MasterSignalRepository", source)
+        self.assertIn("AISignalRepository", source)
+        self.assertIn("computed_current", source)
+        self.assertIn("NO_DATA", source)
+        self.assertIn("historical_stale_invalid", source)
+        self.assertIn("latest_persisted_signal", source)
+        self.assertIn("ignored_persisted_signal", source)
+        self.assertIn("is_usable", source)
+        self.assertIn("Persisted signal is stale", source)
+        self.assertIn('@router.get("/watchlist")', source)
+        self.assertIn('@router.post("/watchlist/persist-ready")', source)
+        self.assertIn("persist_ready_watchlist_setups_for_stack", source)
+        self.assertIn('@router.get("/{symbol}/diagnostics")', source)
+        self.assertIn('@router.get("/{symbol}/multi-timeframe")', source)
+        self.assertIn('@router.get("/{symbol}/trade-setup")', source)
+        self.assertIn('@router.get("/{symbol}/entry-trigger")', source)
+        self.assertIn("score_master_signal_components", source)
+        self.assertIn("combine_timeframe_signals", source)
+        self.assertIn("build_entry_trigger_decision", source)
+        self.assertIn("build_trade_setup_decision", source)
+        self.assertIn("_resolve_timeframe_stack", source)
+        self.assertIn("SUPPORTED_TIMEFRAMES", source)
+        self.assertIn("TIMEFRAME_MODES", source)
+        self.assertIn("WATCHLIST_STATUSES", source)
+        self.assertIn("WATCHLIST_SIDES", source)
+        self.assertIn("WATCHLIST_PERMISSION_PRIORITY", source)
+        self.assertIn('"scalp": ["1m", "5m", "15m"]', source)
+        self.assertIn('"swing": ["15m", "1h", "4h"]', source)
+        self.assertIn('"position": ["1h", "4h", "1d"]', source)
+        self.assertIn("mode: str | None = Query", source)
+        self.assertIn("lower: str | None = Query", source)
+        self.assertIn("higher: str | None = Query", source)
+        self.assertIn("status: str | None = Query", source)
+        self.assertIn("side: str | None = Query", source)
+        self.assertIn("failed_max: int | None = Query", source)
+        self.assertIn("failed_max is not None", source)
+        self.assertIn("Unsupported mode", source)
+        self.assertIn("Unsupported watchlist", source)
+        self.assertIn("for index, timeframe in enumerate(explicit)", source)
+        self.assertIn("_filter_watchlist", source)
+        self.assertIn("_sort_watchlist", source)
+        self.assertIn("_summarize_watchlist", source)
+        self.assertIn("_watchlist_priority_key", source)
+        self.assertIn('"sort": "priority"', source)
+        self.assertIn('"summary": _summarize_watchlist(sorted_records)', source)
+        self.assertIn('"ready": 0', source)
+        self.assertIn('"no_side": 0', source)
+        self.assertIn('"failed_max": failed_max', source)
+        self.assertIn("total_count", source)
+        self.assertIn("_watchlist_row", source)
+        self.assertIn("_persist_ready_watchlist_payload", source)
+        self.assertIn("TradePlanRepository", source)
+        self.assertIn("save_ready_trade_plan", source)
+        self.assertIn("has_open_trade", source)
+        self.assertIn("skipped_existing_open", source)
+        self.assertIn("skipped_invalid_trade_plan", source)
+        self.assertIn("watchlist_ready_trade_plan_persistence", source)
+        self.assertIn("failed_conditions", source)
+        self.assertIn("component_scores", source)
+        self.assertIn("validate_trade_plan_direction", source)
+        self.assertNotIn('"signal":"WAIT"', source.replace(" ", ""))
+        self.assertNotIn('"confidence":80', source.replace(" ", ""))
+
+
+if __name__ == "__main__":
+    unittest.main()

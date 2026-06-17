@@ -1,12 +1,6 @@
-from fastapi import APIRouter, Depends
-
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException
 
 from app.database.sqlserver import SessionLocal
-
-from app.ml.dataset_builder import DatasetBuilder
-
-from app.ml.trainer import ModelTrainer
 
 
 router = APIRouter(prefix="/ml", tags=["AI Model"])
@@ -15,12 +9,28 @@ router = APIRouter(prefix="/ml", tags=["AI Model"])
 @router.post("/train/{symbol}")
 def train_model(symbol: str):
     db = SessionLocal()
-    dataset = DatasetBuilder().build_dataset(db, symbol)
 
-    if dataset is None:
+    try:
 
-        return {"error": "Not enough data"}
+        try:
+            from app.ml.dataset_builder import DatasetBuilder
+            from app.ml.trainer import ModelTrainer
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"ML dependency is not installed: {exc.name}",
+            ) from exc
 
-    result = ModelTrainer().train(dataset)
+        dataset = DatasetBuilder(db).build(symbol)
 
-    return {"symbol": symbol, "result": result}
+        if dataset is None:
+
+            return {"error": "Not enough data"}
+
+        result = ModelTrainer(db).train()
+
+        return {"symbol": symbol, "dataset": dataset, "result": result}
+
+    finally:
+
+        db.close()

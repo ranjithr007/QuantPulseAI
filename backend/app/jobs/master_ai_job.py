@@ -10,6 +10,7 @@ from app.database.models.liquidity_signals import LiquiditySignal
 from app.database.models.liquidation_heatmaps import LiquidationHeatmap
 from app.database.models.whale_signals import WhaleSignal
 from app.engines.atr_engine import ATREngine
+from app.trading.trade_plan_engine import build_trade_plan
 
 
 def run_master_ai_job():
@@ -65,11 +66,22 @@ def run_master_ai_job():
                 continue
             candles = get_latest_candles(db, symbol, "5m", 100)
 
-            result = engine.analyze(db, symbol, liquidity, heatmap, whale)
+            current_price = heatmap.current_price
+            atr = atr_engine.calculate(candles) or current_price * 0.01
 
-            result["entry_price"] = heatmap.current_price
+            result = engine.analyze(
+                db,
+                symbol,
+                liquidity,
+                heatmap,
+                whale,
+                current_price,
+                atr,
+            )
 
-            result["target_price"] = heatmap.target_price
+            trade_plan = build_trade_plan(result["signal"], current_price, atr)
+            result["entry_price"] = trade_plan["entry"]
+            result["target_price"] = trade_plan["target1"]
 
             master_repo.save(db, result)
 

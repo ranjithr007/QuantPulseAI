@@ -1,10 +1,6 @@
-from fastapi import APIRouter, Depends
-
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException
 
 from app.database.sqlserver import SessionLocal
-
-from app.ml.predictor import PredictionEngine
 
 
 router = APIRouter(prefix="/ai", tags=["AI Prediction"])
@@ -13,4 +9,19 @@ router = APIRouter(prefix="/ai", tags=["AI Prediction"])
 @router.get("/predict/{symbol}")
 def predict(symbol: str):
     db = SessionLocal()
-    return PredictionEngine(db).predict(symbol)
+
+    try:
+
+        try:
+            from app.ml.predictor import PredictionEngine
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"ML dependency is not installed: {exc.name}",
+            ) from exc
+
+        return PredictionEngine(db).predict(symbol)
+
+    finally:
+
+        db.close()

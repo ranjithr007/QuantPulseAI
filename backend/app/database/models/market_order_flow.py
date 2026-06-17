@@ -39,4 +39,4 @@ class MarketOrderFlow(Base):
 
     Confidence = Column(Float)
 
-    CreatedAt = Column(DateTime, default=datetime.now)
+    CreatedAt = Column(DateTime, default=datetime.utcnow)

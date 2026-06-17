@@ -40,4 +40,4 @@ class TradePlan(Base):
 
     closed_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=datetime.utcnow)

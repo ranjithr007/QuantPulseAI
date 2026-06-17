@@ -4,10 +4,12 @@ class TargetEngine:
 
         risk = abs(entry - stop)
 
-        if signal == "BUY":
+        if signal in {"BUY", "LONG"}:
 
             return {"t1": entry + risk * 2, "t2": entry + risk * 3}
 
-        if signal == "SELL":
+        if signal in {"SELL", "SHORT"}:
 
             return {"t1": entry - risk * 2, "t2": entry - risk * 3}
+
+        return None

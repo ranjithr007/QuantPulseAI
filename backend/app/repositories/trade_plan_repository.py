@@ -89,3 +89,26 @@ class TradePlanRepository:
         db.refresh(trade)
 
         return trade
+
+    def save_ready_trade_plan(self, db, symbol, side, plan, confidence=0):
+
+        trade = TradePlan(
+            symbol=symbol,
+            side=side,
+            entry_price=plan["entry"],
+            stop_loss=plan["stop_loss"],
+            target1=plan["target1"],
+            target2=plan.get("target2"),
+            target3=None,
+            risk_reward=plan["risk_reward"],
+            confidence=confidence,
+            status="OPEN",
+        )
+
+        db.add(trade)
+
+        db.commit()
+
+        db.refresh(trade)
+
+        return trade

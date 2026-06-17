@@ -4,6 +4,7 @@ from app.collectors.binances.candle_collector import CandleCollector
 
 from app.repositories.market_repository import MarketRepository
 from app.repositories.symbol_repository import SymbolRepository
+from app.utils.freshness import normalize_timestamp_to_utc
 
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
@@ -32,7 +33,8 @@ def run_market_job():
             for candle in candles:
                 # print(candle)
                 if last_time:
-                    last_time_ms = int(last_time.timestamp() * 1000)
+                    last_time_utc = normalize_timestamp_to_utc(last_time)
+                    last_time_ms = int(last_time_utc.timestamp() * 1000)
                     if candle["open_time_ms"] <= last_time_ms:
                         continue;  # skip already saved
                 

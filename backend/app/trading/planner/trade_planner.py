@@ -2,6 +2,7 @@ from .entry_engine import EntryEngine
 from .stop_engine import StopEngine
 from .target_engine import TargetEngine
 from .position_engine import PositionEngine
+from .invalidation_engine import InvalidationEngine
 
 
 class TradePlanner:
@@ -16,6 +17,8 @@ class TradePlanner:
 
         self.position = PositionEngine()
 
+        self.invalidation = InvalidationEngine()
+
     def create_plan(self, signal, price, atr):
 
         side = "LONG" if "LONG" in signal["decision"] else "SHORT"
@@ -25,6 +28,7 @@ class TradePlanner:
         stop = self.stop.calculate(entry, atr, side)
 
         targets = self.target.calculate(entry, stop, side)
+        invalidation = self.invalidation.calculate(side, entry, stop, atr)
 
         return {
             "symbol": signal["symbol"],
@@ -32,6 +36,7 @@ class TradePlanner:
             "entry": round(entry, 2),
             "stop_loss": round(stop, 2),
             "targets": targets,
+            "invalidation": invalidation,
             "rr": self.position.calculate_rr(entry, stop, targets[-1]),
             "confidence": signal["confidence"],
         }

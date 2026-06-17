@@ -3,6 +3,7 @@ from app.intelligence.fusion.fusion_models import FusionInput
 
 from app.repositories.intelligence_repository import IntelligenceRepository
 from app.repositories.fusion_repository import FusionSignalRepository
+from app.utils.freshness import freshness_status
 
 
 class FusionService:
@@ -14,7 +15,7 @@ class FusionService:
         self.repo = IntelligenceRepository()
         self.fusion_repository = FusionSignalRepository()
 
-    def generate(self, db, symbol, timeframe: str = "5m"):
+    def generate(self, db, symbol, timeframe: str = "5m", stale_after_seconds: int = 900):
 
         feature = self.repo.get_latest_feature(db, symbol, timeframe)
 
@@ -50,9 +51,44 @@ class FusionService:
         )
 
         result = self.engine.analyze(data)
+        result["timeframe"] = timeframe
 
         # SAVE FUSION RESULT 
         saved_signal = self.fusion_repository.save(db, result)
 
         # print("Fusion Result:", result)
-        return saved_signal
+        return {
+            "id": saved_signal.id,
+            "symbol": saved_signal.symbol,
+            "timeframe": saved_signal.timeframe,
+            "decision": saved_signal.decision,
+            "confidence": saved_signal.confidence,
+            "scores": {
+                "ml_score": saved_signal.ml_score,
+                "regime_score": saved_signal.regime_score,
+                "orderflow_score": saved_signal.orderflow_score,
+                "smc_score": saved_signal.smc_score,
+                "liquidation_score": saved_signal.liquidation_score,
+                "whale_score": saved_signal.whale_score,
+            },
+            "inputs": {
+                "feature": freshness_status(
+                    getattr(feature, "CreatedAt", None),
+                    stale_after_seconds,
+                ),
+                "regime": freshness_status(
+                    getattr(regime, "CreatedAt", None),
+                    stale_after_seconds,
+                ),
+                "orderflow": freshness_status(
+                    getattr(orderflow, "CreatedAt", None),
+                    stale_after_seconds,
+                ),
+                "smc": freshness_status(
+                    getattr(smc, "created_at", None),
+                    stale_after_seconds,
+                ),
+            },
+            "created_at": saved_signal.created_at,
+            "freshness": freshness_status(saved_signal.created_at, stale_after_seconds),
+        }
