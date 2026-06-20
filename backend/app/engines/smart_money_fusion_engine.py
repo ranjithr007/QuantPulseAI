@@ -12,14 +12,21 @@ class SmartMoneyFusionEngine:
 
             return {"bias": bias, "score": score, "reasons": reasons}
 
+        bos_type = self._value(smc, "bos", "bos_type")
+        liquidity_sweep = self._value(smc, "liquidity_sweep")
+        absorption_type = self._value(orderflow, "absorption_type", "Absorption")
+        delta = self._value(orderflow, "delta", "Delta", "cumulative_delta", "CVD")
+        whale_buy_count = self._value(orderflow, "whale_buy_count", "BuyerStrength")
+        whale_sell_count = self._value(orderflow, "whale_sell_count", "SellerStrength")
+
         # =========================
         # Smart Money LONG trap
         # =========================
 
         if (
-            smc.liquidity_sweep == "SELL_SIDE_SWEEP"
-            and orderflow.absorption_type == "BUY_ABSORPTION"
-            and orderflow.cumulative_delta > 0
+            self._matches(liquidity_sweep, "SELL_SIDE_SWEEP")
+            and self._matches(absorption_type, "BUY_ABSORPTION")
+            and self._number(delta) > 0
         ):
 
             score += 40
@@ -33,9 +40,9 @@ class SmartMoneyFusionEngine:
         # =========================
 
         if (
-            smc.liquidity_sweep == "BUY_SIDE_SWEEP"
-            and orderflow.absorption_type == "SELL_ABSORPTION"
-            and orderflow.cumulative_delta < 0
+            self._matches(liquidity_sweep, "BUY_SIDE_SWEEP")
+            and self._matches(absorption_type, "SELL_ABSORPTION")
+            and self._number(delta) < 0
         ):
 
             score -= 40
@@ -49,9 +56,9 @@ class SmartMoneyFusionEngine:
         # =========================
 
         if (
-            smc.bos == "BULLISH_BOS"
-            and orderflow.delta > 0
-            and orderflow.whale_buy_count > orderflow.whale_sell_count
+            self._matches(bos_type, "BULLISH_BOS")
+            and self._number(delta) > 0
+            and self._number(whale_buy_count) > self._number(whale_sell_count)
         ):
 
             score += 25
@@ -63,9 +70,9 @@ class SmartMoneyFusionEngine:
         # =========================
 
         if (
-            smc.bos == "BEARISH_BOS"
-            and orderflow.delta < 0
-            and orderflow.whale_sell_count > orderflow.whale_buy_count
+            self._matches(bos_type, "BEARISH_BOS")
+            and self._number(delta) < 0
+            and self._number(whale_sell_count) > self._number(whale_buy_count)
         ):
 
             score -= 25
@@ -73,3 +80,27 @@ class SmartMoneyFusionEngine:
             reasons.append("Bearish BOS confirmed by whales")
 
         return {"bias": bias, "score": max(0, min(score, 100)), "reasons": reasons}
+
+    def _value(self, item, *names):
+        for name in names:
+            if hasattr(item, name):
+                value = getattr(item, name)
+                if value is not None:
+                    return value
+
+        return None
+
+    def _matches(self, value, expected):
+        if value is None:
+            return False
+
+        return str(value).upper() == expected
+
+    def _number(self, value):
+        if value is None:
+            return 0
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0

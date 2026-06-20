@@ -23,6 +23,8 @@ class Phase0MasterAiApiStaticTests(unittest.TestCase):
 
         self.assertIn("def build_master_ai_response", source)
         self.assertIn("return build_master_ai_response", source)
+        self.assertIn("build_contradiction_report", source)
+        self.assertIn("build_probability_profile", source)
 
     def test_main_wires_master_ai_alias(self):
         source = (APP_ROOT / "main.py").read_text(encoding="utf-8")

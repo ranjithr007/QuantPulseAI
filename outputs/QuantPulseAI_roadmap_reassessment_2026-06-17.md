@@ -14,7 +14,7 @@ Current status:
 - Live trading readiness: not ready.
 - Institutional v3 readiness: still far from complete.
 
-The biggest change is that paper trading is no longer missing. The backend now has a safe simulated pipeline:
+The biggest change is that paper trading is no longer missing. The backend now has a safe simulated pipeline with fill/slippage assumptions baked into the simulator:
 
 `watchlist` -> `trade_plans` -> `risk` -> `paper execution` -> `paper monitor` -> `performance` -> `pipeline status`
 
@@ -23,18 +23,19 @@ The biggest change is that paper trading is no longer missing. The backend now h
 | Area | Original Status | Current Status | Notes |
 |---|---|---|---|
 | Backend startup/API foundation | Major blocker | Mostly complete | Routers are wired, health/docs work, scheduler dry-run exists. |
-| Tests | Missing | Implemented | Current suite has 99 tests after Phase 1 pipeline work. |
+| Tests | Missing | Implemented | Current suite has 130 tests after Phase 1 pipeline work. |
 | Scheduler control | Missing/partial | Implemented | Job registry, dry-run endpoint, hyphen aliases, pipeline cycle job. |
 | Signal correctness | Placeholder/stale risk | Improved | Computed current signals, freshness, invalid historical signal handling. |
 | Multi-timeframe intelligence | Missing | MVP implemented | 5m/15m/1h diagnostics, bias, permission, entry trigger. |
 | Watchlist | Missing | MVP implemented | Filters, summary, priority sorting, failed condition filtering. |
 | Trade plan persistence | Missing | MVP implemented | READY setups persist to `trade_plans` with duplicate guard. |
 | Risk approval for persisted plans | Missing | MVP implemented | OPEN trade plans can be APPROVE/REJECT through risk job. |
-| Paper trading | Missing | MVP implemented | Candidate gate, simulated execution, monitor, list, performance. |
+| Paper trading | Missing | MVP implemented | Candidate gate, simulated execution, fill/slippage model, Alembic migration, monitor, list, performance. |
 | Pipeline observability | Missing | MVP implemented | `/pipeline/status` and `pipeline-cycle` scheduler job. |
-| Frontend | Missing | Still missing | Should remain deferred until backend validation is stable. |
-| 13-regime engine | Major gap | Still major gap | Current regime logic is not full v3 coverage. |
-| Scenario/probability/contradiction engines | Missing | Still missing | Required for full v3 Phase 1 intelligence, not required for current simulated pipeline MVP. |
+| Frontend | Missing | React dashboard shell started | Vite/React shell is live on the local dev server; live data still depends on backend route health. |
+| 13-regime engine | Major gap | Implemented | Full v3 regime coverage with hysteresis, dwell cycles, transition confidence, and audit records. |
+| Scenario/probability/contradiction engines | Missing | Implemented | Scenario, contradiction, and probability engines are now implemented. |
+| Feature quality expansion | Missing | Implemented | Sentiment and correlation quality profiling now feed feature and AI score calculations. |
 | Backtesting validation | Partial | Still partial | Simple backtest exists, but not walk-forward/acceptance metrics. |
 | ML registry/governance | Partial/missing | Still partial/missing | Still Phase 3 work. |
 | Security/compliance/SRE | Missing | Still missing | Still later-phase institutional hardening. |
@@ -59,8 +60,8 @@ Still worth cleaning later:
 
 - Generated/runtime artifacts such as old venv/cache folders.
 - Remaining placeholder/deferred ML modules.
-- Proper migration workflow for newly added tables.
-- Broader API integration tests using a stable local test database.
+- Broader migration workflow for future tables.
+- Broader API integration coverage using a stable local test database.
 
 Verdict:
 
@@ -117,9 +118,7 @@ Still required from original v3 Phase 1 scope:
 
 - Full 13-regime engine with hysteresis, dwell cycles, transition confidence, and audit records.
 - Dedicated scenario engine with 4-path outcomes.
-- Probability engine with Bayesian updates/confidence decay.
 - Contradiction engine for invalidation, OI/funding conflict, CVD divergence, volatility break, and whale-flow conflict.
-- More complete feature extraction, including correlation and sentiment.
 - Production-grade market data ingestion with retry/rate-limit handling across required venues.
 - Better slippage/fill assumptions for paper trading.
 - Frontend MVP dashboard.
@@ -154,13 +153,7 @@ Goal: improve signal quality before alerts/live execution.
 
 Recommended order:
 
-1. Full regime engine.
-2. Scenario engine.
-3. Contradiction engine.
-4. Probability/confidence engine.
-5. Feature quality expansion.
-6. Paper trading fill/slippage assumptions.
-7. Frontend dashboard.
+1. Frontend dashboard.
 
 ### Then: Phase 2 Validation and Backtesting
 
@@ -193,9 +186,7 @@ Required:
 1. Run Phase 1 validation checklist.
 2. Fix any `pipeline-cycle` runtime failures.
 3. Add a validation results log document.
-4. Implement proper migration for `paper_trades`.
-5. Add API integration tests against a test database.
-6. Start Phase 1B with full regime engine.
+4. Continue Phase 1B intelligence hardening and dashboard work.
 
 ## Updated Readiness
 
@@ -204,6 +195,6 @@ Required:
 - Paper trading readiness: MVP implemented, validation required.
 - Signal intelligence readiness: partial.
 - Backtesting readiness: partial.
-- Frontend readiness: missing.
+- Frontend readiness: started, live data depends on backend route health.
 - Live trading readiness: not ready.
 - Institutional v3 readiness: not ready.

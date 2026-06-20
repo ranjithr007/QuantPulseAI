@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Query
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.database.sqlserver import SessionLocal
+from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.risk_repository import RiskRepository
@@ -9,6 +11,51 @@ from app.utils.freshness import freshness_status
 
 
 router = APIRouter(prefix="/paper-trade", tags=["Paper Trade"])
+
+
+def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
+    normalized_symbol = symbol.upper() if symbol else None
+    repo = PaperTradeRepository()
+
+    trades = repo.all_trades(db, symbol=normalized_symbol)
+    open_trades = [
+        _paper_trade_payload(trade)
+        for trade in repo.list_trades(db, status="OPEN", symbol=normalized_symbol, limit=open_limit)
+    ]
+    closed_trades = [
+        _paper_trade_payload(trade)
+        for trade in repo.list_trades(db, status="CLOSED", symbol=normalized_symbol, limit=closed_limit)
+    ]
+    total_pnl_percent = round(sum(item.get("pnl_percent", 0) or 0 for item in closed_trades), 2)
+    wins = sum(1 for item in closed_trades if (item.get("pnl_percent") or 0) > 0)
+    losses = sum(1 for item in closed_trades if (item.get("pnl_percent") or 0) < 0)
+    closed_count = len(closed_trades)
+
+    return {
+        "source": "paper_trade_bundle",
+        "symbol_filter": normalized_symbol,
+        "performance": {
+            **paper_trade_performance(trades),
+            "total_trades": len(trades),
+            "open_trades": len(open_trades),
+            "closed_trades": closed_count,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round((wins / closed_count) * 100, 2) if closed_count else 0,
+            "average_pnl_percent": round(total_pnl_percent / closed_count, 2) if closed_count else 0,
+            "total_pnl_percent": total_pnl_percent,
+            "closedTrades": closed_trades,
+        },
+        "summary": _summarize_paper_trades(open_trades + closed_trades),
+        "openTrades": {
+            "count": len(open_trades),
+            "records": open_trades,
+        },
+        "closedTrades": {
+            "count": len(closed_trades),
+            "records": closed_trades,
+        },
+    }
 
 
 @router.get("/performance")
@@ -25,6 +72,31 @@ def get_paper_trade_performance(symbol: str | None = Query(default=None)):
             "symbol_filter": normalized_symbol,
             "performance": paper_trade_performance(trades),
         }
+
+    except SQLAlchemyError as exc:
+        return _paper_trade_unavailable_payload(
+            operation="performance",
+            symbol_filter=symbol,
+            detail="Paper-trade performance is unavailable because the database is not reachable.",
+        )
+
+    finally:
+        db.close()
+
+
+@router.get("/bundle")
+def get_paper_trade_bundle(symbol: str | None = Query(default=None)):
+    db = SessionLocal()
+
+    try:
+        return build_paper_trade_bundle(db, symbol=symbol)
+
+    except SQLAlchemyError:
+        return _paper_trade_unavailable_payload(
+            operation="bundle",
+            symbol_filter=symbol,
+            detail="Paper-trade bundle is unavailable because the database is not reachable.",
+        )
 
     finally:
         db.close()
@@ -61,6 +133,14 @@ def get_paper_trades(
             "records": records,
         }
 
+    except SQLAlchemyError as exc:
+        return _paper_trade_unavailable_payload(
+            operation="trades",
+            symbol_filter=symbol,
+            status_filter=normalized_status,
+            detail="Paper-trade list is unavailable because the database is not reachable.",
+        )
+
     finally:
         db.close()
 
@@ -93,8 +173,37 @@ def get_paper_trade_candidates(
             "records": records,
         }
 
+    except SQLAlchemyError as exc:
+        return _paper_trade_unavailable_payload(
+            operation="candidates",
+            symbol_filter=symbol,
+            detail="Paper-trade candidates are unavailable because the database is not reachable.",
+        )
+
     finally:
         db.close()
+
+
+@router.get("/fill-model")
+def get_paper_trade_fill_model(
+    side: str = Query(...),
+    planned_entry_price: float = Query(..., gt=0),
+    stop_loss: float | None = Query(default=None),
+    target1: float | None = Query(default=None),
+    confidence: float = Query(default=50, ge=0, le=100),
+    risk_reward: float | None = Query(default=None),
+):
+    return {
+        "source": "paper_trade_fill_model",
+        "profile": build_fill_profile(
+            side=side,
+            planned_entry_price=planned_entry_price,
+            stop_loss=stop_loss,
+            target1=target1,
+            confidence=confidence,
+            risk_reward=risk_reward,
+        ),
+    }
 
 
 @router.post("/execute-candidates")
@@ -144,7 +253,12 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 continue
 
             paper_trade = repo.save_candidate(db, candidate)
-            executed.append(_paper_trade_payload(paper_trade))
+            executed.append(
+                _paper_trade_payload(
+                    paper_trade,
+                    fill_profile=candidate.get("fill_profile"),
+                )
+            )
 
         return {
             "source": "paper_trade_execution_simulator",
@@ -155,6 +269,12 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             "executed": executed,
             "skipped": skipped,
         }
+
+    except SQLAlchemyError as exc:
+        return _paper_trade_execution_unavailable_payload(
+            symbol_filter=symbol,
+            detail="Paper-trade execution is unavailable because the database is not reachable.",
+        )
 
     finally:
         db.close()
@@ -187,8 +307,8 @@ def build_paper_trade_candidates(db, symbol=None, stale_after_seconds=900):
     return normalized_symbol, records
 
 
-def _paper_trade_payload(paper_trade):
-    return {
+def _paper_trade_payload(paper_trade, fill_profile=None):
+    payload = {
         "id": paper_trade.id,
         "trade_plan_id": paper_trade.trade_plan_id,
         "risk_decision_id": paper_trade.risk_decision_id,
@@ -211,6 +331,11 @@ def _paper_trade_payload(paper_trade):
         "created_at": paper_trade.created_at,
     }
 
+    if fill_profile is not None:
+        payload["fill_profile"] = fill_profile
+
+    return payload
+
 
 def _summarize_paper_trades(records):
     return {
@@ -224,6 +349,14 @@ def _summarize_paper_trades(records):
 def _paper_trade_candidate(trade, risk, stale_after_seconds):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
     blocked_reasons = _paper_trade_blocked_reasons(trade, risk, risk_payload)
+    fill_profile = build_fill_profile(
+        side=trade.side,
+        planned_entry_price=trade.entry_price,
+        stop_loss=trade.stop_loss,
+        target1=trade.target1,
+        confidence=risk_payload.get("confidence", trade.confidence or 50),
+        risk_reward=trade.risk_reward,
+    )
 
     return {
         "symbol": trade.symbol,
@@ -232,6 +365,7 @@ def _paper_trade_candidate(trade, risk, stale_after_seconds):
         "blocked_reasons": blocked_reasons,
         "trade_plan": _trade_plan_payload(trade),
         "risk_decision": risk_payload,
+        "fill_profile": fill_profile,
     }
 
 
@@ -309,3 +443,87 @@ def _same_price(left, right):
         return False
 
     return abs(float(left) - float(right)) <= 0.00000001
+
+
+def _paper_trade_unavailable_payload(operation, symbol_filter=None, status_filter=None, detail="Paper-trade data is unavailable because the database is not reachable."):
+    normalized_symbol = symbol_filter.upper() if symbol_filter else None
+    payload = {
+        "source": f"paper_trade_{operation}_fallback",
+        "database_status": "UNAVAILABLE",
+        "message": detail,
+    }
+
+    if normalized_symbol is not None:
+        payload["symbol_filter"] = normalized_symbol
+
+    if status_filter is not None:
+        payload["status_filter"] = status_filter
+
+    if operation == "performance":
+        payload["performance"] = {
+            "total_trades": 0,
+            "open_trades": 0,
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "long_trades": 0,
+            "short_trades": 0,
+            "win_rate": 0,
+            "average_pnl_percent": 0,
+            "total_pnl_percent": 0,
+        }
+    elif operation == "trades":
+        payload.update(
+            {
+                "count": 0,
+                "summary": {"open": 0, "closed": 0, "wins": 0, "losses": 0},
+                "records": [],
+            }
+        )
+    elif operation == "candidates":
+        payload.update(
+            {
+                "count": 0,
+                "eligible_count": 0,
+                "blocked_count": 0,
+                "records": [],
+            }
+        )
+    elif operation == "bundle":
+        payload.update(
+            {
+                "performance": {
+                    "total_trades": 0,
+                    "open_trades": 0,
+                    "closed_trades": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "long_trades": 0,
+                    "short_trades": 0,
+                    "win_rate": 0,
+                    "average_pnl_percent": 0,
+                    "total_pnl_percent": 0,
+                },
+                "summary": {"open": 0, "closed": 0, "wins": 0, "losses": 0},
+                "openTrades": {"count": 0, "records": []},
+                "closedTrades": {"count": 0, "records": []},
+            }
+        )
+
+    return payload
+
+
+def _paper_trade_execution_unavailable_payload(symbol_filter=None, detail="Paper-trade execution is unavailable because the database is not reachable."):
+    normalized_symbol = symbol_filter.upper() if symbol_filter else None
+    payload = {
+        "source": "paper_trade_execution_simulator_fallback",
+        "database_status": "UNAVAILABLE",
+        "message": detail,
+        "symbol_filter": normalized_symbol,
+        "candidate_count": 0,
+        "executed_count": 0,
+        "skipped_count": 0,
+        "executed": [],
+        "skipped": [],
+    }
+    return payload

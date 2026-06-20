@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from importlib import import_module
 
 
+DEFAULT_JOB_IDS = ["market", "feature", "regime", "orderflow", "smc"]
+
+
 @dataclass(frozen=True)
 class SchedulerJobDefinition:
     id: str
@@ -243,7 +246,7 @@ def get_job_definition(job_id):
 
 def resolve_job_ids(job_ids):
     if not job_ids:
-        return ["market"]
+        return DEFAULT_JOB_IDS
 
     if job_ids == ["all"]:
         return list(JOB_DEFINITIONS.keys())

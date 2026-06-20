@@ -2,9 +2,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.database.models.market_candles import MarketCandle
 from app.database.sqlserver import SessionLocal
+from app.intelligence.contradiction_engine import build_contradiction_report
+from app.intelligence.probability_engine import build_probability_profile
 from app.intelligence.master_ai_engine import generate_master_signal
 from app.intelligence.master_ai_engine import score_master_signal_components
 from app.intelligence.multi_timeframe_engine import combine_timeframe_signals
+from app.intelligence.scenario_engine import build_scenario_plan
 from app.intelligence.trade_setup_engine import build_entry_trigger_decision
 from app.intelligence.trade_setup_engine import build_trade_setup_decision
 from app.repositories.ai_signal_repository import AISignalRepository
@@ -36,6 +39,139 @@ WATCHLIST_PERMISSION_PRIORITY = {
     "SHORT_ALLOWED": 1,
     "WAIT": 3,
 }
+
+
+def build_multi_timeframe_signal_payload(
+    db,
+    symbol,
+    mode=None,
+    lower=None,
+    middle=None,
+    higher=None,
+    stale_after_seconds=900,
+):
+    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
+    timeframes = [
+        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
+        for timeframe in stack
+    ]
+    confirmation = combine_timeframe_signals(timeframes)
+
+    return {
+        "symbol": symbol,
+        "source": "multi_timeframe_confirmation",
+        "mode": mode,
+        "timeframes_used": stack,
+        "timeframes": timeframes,
+        "confirmation": confirmation,
+    }
+
+
+def build_trade_setup_payload(
+    db,
+    symbol,
+    mode=None,
+    lower=None,
+    middle=None,
+    higher=None,
+    stale_after_seconds=900,
+):
+    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
+    timeframes = [
+        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
+        for timeframe in stack
+    ]
+    confirmation = combine_timeframe_signals(timeframes)
+    setup = build_trade_setup_decision(confirmation, timeframes)
+    scenario = build_scenario_plan(confirmation, timeframes)
+    trade_plan = None
+    validation = None
+
+    if setup["status"] == "READY":
+        candle = _latest_candle(db, symbol, stack[0])
+        data = get_ai_inputs(db, symbol, stack[0])
+        current_price = float(candle.close_price)
+        atr = _latest_atr(data["feature"], current_price)
+        trade_plan = build_trade_plan(setup["side"], current_price, atr)
+        scenario = build_scenario_plan(
+            confirmation,
+            timeframes,
+            trade_plan=trade_plan,
+            current_price=current_price,
+            atr=atr,
+        )
+        validation = validate_trade_plan_direction(
+            setup["side"],
+            trade_plan["entry"],
+            trade_plan["target1"],
+        )
+
+    return {
+        "symbol": symbol,
+        "source": "multi_timeframe_trade_setup",
+        "mode": mode,
+        "timeframes_used": stack,
+        "setup": setup,
+        "confirmation": confirmation,
+        "scenario": scenario,
+        "trade_plan": trade_plan,
+        "trade_plan_validation": validation,
+        "timeframes": timeframes,
+    }
+
+
+def build_entry_trigger_payload(
+    db,
+    symbol,
+    mode=None,
+    lower=None,
+    middle=None,
+    higher=None,
+    stale_after_seconds=900,
+):
+    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
+    timeframes = [
+        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
+        for timeframe in stack
+    ]
+    confirmation = combine_timeframe_signals(timeframes)
+    trigger = build_entry_trigger_decision(confirmation, timeframes)
+    trade_plan = None
+    validation = None
+
+    if trigger["status"] == "READY":
+        lower_timeframe = stack[0]
+        candle = _latest_candle(db, symbol, lower_timeframe)
+        data = get_ai_inputs(db, symbol, lower_timeframe)
+        current_price = float(candle.close_price)
+        atr = _latest_atr(data["feature"], current_price)
+        trade_plan = build_trade_plan(trigger["side"], current_price, atr)
+        validation = validate_trade_plan_direction(
+            trigger["side"],
+            trade_plan["entry"],
+            trade_plan["target1"],
+        )
+
+    return {
+        "symbol": symbol,
+        "source": "multi_timeframe_entry_trigger",
+        "trigger": trigger,
+        "confirmation": confirmation,
+        "trade_plan": trade_plan,
+        "trade_plan_validation": validation,
+        "timeframes": timeframes,
+    }
+
+
+def _build_entry_trigger_payload(db, symbol, timeframes_to_use, stale_after_seconds):
+    return build_entry_trigger_payload(
+        db,
+        symbol,
+        lower=timeframes_to_use[0] if len(timeframes_to_use) > 0 else None,
+        middle=timeframes_to_use[1] if len(timeframes_to_use) > 1 else None,
+        higher=timeframes_to_use[2] if len(timeframes_to_use) > 2 else None,
+        stale_after_seconds=stale_after_seconds,
+    )
 
 
 @router.get("/watchlist")
@@ -177,21 +313,15 @@ def get_multi_timeframe_signal(
     db = SessionLocal()
 
     try:
-        stack = _resolve_timeframe_stack(mode, lower, middle, higher)
-        timeframes = [
-            _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
-            for timeframe in stack
-        ]
-        confirmation = combine_timeframe_signals(timeframes)
-
-        return {
-            "symbol": symbol,
-            "source": "multi_timeframe_confirmation",
-            "mode": mode,
-            "timeframes_used": stack,
-            "timeframes": timeframes,
-            "confirmation": confirmation,
-        }
+        return build_multi_timeframe_signal_payload(
+            db,
+            symbol,
+            mode=mode,
+            lower=lower,
+            middle=middle,
+            higher=higher,
+            stale_after_seconds=stale_after_seconds,
+        )
 
     finally:
         db.close()
@@ -209,39 +339,79 @@ def get_trade_setup(
     db = SessionLocal()
 
     try:
+        return build_trade_setup_payload(
+            db,
+            symbol,
+            mode=mode,
+            lower=lower,
+            middle=middle,
+            higher=higher,
+            stale_after_seconds=stale_after_seconds,
+        )
+
+    finally:
+        db.close()
+
+
+@router.get("/{symbol}/scenario")
+def get_scenario(
+    symbol: str,
+    mode: str | None = Query(default=None),
+    lower: str | None = Query(default=None),
+    middle: str | None = Query(default=None),
+    higher: str | None = Query(default=None),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    db = SessionLocal()
+
+    try:
         stack = _resolve_timeframe_stack(mode, lower, middle, higher)
         timeframes = [
             _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
             for timeframe in stack
         ]
         confirmation = combine_timeframe_signals(timeframes)
-        setup = build_trade_setup_decision(confirmation, timeframes)
-        trade_plan = None
-        validation = None
-
-        if setup["status"] == "READY":
-            candle = _latest_candle(db, symbol, stack[0])
-            data = get_ai_inputs(db, symbol, stack[0])
-            current_price = float(candle.close_price)
-            atr = _latest_atr(data["feature"], current_price)
-            trade_plan = build_trade_plan(setup["side"], current_price, atr)
-            validation = validate_trade_plan_direction(
-                setup["side"],
-                trade_plan["entry"],
-                trade_plan["target1"],
-            )
+        scenario = build_scenario_plan(confirmation, timeframes)
 
         return {
             "symbol": symbol,
-            "source": "multi_timeframe_trade_setup",
+            "source": "scenario_engine",
             "mode": mode,
             "timeframes_used": stack,
-            "setup": setup,
-            "confirmation": confirmation,
-            "trade_plan": trade_plan,
-            "trade_plan_validation": validation,
             "timeframes": timeframes,
+            "confirmation": confirmation,
+            "scenario": scenario,
         }
+
+    finally:
+        db.close()
+
+
+@router.get("/{symbol}/contradiction")
+def get_contradiction(
+    symbol: str,
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    db = SessionLocal()
+
+    try:
+        return build_contradiction_report(db, symbol, timeframe, stale_after_seconds)
+
+    finally:
+        db.close()
+
+
+@router.get("/{symbol}/probability")
+def get_probability(
+    symbol: str,
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    db = SessionLocal()
+
+    try:
+        return build_probability_profile(db, symbol, timeframe, stale_after_seconds)
 
     finally:
         db.close()
@@ -259,11 +429,15 @@ def get_entry_trigger(
     db = SessionLocal()
 
     try:
-        stack = _resolve_timeframe_stack(mode, lower, middle, higher)
-        payload = _build_entry_trigger_payload(db, symbol, stack, stale_after_seconds)
-        payload["mode"] = mode
-        payload["timeframes_used"] = stack
-        return payload
+        return build_entry_trigger_payload(
+            db,
+            symbol,
+            mode=mode,
+            lower=lower,
+            middle=middle,
+            higher=higher,
+            stale_after_seconds=stale_after_seconds,
+        )
 
     finally:
         db.close()
@@ -284,6 +458,89 @@ def get_signal_diagnostics(
         db.close()
 
 
+def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
+    candle = _latest_candle(db, symbol, timeframe)
+
+    if not candle:
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "source": "computed_current",
+            "signal": "NO_DATA",
+            "confidence": 0,
+            "freshness": freshness_status(None, stale_after_seconds),
+            "message": "No latest candle found for symbol/timeframe",
+            "contradiction": build_contradiction_report(
+                db,
+                symbol,
+                timeframe,
+                stale_after_seconds,
+            ),
+            "probability": build_probability_profile(
+                db,
+                symbol,
+                timeframe,
+                stale_after_seconds,
+            ),
+        }
+
+    data = get_ai_inputs(db, symbol, timeframe)
+    signal = generate_master_signal(data["feature"], data["regime"], data["orderflow"], data["smc"])
+
+    current_price = float(candle.close_price)
+    atr = _latest_atr(data["feature"], current_price)
+    trade_plan = build_trade_plan(signal["signal"], current_price, atr)
+
+    persisted_signal = _latest_persisted_signal(db, symbol, stale_after_seconds)
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "source": "computed_current",
+        "signal": signal["signal"],
+        "bias": signal["bias"],
+        "confidence": signal["confidence"],
+        "score": signal["score"],
+        "current_price": current_price,
+        "candle_time": candle.candle_time,
+        "freshness": freshness_status(candle.candle_time, stale_after_seconds),
+        "trade_plan": trade_plan,
+        "reasons": signal["reasons"],
+        "contradiction": build_contradiction_report(
+            db,
+            symbol,
+            timeframe,
+            stale_after_seconds,
+        ),
+        "probability": build_probability_profile(
+            db,
+            symbol,
+            timeframe,
+            stale_after_seconds,
+        ),
+        "inputs": {
+            "feature": freshness_status(
+                getattr(data["feature"], "CreatedAt", None),
+                stale_after_seconds,
+            ),
+            "regime": freshness_status(
+                getattr(data["regime"], "CreatedAt", None),
+                stale_after_seconds,
+            ),
+            "orderflow": freshness_status(
+                getattr(data["orderflow"], "CreatedAt", None),
+                stale_after_seconds,
+            ),
+            "smc": freshness_status(
+                getattr(data["smc"], "created_at", None),
+                stale_after_seconds,
+            ),
+        },
+        "latest_persisted_signal": persisted_signal["latest_usable"],
+        "ignored_persisted_signal": persisted_signal["latest_ignored"],
+    }
+
+
 @router.get("/{symbol}")
 def get_signal(
     symbol: str,
@@ -293,64 +550,7 @@ def get_signal(
     db = SessionLocal()
 
     try:
-        candle = _latest_candle(db, symbol, timeframe)
-
-        if not candle:
-            return {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "source": "computed_current",
-                "signal": "NO_DATA",
-                "confidence": 0,
-                "freshness": freshness_status(None, stale_after_seconds),
-                "message": "No latest candle found for symbol/timeframe",
-            }
-
-        data = get_ai_inputs(db, symbol, timeframe)
-        signal = generate_master_signal(
-            data["feature"], data["regime"], data["orderflow"], data["smc"]
-        )
-
-        current_price = float(candle.close_price)
-        atr = _latest_atr(data["feature"], current_price)
-        trade_plan = build_trade_plan(signal["signal"], current_price, atr)
-
-        persisted_signal = _latest_persisted_signal(db, symbol, stale_after_seconds)
-
-        return {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "source": "computed_current",
-            "signal": signal["signal"],
-            "bias": signal["bias"],
-            "confidence": signal["confidence"],
-            "score": signal["score"],
-            "current_price": current_price,
-            "candle_time": candle.candle_time,
-            "freshness": freshness_status(candle.candle_time, stale_after_seconds),
-            "trade_plan": trade_plan,
-            "reasons": signal["reasons"],
-            "inputs": {
-                "feature": freshness_status(
-                    getattr(data["feature"], "CreatedAt", None),
-                    stale_after_seconds,
-                ),
-                "regime": freshness_status(
-                    getattr(data["regime"], "CreatedAt", None),
-                    stale_after_seconds,
-                ),
-                "orderflow": freshness_status(
-                    getattr(data["orderflow"], "CreatedAt", None),
-                    stale_after_seconds,
-                ),
-                "smc": freshness_status(
-                    getattr(data["smc"], "created_at", None),
-                    stale_after_seconds,
-                ),
-            },
-            "latest_persisted_signal": persisted_signal["latest_usable"],
-            "ignored_persisted_signal": persisted_signal["latest_ignored"],
-        }
+        return build_signal_payload(db, symbol, timeframe, stale_after_seconds)
 
     finally:
         db.close()
@@ -362,7 +562,7 @@ def _latest_candle(db, symbol, timeframe):
 
 def _resolve_timeframe_stack(mode=None, lower=None, middle=None, higher=None):
     stack = _timeframe_stack_from_mode(mode)
-    explicit = [lower, middle, higher]
+    explicit = [_normalize_timeframe_value(lower), _normalize_timeframe_value(middle), _normalize_timeframe_value(higher)]
 
     for index, timeframe in enumerate(explicit):
         if timeframe:
@@ -385,10 +585,10 @@ def _resolve_timeframe_stack(mode=None, lower=None, middle=None, higher=None):
 
 
 def _timeframe_stack_from_mode(mode):
-    if mode is None:
-        return list(DEFAULT_TIMEFRAME_STACK)
+    normalized_mode = _normalize_timeframe_value(mode)
 
-    normalized_mode = mode.lower()
+    if normalized_mode is None:
+        return list(DEFAULT_TIMEFRAME_STACK)
 
     if normalized_mode not in TIMEFRAME_MODES:
         raise HTTPException(
@@ -397,6 +597,23 @@ def _timeframe_stack_from_mode(mode):
         )
 
     return list(TIMEFRAME_MODES[normalized_mode])
+
+
+def _normalize_timeframe_value(value):
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    normalized = text.lower()
+    if "annotation=" in normalized and "alias=" in normalized:
+        return None
+    if normalized.startswith("query("):
+        return None
+
+    return normalized
 
 
 def _filter_watchlist(records, status=None, side=None, failed_max=None):
@@ -586,40 +803,6 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
     }
 
 
-def _build_entry_trigger_payload(db, symbol, timeframes_to_use, stale_after_seconds):
-    timeframes = [
-        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
-        for timeframe in timeframes_to_use
-    ]
-    confirmation = combine_timeframe_signals(timeframes)
-    trigger = build_entry_trigger_decision(confirmation, timeframes)
-    trade_plan = None
-    validation = None
-
-    if trigger["status"] == "READY":
-        lower_timeframe = timeframes_to_use[0]
-        candle = _latest_candle(db, symbol, lower_timeframe)
-        data = get_ai_inputs(db, symbol, lower_timeframe)
-        current_price = float(candle.close_price)
-        atr = _latest_atr(data["feature"], current_price)
-        trade_plan = build_trade_plan(trigger["side"], current_price, atr)
-        validation = validate_trade_plan_direction(
-            trigger["side"],
-            trade_plan["entry"],
-            trade_plan["target1"],
-        )
-
-    return {
-        "symbol": symbol,
-        "source": "multi_timeframe_entry_trigger",
-        "trigger": trigger,
-        "confirmation": confirmation,
-        "trade_plan": trade_plan,
-        "trade_plan_validation": validation,
-        "timeframes": timeframes,
-    }
-
-
 def _watchlist_row(payload):
     timeframes = {
         item["timeframe"]: item
@@ -676,6 +859,18 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
             "score": 0,
             "freshness": freshness_status(None, stale_after_seconds),
             "message": "No latest candle found for symbol/timeframe",
+            "contradiction": build_contradiction_report(
+                db,
+                symbol,
+                timeframe,
+                stale_after_seconds,
+            ),
+            "probability": build_probability_profile(
+                db,
+                symbol,
+                timeframe,
+                stale_after_seconds,
+            ),
         }
 
     data = get_ai_inputs(db, symbol, timeframe)
@@ -699,6 +894,18 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
         "freshness": freshness_status(candle.candle_time, stale_after_seconds),
         "component_scores": components,
         "reasons": signal["reasons"],
+        "contradiction": build_contradiction_report(
+            db,
+            symbol,
+            timeframe,
+            stale_after_seconds,
+        ),
+        "probability": build_probability_profile(
+            db,
+            symbol,
+            timeframe,
+            stale_after_seconds,
+        ),
         "inputs": {
             "feature": freshness_status(
                 getattr(data["feature"], "CreatedAt", None),

@@ -22,17 +22,24 @@ def start_scheduler(job_ids=None):
     if scheduler is None:
         scheduler = BackgroundScheduler(timezone="Asia/Kolkata", daemon=True)
 
-    if scheduler.running:
-        print("Scheduler already running")
-        return True
-
     settings = get_settings()
     selected_job_ids = resolve_job_ids(job_ids or settings.scheduler_job_ids)
 
     scheduler.remove_all_jobs()
 
-    print("Starting QuantPulse Scheduler:", ", ".join(selected_job_ids))
+    action = "Reconfiguring" if scheduler.running else "Starting"
+    print(f"{action} QuantPulse Scheduler:", ", ".join(selected_job_ids))
 
+    _add_jobs(scheduler, selected_job_ids)
+
+    if scheduler.running:
+        return True
+
+    scheduler.start()
+    return True
+
+
+def _add_jobs(active_scheduler, selected_job_ids):
     for job_id in selected_job_ids:
         definition = get_job_definition(job_id)
 
@@ -41,7 +48,4 @@ def start_scheduler(job_ids=None):
             continue
 
         job_function = definition.load()
-        scheduler.add_job(job_function, **definition.schedule_kwargs())
-
-    scheduler.start()
-    return True
+        active_scheduler.add_job(job_function, **definition.schedule_kwargs())

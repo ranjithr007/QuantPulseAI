@@ -1,3 +1,6 @@
+from app.paper_trading.fill_model import simulate_exit_fill
+
+
 def evaluate_paper_trade_exit(trade, candle):
     high = float(candle.high_price)
     low = float(candle.low_price)
@@ -10,10 +13,24 @@ def evaluate_paper_trade_exit(trade, candle):
         target_hit = low <= trade.target1
 
     if stop_hit:
-        return _exit_decision(trade, candle, "LOSS", trade.stop_loss)
+        exit_fill = simulate_exit_fill(trade, trade.stop_loss, trigger_type="STOP")
+        return _exit_decision(
+            trade,
+            candle,
+            "LOSS",
+            exit_fill["exit_fill_price"],
+            exit_fill,
+        )
 
     if target_hit:
-        return _exit_decision(trade, candle, "WIN", trade.target1)
+        exit_fill = simulate_exit_fill(trade, trade.target1, trigger_type="TARGET")
+        return _exit_decision(
+            trade,
+            candle,
+            "WIN",
+            exit_fill["exit_fill_price"],
+            exit_fill,
+        )
 
     return {
         "paper_trade_id": trade.id,
@@ -27,7 +44,7 @@ def evaluate_paper_trade_exit(trade, candle):
     }
 
 
-def _exit_decision(trade, candle, result, exit_price):
+def _exit_decision(trade, candle, result, exit_price, fill_profile=None):
     return {
         "paper_trade_id": trade.id,
         "symbol": trade.symbol,
@@ -35,6 +52,7 @@ def _exit_decision(trade, candle, result, exit_price):
         "action": "CLOSE",
         "result": result,
         "exit_price": exit_price,
+        "fill_profile": fill_profile,
         "candle_time": candle.candle_time,
         "high_price": float(candle.high_price),
         "low_price": float(candle.low_price),

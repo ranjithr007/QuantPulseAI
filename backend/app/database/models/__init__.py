@@ -39,3 +39,4 @@ from .order_flow_signal import OrderFlowSignal
 from .risk_signal import RiskSignal
 from .risk_decision import RiskDecision
 from .paper_trade import PaperTrade
+from .automation_settings import AutomationSetting, AutomationSettingsAudit

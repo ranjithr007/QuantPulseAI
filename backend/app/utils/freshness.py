@@ -3,6 +3,21 @@ from datetime import timezone
 
 
 DEFAULT_STALE_AFTER_SECONDS = 15 * 60
+TIMEFRAME_STALE_AFTER_SECONDS = {
+    "1m": 5 * 60,
+    "5m": 15 * 60,
+    "15m": 25 * 60,
+    "1h": 65 * 60,
+    "4h": (4 * 60 + 5) * 60,
+    "1d": (24 * 60 + 25) * 60,
+}
+
+
+def stale_after_seconds_for_timeframe(timeframe, fallback=DEFAULT_STALE_AFTER_SECONDS):
+    if not timeframe:
+        return fallback
+
+    return TIMEFRAME_STALE_AFTER_SECONDS.get(str(timeframe).lower(), fallback)
 
 
 def freshness_status(timestamp, stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS):

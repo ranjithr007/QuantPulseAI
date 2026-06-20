@@ -53,17 +53,20 @@ class PaperTradeRepository:
         self.ensure_table(db)
         trade_plan = candidate["trade_plan"]
         risk = candidate["risk_decision"]
+        fill_profile = candidate.get("fill_profile") or {}
+        entry_price = fill_profile.get("entry_fill_price", trade_plan["entry_price"])
+        risk_reward = fill_profile.get("effective_risk_reward", risk["risk_reward"])
         paper_trade = PaperTrade(
             trade_plan_id=trade_plan["id"],
             risk_decision_id=risk["id"],
             symbol=candidate["symbol"],
             side=candidate["side"],
-            entry_price=trade_plan["entry_price"],
+            entry_price=entry_price,
             stop_loss=trade_plan["stop_loss"],
             target1=trade_plan["target1"],
             target2=trade_plan["target2"],
             position_size=risk["position_size"],
-            risk_reward=risk["risk_reward"],
+            risk_reward=risk_reward,
             risk_percent=risk["risk_percent"],
             confidence=risk["confidence"],
             status="OPEN",

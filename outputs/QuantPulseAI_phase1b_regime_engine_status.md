@@ -4,7 +4,7 @@ Date: `2026-06-17`
 
 ## Status
 
-Phase 1B has started with the v3 13-regime engine foundation.
+Phase 1B has started with the v3 13-regime engine foundation and now includes scenario, contradiction, probability, and paper-trade fill/slippage coverage.
 
 Implemented:
 
@@ -28,7 +28,20 @@ Implemented:
 - Regime API diagnostics endpoint
 - Regime API summary endpoint
 - Regime API transition-history endpoint
+- Scenario engine with 4-path outcomes in `app/intelligence/scenario_engine.py`
+- Scenario endpoint in `signals_api.py`
+- Scenario payload embedded in trade-setup responses
+- Contradiction engine in `app/intelligence/contradiction_engine.py`
+- Contradiction endpoint in `signals_api.py`
+- Contradiction payload embedded in signal and master-AI responses
+- Probability engine in `app/intelligence/probability_engine.py`
+- Probability endpoint in `signals_api.py`
+- Probability payload embedded in signal and master-AI responses
+- Feature quality profile with sentiment and correlation in `app/features/feature_quality_engine.py`
+- Feature quality endpoint in `features_api.py`
+- Feature quality now feeds current `ai-scores` calculations
 - Master AI regime scoring now understands expanded bullish/bearish v3 regime names
+- Paper-trade fill/slippage model for candidate execution and monitor exits
 
 ## Regime Catalog
 
@@ -80,7 +93,7 @@ cd C:\Users\Ranjith.Rallapalli\OneDrive\Documents\QuentPulseAI\QuantPulseAI\back
 Result:
 
 ```text
-Ran 113 tests in 0.419s
+Ran 130 tests in 0.516s
 OK
 ```
 
@@ -90,9 +103,5 @@ The regime engine foundation is now implemented, but Phase 1B is not complete.
 
 Remaining required v3 intelligence work:
 
-- Add scenario engine with 4-path outcomes.
-- Add probability/confidence engine with decay and Bayesian-style updates.
-- Add contradiction engine.
-- Expand features beyond the current score set.
 - Add richer transition audit storage as a dedicated table when database migration is scheduled.
 - Add dashboard views for regime catalog, latest regime state, and transition history.

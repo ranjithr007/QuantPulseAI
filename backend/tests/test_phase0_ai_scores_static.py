@@ -14,6 +14,8 @@ class Phase0AIScoresStaticTests(unittest.TestCase):
         self.assertIn("COMPUTED_NOT_PERSISTED", source)
         self.assertIn("_compute_current_score", source)
         self.assertIn("get_ai_inputs", source)
+        self.assertIn("build_feature_quality_profile", source)
+        self.assertIn("correlation_score", source)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from app.features.trend_features import calculate_trend
 from app.features.momentum_features import calculate_momentum
 from app.features.volatility_features import calculate_volatility
 from app.features.liquidity_features import calculate_liquidity
+from app.features.feature_quality_engine import build_feature_quality_profile
 
 
 def build_features(symbol, timeframe, candles):
@@ -33,6 +34,24 @@ def build_features(symbol, timeframe, candles):
 
         signal = "WAIT"
 
+    quality = build_feature_quality_profile(
+        db=None,
+        symbol=symbol,
+        timeframe=timeframe,
+        candles=candles,
+        feature={
+            "TrendScore": trend_score,
+            "MomentumScore": momentum_score,
+            "VolatilityScore": volatility_score,
+            "LiquidityScore": liquidity_score,
+            "FinalScore": final_score,
+            "Trend": trend,
+            "ATR": atr,
+        },
+        benchmark_symbol=None,
+        window=min(len(candles), 30) if candles else 30,
+    )
+
     return {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -44,4 +63,9 @@ def build_features(symbol, timeframe, candles):
         "trend": trend,
         "final_score": final_score,
         "signal": signal,
+        "quality": quality,
+        "sentiment_score": quality["sentiment_score"],
+        "correlation_score": quality["correlation_score"],
+        "quality_score": quality["quality_score"],
+        "quality_bias": quality["quality_bias"],
     }

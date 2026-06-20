@@ -56,6 +56,38 @@ def scheduler_status():
     }
 
 
+@router.post("/start")
+def start_scheduler_endpoint(
+    jobs: str | None = Query(
+        default=None,
+        description="Optional comma-separated scheduler job ids. Defaults to configured jobs.",
+    ),
+):
+    job_ids = _parse_job_ids(jobs)
+
+    try:
+        from app.scheduler.scheduler import get_scheduler
+        from app.scheduler.scheduler import start_scheduler
+    except ModuleNotFoundError as exc:
+        return {
+            "available": False,
+            "started": False,
+            "running": False,
+            "missing_dependency": exc.name,
+            "jobs": [],
+        }
+
+    started = start_scheduler(job_ids)
+    scheduler = get_scheduler()
+
+    return {
+        "available": True,
+        "started": started,
+        "running": bool(scheduler and scheduler.running),
+        "jobs": _scheduler_jobs(scheduler),
+    }
+
+
 @router.post("/jobs/{job_id}/dry-run")
 def dry_run_job(
     job_id: str,
@@ -115,3 +147,24 @@ def dry_run_job(
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc),
     }
+
+
+def _parse_job_ids(jobs):
+    if not jobs:
+        return None
+
+    return [item.strip() for item in jobs.split(",") if item.strip()]
+
+
+def _scheduler_jobs(scheduler):
+    if scheduler is None:
+        return []
+
+    return [
+        {
+            "id": job.id,
+            "name": job.name,
+            "next_run_time": job.next_run_time,
+        }
+        for job in scheduler.get_jobs()
+    ]

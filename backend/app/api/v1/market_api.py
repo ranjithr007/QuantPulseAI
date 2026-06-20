@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from app.database.models.market_candles import MarketCandle
 from app.database.sqlserver import SessionLocal
 from app.repositories.candle_repository import get_latest_candles
+from app.utils.freshness import stale_after_seconds_for_timeframe
 from app.utils.freshness import with_freshness
 
 
@@ -14,11 +15,17 @@ def get_market_candles(
     symbol: str,
     timeframe: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
-    stale_after_seconds: int = Query(default=900, ge=1),
+    stale_after_seconds: int | None = Query(default=None, ge=1),
 ):
     db = SessionLocal()
 
     try:
+        effective_stale_after_seconds = (
+            stale_after_seconds
+            if stale_after_seconds is not None
+            else stale_after_seconds_for_timeframe(timeframe)
+        )
+
         if timeframe:
             records = get_latest_candles(db, symbol, timeframe, limit)
         else:
@@ -31,7 +38,7 @@ def get_market_candles(
             )
 
         items = [
-            with_freshness(record, "candle_time", stale_after_seconds)
+            with_freshness(record, "candle_time", effective_stale_after_seconds)
             for record in records
         ]
 

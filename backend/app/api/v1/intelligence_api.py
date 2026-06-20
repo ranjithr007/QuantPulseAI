@@ -1,5 +1,15 @@
 from fastapi import APIRouter, Query
 
+from app.api.v1.ai_scores_api import get_ai_scores
+from app.api.v1.market_api import get_market_candles
+from app.api.v1.orderflow_api import get_orderflow
+from app.api.v1.risk_api import get_risk
+from app.api.v1.signals_api import build_entry_trigger_payload
+from app.api.v1.signals_api import build_multi_timeframe_signal_payload
+from app.api.v1.signals_api import build_signal_payload
+from app.api.v1.signals_api import build_trade_setup_payload
+from app.api.v1.signals_api import get_signal_diagnostics
+from app.api.v1.smc_api import get_smc
 from app.database.models.market_candles import MarketCandle
 from app.database.sqlserver import SessionLocal
 from app.intelligence.master_ai_engine import generate_master_signal
@@ -66,5 +76,71 @@ def get_intelligence_snapshot(
             },
         }
 
+    finally:
+        db.close()
+
+
+@router.get("/{symbol}/bundle")
+def get_intelligence_bundle(
+    symbol: str,
+    timeframe: str = Query(default="1h"),
+    mode: str | None = Query(default=None),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    db = SessionLocal()
+
+    try:
+        signal = build_signal_payload(db, symbol, timeframe=timeframe, stale_after_seconds=stale_after_seconds)
+        diagnostics = get_signal_diagnostics(symbol, timeframe=timeframe, stale_after_seconds=stale_after_seconds)
+        candles = get_market_candles(symbol, timeframe=timeframe, limit=80, stale_after_seconds=stale_after_seconds)
+        orderflow = get_orderflow(symbol, timeframe=timeframe, limit=20, stale_after_seconds=stale_after_seconds)
+        smc = get_smc(symbol, timeframe=timeframe, limit=20, stale_after_seconds=stale_after_seconds)
+        risk = get_risk(symbol, stale_after_seconds=stale_after_seconds)
+        ai_scores = get_ai_scores(symbol, timeframe=timeframe, limit=20, stale_after_seconds=stale_after_seconds)
+        multi_timeframe = build_multi_timeframe_signal_payload(
+            db=db,
+            symbol=symbol,
+            mode=mode,
+            lower=None,
+            middle=None,
+            higher=None,
+            stale_after_seconds=stale_after_seconds,
+        )
+        trade_setup = build_trade_setup_payload(
+            db=db,
+            symbol=symbol,
+            mode=mode,
+            lower=None,
+            middle=None,
+            higher=None,
+            stale_after_seconds=stale_after_seconds,
+        )
+        entry_trigger = build_entry_trigger_payload(
+            db=db,
+            symbol=symbol,
+            mode=mode,
+            lower=None,
+            middle=None,
+            higher=None,
+            stale_after_seconds=stale_after_seconds,
+        )
+
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "mode": mode,
+            "stale_after_seconds": stale_after_seconds,
+            "source": "intelligence_bundle",
+            "signal": signal,
+            "diagnostics": diagnostics,
+            "candles": candles,
+            "orderflow": orderflow,
+            "smc": smc,
+            "risk": risk,
+            "aiScores": ai_scores,
+            "multiTimeframe": multi_timeframe,
+            "tradeSetup": trade_setup,
+            "entryTrigger": entry_trigger,
+        }
     finally:
         db.close()

@@ -10,8 +10,11 @@ APP_ROOT = PROJECT_ROOT / "backend" / "app"
 
 
 class Phase0SchedulerStaticTests(unittest.TestCase):
-    def test_default_scheduler_job_is_market_only(self):
-        self.assertEqual(resolve_job_ids([]), ["market"])
+    def test_default_scheduler_jobs_cover_live_intelligence_pipeline(self):
+        self.assertEqual(
+            resolve_job_ids([]),
+            ["market", "feature", "regime", "orderflow", "smc"],
+        )
 
     def test_known_job_definitions_are_lazy_import_metadata(self):
         market = get_job_definition("market")
@@ -51,6 +54,14 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
         self.assertIn("IMPORT_OK", source)
         self.assertIn("EXECUTION_OK", source)
 
+    def test_scheduler_api_exposes_manual_start(self):
+        source = (APP_ROOT / "api" / "v1" / "scheduler_api.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('@router.post("/start")', source)
+        self.assertIn("start_scheduler", source)
+
     def test_watchlist_persist_job_reuses_ready_persistence(self):
         source = (APP_ROOT / "jobs" / "watchlist_persist_job.py").read_text(
             encoding="utf-8"
@@ -89,6 +100,12 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
 
         self.assertIn("except ModuleNotFoundError", source)
         self.assertIn("return False", source)
+
+    def test_scheduler_start_can_reconfigure_running_jobs(self):
+        source = (APP_ROOT / "scheduler" / "scheduler.py").read_text(encoding="utf-8")
+
+        self.assertIn('action = "Reconfiguring" if scheduler.running else "Starting"', source)
+        self.assertIn("scheduler.remove_all_jobs()", source)
 
     def test_main_wires_scheduler_api(self):
         source = (APP_ROOT / "main.py").read_text(encoding="utf-8")

@@ -1,6 +1,14 @@
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Query
 
+from app.api.v1.paper_trade_api import build_paper_trade_bundle
+from app.api.v1.signals_api import build_multi_timeframe_signal_payload
+from app.api.v1.signals_api import build_signal_payload
+from app.database.sqlserver import SessionLocal
 from app.repositories.risk_repository import RiskRepository
+from app.repositories.automation_settings_repository import automation_settings_payload
+from app.repositories.automation_settings_repository import get_automation_settings
 from app.utils.freshness import freshness_status
 from app.utils.signal_validation import validate_trade_plan_direction
 
@@ -56,6 +64,65 @@ def get_risk(symbol: str, stale_after_seconds: int = Query(default=900, ge=1)):
     }
 
 
+@router.get("/{symbol}/bundle")
+def get_risk_bundle(
+    symbol: str,
+    timeframe: str = Query(default="15m"),
+    mode: str | None = Query(default=None),
+    stale_after_seconds: int = Query(default=900, ge=1),
+    enabled: bool = Query(default=True),
+    locked: bool = Query(default=True),
+    emergency_stop: bool = Query(default=False),
+    allowed_symbols: str = Query(default="BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT"),
+    max_risk_per_trade: float = Query(default=1.0, ge=0),
+    daily_loss_limit: float = Query(default=4.0, ge=0),
+    max_open_trades: int = Query(default=4, ge=1),
+    max_leverage: int = Query(default=5, ge=1),
+    max_position_size: float = Query(default=25000, ge=0),
+    min_confidence: float = Query(default=70, ge=0, le=100),
+    direction: str = Query(default="BOTH"),
+):
+    db = SessionLocal()
+
+    try:
+        signal = build_signal_payload(db, symbol, timeframe=timeframe, stale_after_seconds=stale_after_seconds)
+        risk = get_risk(symbol, stale_after_seconds=stale_after_seconds)
+        multi_timeframe = build_multi_timeframe_signal_payload(
+            db,
+            symbol,
+            mode=mode,
+            lower=None,
+            middle=None,
+            higher=None,
+            stale_after_seconds=stale_after_seconds,
+        )
+        paper_bundle = build_paper_trade_bundle(db)
+        auto = automation_settings_payload(get_automation_settings(db))
+        auto_decision = _build_auto_decision(auto, symbol, signal, risk, paper_bundle, multi_timeframe)
+
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "mode": mode,
+            "stale_after_seconds": stale_after_seconds,
+            "source": "risk_bundle",
+            "risk": risk,
+            "signal": signal,
+            "multiTimeframe": multi_timeframe,
+            "paperTrades": {
+                "performance": paper_bundle.get("performance"),
+                "openTrades": paper_bundle.get("openTrades"),
+                "closedTrades": paper_bundle.get("closedTrades"),
+                "summary": paper_bundle.get("summary"),
+            },
+            "auto": auto,
+            "autoDecision": auto_decision,
+        }
+
+    finally:
+        db.close()
+
+
 def _risk_status(freshness, validation):
     if not freshness["is_stale"] and validation["is_valid"]:
         return "current_valid"
@@ -78,3 +145,214 @@ def _ignored_reasons(freshness, validation):
     reasons.extend(validation["errors"])
 
     return reasons
+
+
+def _normalize_auto_settings(auto):
+    allowed = auto.get("allowedSymbols")
+    if isinstance(allowed, str):
+        allowed_symbols = [item.strip().upper() for item in allowed.split(",") if item.strip()]
+    elif isinstance(allowed, list):
+        allowed_symbols = [str(item).strip().upper() for item in allowed if str(item).strip()]
+    else:
+        allowed_symbols = []
+
+    direction = str(auto.get("direction") or "BOTH").upper()
+    if direction not in {"LONG", "SHORT", "BOTH"}:
+        direction = "BOTH"
+
+    return {
+        "enabled": bool(auto.get("enabled", True)),
+        "locked": bool(auto.get("locked", True)),
+        "emergencyStop": bool(auto.get("emergencyStop", False)),
+        "allowedSymbols": allowed_symbols,
+        "maxRiskPerTrade": _safe_number(auto.get("maxRiskPerTrade"), 1.0),
+        "dailyLossLimit": _safe_number(auto.get("dailyLossLimit"), 4.0),
+        "maxOpenTrades": int(_safe_number(auto.get("maxOpenTrades"), 4)),
+        "maxLeverage": int(_safe_number(auto.get("maxLeverage"), 5)),
+        "maxPositionSize": _safe_number(auto.get("maxPositionSize"), 25000),
+        "minConfidence": _safe_number(auto.get("minConfidence"), 70),
+        "direction": direction,
+    }
+
+
+def _build_auto_decision(auto, selected_symbol, signal, risk, paper_bundle, multi_timeframe):
+    signal_side = _signal_side(signal)
+    confidence = _effective_confidence(signal)
+    invalidation = _signal_invalidation_reason(signal)
+    open_trades = _build_open_positions(paper_bundle.get("openTrades", {}).get("records") or [], signal.get("current_price"))
+    closed_trades = paper_bundle.get("closedTrades", {}).get("records") or []
+    reasons = []
+
+    direction_allowed = (
+        auto["direction"] == "BOTH"
+        or (auto["direction"] == "LONG" and signal_side == "BUY")
+        or (auto["direction"] == "SHORT" and signal_side == "SELL")
+    )
+
+    if not auto["enabled"]:
+        reasons.append("Automation paused")
+    if auto["locked"]:
+        reasons.append("Auto trading locked")
+    if auto["emergencyStop"]:
+        reasons.append("Emergency stop active")
+    if selected_symbol not in auto["allowedSymbols"]:
+        reasons.append("Symbol not in allowlist")
+    if not direction_allowed:
+        reasons.append("Direction not allowed")
+    if signal_side == "WAIT":
+        reasons.append("Signal is WAIT")
+    if invalidation:
+        reasons.append(invalidation)
+    if confidence < auto["minConfidence"]:
+        reasons.append("Confidence below minimum")
+    if len(open_trades) >= auto["maxOpenTrades"]:
+        reasons.append("Open trade cap reached")
+    if risk and risk.get("is_usable") is False:
+        reasons.append("Risk decision not usable")
+    trade_plan = signal.get("trade_plan") or {}
+    if trade_plan and _safe_number(trade_plan.get("risk_reward"), 0) < 1:
+        reasons.append("Risk reward is weak")
+    if _contains_mixed_bias(multi_timeframe):
+        reasons.append("Timeframe stack is mixed")
+
+    daily_loss = _sum_within_days(open_trades, 1, "unrealized_pnl_percent") + _sum_within_days(
+        closed_trades,
+        1,
+        "pnl_percent",
+    )
+    if daily_loss <= -abs(auto["dailyLossLimit"]):
+        reasons.append("Daily loss limit reached")
+
+    allowed = len(reasons) == 0
+    reason = (
+        "Selected signal passes allowlist, direction, confidence, and risk checks."
+        if allowed
+        else f"Automatic execution blocked by {', '.join(reasons)}."
+    )
+
+    return {
+        "allowed": allowed,
+        "reason": reason,
+        "reasons": reasons,
+        "signalSide": signal_side,
+        "confidence": confidence,
+        "dailyLoss": round(daily_loss, 2),
+        "openTrades": len(open_trades),
+        "closedTrades": len(closed_trades),
+    }
+
+
+def _signal_side(signal):
+    raw_signal = str(signal.get("signal") or "").upper()
+    if _signal_invalidation_reason(signal):
+        return "WAIT"
+    if raw_signal in {"LONG", "BUY"}:
+        return "BUY"
+    if raw_signal in {"SHORT", "SELL"}:
+        return "SELL"
+    if raw_signal in {"WAIT", "NO_DATA"}:
+        return "WAIT"
+    bias = str(signal.get("bias") or "").upper()
+    if "LONG" in bias and raw_signal != "WAIT":
+        return "BUY"
+    if "SHORT" in bias and raw_signal != "WAIT":
+        return "SELL"
+    return "WAIT"
+
+
+def _signal_invalidation_reason(signal):
+    if not signal:
+        return ""
+
+    freshness = signal.get("freshness") or {}
+    contradiction = signal.get("contradiction") or {}
+    probability = signal.get("probability") or {}
+
+    if freshness.get("is_stale"):
+        return "Signal data is stale"
+    if str(contradiction.get("status") or "").upper() == "INVALIDATED":
+        return contradiction.get("summary") or "Signal invalidated by contradiction engine"
+    if contradiction.get("trade_allowed") is False:
+        return contradiction.get("summary") or "Trade blocked by contradiction engine"
+    if probability.get("actionable") is False:
+        return f"Probability engine decision: {str(probability.get('decision') or 'WAIT').upper()}"
+    if str(probability.get("decision") or "").upper() == "WAIT" and str(signal.get("signal") or "").upper() != "WAIT":
+        return "Probability engine decision: WAIT"
+
+    return ""
+
+
+def _effective_confidence(signal):
+    if not signal:
+        return 0
+    if _signal_invalidation_reason(signal):
+        return _safe_number((signal.get("probability") or {}).get("confidence"), 0)
+    return _safe_number(signal.get("confidence"), 0)
+
+
+def _build_open_positions(open_trades, current_price):
+    positions = []
+    for trade in open_trades:
+        entry = _safe_number(trade.get("entry_price"), 0)
+        price = _safe_number(current_price, entry)
+        pnl = _estimate_pnl_percent(trade.get("side"), entry, price)
+        positions.append(
+            {
+                **trade,
+                "current_price": price,
+                "unrealized_pnl_percent": pnl,
+            }
+        )
+    return positions
+
+
+def _estimate_pnl_percent(side, entry, current):
+    start = _safe_number(entry, 0)
+    now = _safe_number(current, start)
+    if not start:
+        return 0
+    if str(side).upper() == "SHORT":
+        return round(((start - now) / start) * 100, 2)
+    return round(((now - start) / start) * 100, 2)
+
+
+def _contains_mixed_bias(multi_timeframe):
+    confirmation = ((multi_timeframe or {}).get("confirmation") or {})
+    overall_bias = str(confirmation.get("overall_bias") or "").upper()
+    return "MIXED" in overall_bias
+
+
+def _sum_within_days(records, days, field="pnl_percent"):
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    total = 0.0
+
+    for record in records or []:
+        timestamp = _to_timestamp(record.get("closed_at") or record.get("opened_at") or record.get("created_at"))
+        if timestamp is None or timestamp < cutoff:
+            continue
+        total += _safe_number(record.get(field), 0)
+
+    return total
+
+
+def _to_timestamp(value):
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except ValueError:
+        return None
+
+
+def _safe_number(value, fallback=0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+    return number if number == number else fallback

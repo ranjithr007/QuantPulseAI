@@ -26,8 +26,11 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
 
         self.assertIn('@router.post("/execute-candidates")', source)
         self.assertIn("execute_paper_trade_candidates_for_symbol", source)
+        self.assertIn('from app.paper_trading.fill_model import build_fill_profile', source)
         self.assertIn("PaperTradeRepository", source)
         self.assertIn("build_paper_trade_candidates", source)
+        self.assertIn('fill_profile=candidate.get("fill_profile")', source)
+        self.assertIn('payload["fill_profile"] = fill_profile', source)
         self.assertIn("repo.has_open_trade", source)
         self.assertIn("repo.save_candidate", source)
         self.assertIn("skipped_existing_open_paper_trade", source)
@@ -35,6 +38,14 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
         self.assertNotIn("binance", source.lower())
         self.assertNotIn("create_order", source)
         self.assertNotIn("place_order", source)
+
+    def test_paper_trade_fill_model_endpoint_exposes_slippage_assumptions(self):
+        source = PAPER_TRADE_API.read_text(encoding="utf-8")
+
+        self.assertIn('@router.get("/fill-model")', source)
+        self.assertIn("def get_paper_trade_fill_model", source)
+        self.assertIn("build_fill_profile(", source)
+        self.assertIn('"source": "paper_trade_fill_model"', source)
 
     def test_paper_trade_status_list_endpoint_exposes_open_and_closed_trades(self):
         source = PAPER_TRADE_API.read_text(encoding="utf-8")
@@ -104,9 +115,24 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
         self.assertIn("def has_open_trade", source)
         self.assertIn('PaperTrade.status == "OPEN"', source)
         self.assertIn("def save_candidate", source)
+        self.assertIn('fill_profile = candidate.get("fill_profile") or {}', source)
+        self.assertIn('fill_profile.get("entry_fill_price"', source)
+        self.assertIn('fill_profile.get("effective_risk_reward"', source)
         self.assertIn("def list_trades", source)
         self.assertIn("def all_trades", source)
         self.assertIn("query.order_by(PaperTrade.created_at.desc())", source)
+
+    def test_paper_trade_has_an_alembic_migration(self):
+        migration = (
+            APP_ROOT.parent / "alembic" / "versions" / "b7c9d4f2a6e1_add_paper_trade_tables.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("op.create_table(", migration)
+        self.assertIn('"paper_trades"', migration)
+        self.assertIn('ix_paper_trades_symbol', migration)
+        self.assertIn('ix_paper_trades_status', migration)
+        self.assertIn('ix_paper_trades_trade_plan_id', migration)
+        self.assertIn('down_revision: Union[str, Sequence[str], None] = "ce46732db598"', migration)
 
     def test_paper_trade_model_tracks_simulated_position_fields(self):
         source = (APP_ROOT / "database" / "models" / "paper_trade.py").read_text(

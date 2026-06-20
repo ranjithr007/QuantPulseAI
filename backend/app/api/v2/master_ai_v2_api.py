@@ -2,6 +2,8 @@ from fastapi import APIRouter, Query
 
 from app.database.sqlserver import SessionLocal
 
+from app.intelligence.contradiction_engine import build_contradiction_report
+from app.intelligence.probability_engine import build_probability_profile
 from app.repositories.intelligence_repository import get_ai_inputs
 
 from app.intelligence.master_ai_engine import generate_master_signal
@@ -45,6 +47,18 @@ def build_master_ai_response(symbol: str, timeframe: str, stale_after_seconds: i
                 "confidence": 0,
                 "freshness": freshness_status(None, stale_after_seconds),
                 "message": "No latest candle found for symbol/timeframe",
+                "contradiction": build_contradiction_report(
+                    db,
+                    symbol,
+                    timeframe,
+                    stale_after_seconds,
+                ),
+                "probability": build_probability_profile(
+                    db,
+                    symbol,
+                    timeframe,
+                    stale_after_seconds,
+                ),
             }
 
         result = generate_master_signal(
@@ -94,6 +108,18 @@ def build_master_ai_response(symbol: str, timeframe: str, stale_after_seconds: i
         )
 
         result["quality"] = quality
+        result["contradiction"] = build_contradiction_report(
+            db,
+            symbol,
+            timeframe,
+            stale_after_seconds,
+        )
+        result["probability"] = build_probability_profile(
+            db,
+            symbol,
+            timeframe,
+            stale_after_seconds,
+        )
         risk_engine = RiskEngine()
         risk = risk_engine.analyze(
             symbol,

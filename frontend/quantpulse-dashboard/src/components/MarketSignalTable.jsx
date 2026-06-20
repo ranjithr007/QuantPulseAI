@@ -1,0 +1,207 @@
+import clsx from "clsx";
+import { Eye } from "lucide-react";
+import { Link } from "react-router-dom";
+import Pill from "./ui/Pill";
+import { formatPercent, formatPrice, formatSigned } from "../utils/formatters";
+import { formatTickAge, getLiveMarketState, liveStateClasses } from "../utils/liveMarket";
+
+export default function MarketSignalTable({
+  rows = [],
+  watchlist,
+  liveStatus,
+  activeSymbol,
+  onOpenSymbol,
+  getSymbolHref,
+  title = "Market scan",
+  subtitle = "Live source, AI signal, and risk context",
+}) {
+  const enrichedRows = rows.map((row) => enrichRow(row, watchlist, liveStatus));
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-900/70">
+      <div className="flex flex-col gap-1 border-b border-white/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-sm font-medium text-white">{title}</div>
+          <div className="text-xs text-slate-500">{subtitle}</div>
+        </div>
+        <div className="text-xs uppercase tracking-[0.2em] text-slate-500">{enrichedRows.length} symbols</div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="min-w-[1060px] divide-y divide-white/5 text-left text-sm">
+          <thead className="bg-slate-950/60 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+            <tr>
+              <th className="px-3 py-2.5">Symbol</th>
+              <th className="px-3 py-2.5">Live price</th>
+              <th className="px-3 py-2.5">AI signal</th>
+              <th className="px-3 py-2.5">Confidence</th>
+              <th className="px-3 py-2.5">RS score</th>
+              <th className="px-3 py-2.5">Stage</th>
+              <th className="px-3 py-2.5">Regime</th>
+              <th className="px-3 py-2.5">Long / short</th>
+              <th className="px-3 py-2.5">Risk</th>
+              <th className="px-3 py-2.5">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {enrichedRows.map((row) => (
+              <tr key={row.symbol} className={clsx("transition hover:bg-white/5", activeSymbol === row.symbol && "bg-cyan-500/10")}>
+                <td className="px-3 py-2.5">
+                  <div className="font-medium text-white">{row.symbol}</div>
+                  <div className="text-[11px] text-slate-500">{row.watchStatus}</div>
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="font-medium text-slate-100">{formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}</div>
+                    <span className={clsx("inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]", liveStateClasses(row.liveState.tone))}>
+                      {row.liveState.label}
+                    </span>
+                  </div>
+                  <div className={clsx("text-[11px]", row.liveState.tone === "emerald" ? "text-cyan-300" : row.liveState.tone === "amber" ? "text-amber-300" : "text-slate-400")}>{row.priceSource}</div>
+                  <div
+                    className={clsx(
+                      "mt-0.5 text-[11px]",
+                      row.liveChangePct === null || row.liveChangePct === undefined
+                        ? "text-slate-500"
+                        : row.liveChangePct > 0
+                          ? "text-emerald-300"
+                          : row.liveChangePct < 0
+                            ? "text-rose-300"
+                            : "text-slate-500"
+                    )}
+                  >
+                    {row.liveState.state === "LIVE" && row.liveChangePct !== null && row.liveChangePct !== undefined
+                      ? `1m ${formatSigned(row.liveChangePct, 2, "-")}%`
+                      : formatTickAge(row.liveState.ageSeconds)}
+                  </div>
+                </td>
+                <td className="px-3 py-2.5">
+                  <Pill tone={signalTone(row.type)}>{row.type}</Pill>
+                </td>
+                <td className="px-3 py-2.5 text-slate-300">{formatPercent(row.confidence, 0, "-")}</td>
+                <td className="px-3 py-2.5">
+                  <span className={clsx("font-medium", row.rsScore >= 0 ? "text-emerald-300" : "text-rose-300")}>
+                    {formatSigned(row.rsScore, 0, "-")}
+                  </span>
+                </td>
+                <td className="px-3 py-2.5 text-slate-300">{row.stage}</td>
+                <td className="px-3 py-2.5 text-slate-300">{row.regime}</td>
+                <td className="px-3 py-2.5">
+                  <div className="flex min-w-28 overflow-hidden rounded-full bg-slate-950/80">
+                    <div className="h-2 bg-emerald-400" style={{ width: `${row.longPct}%` }} />
+                    <div className="h-2 bg-rose-400" style={{ width: `${row.shortPct}%` }} />
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    {formatPercent(row.longPct, 0)} / {formatPercent(row.shortPct, 0)}
+                  </div>
+                </td>
+                <td className="px-3 py-2.5">
+                  <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
+                  <div className="mt-1 text-[11px] text-slate-500">RR {formatSigned(row.riskReward, 2, "-")}</div>
+                </td>
+                <td className="px-3 py-2.5">
+                  <DetailAction row={row} onOpenSymbol={onOpenSymbol} getSymbolHref={getSymbolHref} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DetailAction({ row, onOpenSymbol, getSymbolHref }) {
+  const className =
+    "inline-flex items-center gap-2 rounded-lg border border-white/10 bg-slate-950/70 px-2.5 py-1.5 text-xs font-medium text-cyan-200 transition hover:border-cyan-400/40 hover:bg-cyan-500/10";
+
+  if (getSymbolHref) {
+    return (
+      <Link to={getSymbolHref(row.symbol)} className={className}>
+        <Eye className="h-3.5 w-3.5" />
+        Details
+      </Link>
+    );
+  }
+
+  return (
+    <button type="button" onClick={() => onOpenSymbol?.(row.symbol)} className={className}>
+      <Eye className="h-3.5 w-3.5" />
+      Details
+    </button>
+  );
+}
+
+export function enrichRow(row, watchlist, liveStatus) {
+  const watchRow = (watchlist?.records || []).find((item) => item.symbol === row.symbol) || {};
+  const rsScore = numberFrom(watchRow.score_5m, watchRow.rs_score, row.confidence - 50);
+  const longPct = directionalPct(row.type, row.confidence, "LONG");
+  const shortPct = directionalPct(row.type, row.confidence, "SHORT");
+  const riskReward = numberFrom(row.riskReward, watchRow.risk_reward, 0);
+  const stage = inferStage(row, watchRow);
+  const risk = inferRisk(row, watchRow, riskReward);
+  const hasLiveRecord = Boolean(row.liveUpdatedAt);
+  const liveState = getLiveMarketState({ liveStatus, updatedAt: row.liveUpdatedAt, hasLiveRecord });
+
+  return {
+    ...row,
+    currentPrice: nullableNumberFrom(row.currentPrice, watchRow.current_price),
+    priceSource: liveState.source,
+    liveState,
+    rsScore,
+    stage,
+    regime: row.regime || watchRow.overall_bias || "WAIT",
+    watchStatus: watchRow.status || "SCAN",
+    longPct,
+    shortPct,
+    riskReward,
+    riskLabel: risk.label,
+    riskTone: risk.tone,
+  };
+}
+
+function signalTone(type) {
+  if (type === "BUY") return "emerald";
+  if (type === "SELL") return "rose";
+  return "slate";
+}
+
+function directionalPct(type, confidence, side) {
+  const value = Math.max(0, Math.min(Number(confidence) || 0, 100));
+  if (type === "BUY") return side === "LONG" ? value : 100 - value;
+  if (type === "SELL") return side === "SHORT" ? value : 100 - value;
+  return 50;
+}
+
+function inferStage(row, watchRow) {
+  const text = `${row.regime || ""} ${watchRow.overall_bias || ""} ${watchRow.bias_1h || ""}`.toUpperCase();
+  if (row.type === "BUY" || text.includes("BULL") || text.includes("LONG")) return "Stage 2 Uptrend";
+  if (row.type === "SELL" || text.includes("BEAR") || text.includes("SHORT")) return "Stage 4 Downtrend";
+  if (text.includes("RANGE") || text.includes("MIXED")) return "Stage 1 Base";
+  return "Stage 3 Transition";
+}
+
+function inferRisk(row, watchRow, riskReward) {
+  if (row.type === "WAIT" || watchRow.status === "WAIT") return { label: "Blocked", tone: "rose" };
+  if ((Number(row.confidence) || 0) < 60) return { label: "Confidence block", tone: "amber" };
+  if (riskReward > 0 && riskReward < 1.3) return { label: "Risk block", tone: "amber" };
+  return { label: "Eligible", tone: "emerald" };
+}
+
+function numberFrom(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return 0;
+}
+
+function nullableNumberFrom(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}

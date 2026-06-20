@@ -30,7 +30,9 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "CLOSE")
         self.assertEqual(result["result"], "WIN")
-        self.assertEqual(result["exit_price"], 102.0)
+        self.assertEqual(result["exit_price"], 101.94)
+        self.assertIn("fill_profile", result)
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET")
 
     def test_long_trade_closes_loss_before_win_when_both_hit(self):
         trade = SimpleNamespace(
@@ -50,7 +52,9 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "CLOSE")
         self.assertEqual(result["result"], "LOSS")
-        self.assertEqual(result["exit_price"], 99.0)
+        self.assertEqual(result["exit_price"], 98.9505)
+        self.assertIn("fill_profile", result)
+        self.assertEqual(result["fill_profile"]["trigger_type"], "STOP")
 
     def test_short_trade_closes_win_when_target_hit(self):
         trade = SimpleNamespace(
@@ -70,7 +74,9 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "CLOSE")
         self.assertEqual(result["result"], "WIN")
-        self.assertEqual(result["exit_price"], 98.0)
+        self.assertEqual(result["exit_price"], 98.0595)
+        self.assertIn("fill_profile", result)
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET")
 
     def test_trade_holds_when_no_level_hit(self):
         trade = SimpleNamespace(
