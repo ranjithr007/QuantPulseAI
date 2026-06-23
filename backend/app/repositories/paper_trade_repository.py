@@ -69,6 +69,11 @@ class PaperTradeRepository:
             risk_reward=risk_reward,
             risk_percent=risk["risk_percent"],
             confidence=risk["confidence"],
+            mode=trade_plan.get("mode"),
+            entry_timeframe=trade_plan.get("entry_timeframe"),
+            timeframe_stack=trade_plan.get("timeframe_stack"),
+            regime=trade_plan.get("regime"),
+            fee_bps=float(fill_profile.get("fee_bps", 4.0)),
             status="OPEN",
         )
 
@@ -84,11 +89,15 @@ class PaperTradeRepository:
         trade.result = result
 
         if trade.side == "LONG":
-            pnl = ((exit_price - trade.entry_price) / trade.entry_price) * 100
+            gross_pnl = ((exit_price - trade.entry_price) / trade.entry_price) * 100
         else:
-            pnl = ((trade.entry_price - exit_price) / trade.entry_price) * 100
+            gross_pnl = ((trade.entry_price - exit_price) / trade.entry_price) * 100
 
-        trade.pnl_percent = round(pnl, 2)
+        fee_bps = float(getattr(trade, "fee_bps", 4.0) or 0)
+        fees_percent = (fee_bps * 2) / 100
+        trade.gross_pnl_percent = round(gross_pnl, 4)
+        trade.fees_percent = round(fees_percent, 4)
+        trade.pnl_percent = round(gross_pnl - fees_percent, 4)
         trade.closed_at = datetime.utcnow()
 
         db.commit()

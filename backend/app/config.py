@@ -2,7 +2,17 @@ import os
 from functools import lru_cache
 
 
-DEFAULT_SCHEDULER_JOBS = ["market", "feature", "regime", "orderflow", "smc"]
+DEFAULT_SCHEDULER_JOBS = [
+    "market",
+    "feature",
+    "regime",
+    "orderflow",
+    "smc",
+    "watchlist_persist",
+    "risk",
+    "paper_trade_execute",
+    "paper_trade_monitor",
+]
 DEFAULT_LIVE_MARKET_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
 
 

@@ -45,7 +45,7 @@ else {
 }
 
 if (-not $env:QUANTPULSE_SCHEDULER_JOBS) {
-    $env:QUANTPULSE_SCHEDULER_JOBS = "market,feature,regime,orderflow,smc"
+    $env:QUANTPULSE_SCHEDULER_JOBS = "market,feature,regime,orderflow,smc,watchlist_persist,risk,paper_trade_execute,paper_trade_monitor"
 }
 
 if (-not $env:QUANTPULSE_START_LIVE_MARKET) {

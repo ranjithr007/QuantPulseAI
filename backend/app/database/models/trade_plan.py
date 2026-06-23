@@ -30,6 +30,14 @@ class TradePlan(Base):
 
     confidence = Column(Float)
 
+    mode = Column(String(20), nullable=True)
+
+    entry_timeframe = Column(String(10), nullable=True)
+
+    timeframe_stack = Column(String(40), nullable=True)
+
+    regime = Column(String(50), nullable=True)
+
     status = Column(String(20), default="OPEN")
 
     exit_price = Column(Float, nullable=True)

@@ -257,6 +257,7 @@
     <Compile Include="backend\app\orderflow\orderflow_service.py" />
     <Compile Include="backend\app\orderflow\__init__.py" />
     <Compile Include="backend\app\paper_trading\fill_model.py" />
+    <Compile Include="backend\app\paper_trading\measurement.py" />
     <Compile Include="backend\app\paper_trading\paper_trade_monitor.py" />
     <Compile Include="backend\app\paper_trading\paper_trade_performance.py" />
     <Compile Include="backend\app\regimes\regime_engine.py" />
@@ -349,6 +350,7 @@
     <Compile Include="backend\tests\test_phase1b_regime_transitions_api.py" />
     <Compile Include="backend\tests\test_phase1b_scenario_engine.py" />
     <Compile Include="backend\tests\test_phase1b_smart_money_fusion_engine.py" />
+    <Compile Include="backend\tests\test_extended_paper_trade_measurement.py" />
     <Compile Include="backend\tests\test_phase1_api_integration_db.py" />
     <Compile Include="backend\tests\test_phase1_feature_quality_engine.py" />
     <Compile Include="backend\tests\test_phase1_frontend_dashboard_static.py" />

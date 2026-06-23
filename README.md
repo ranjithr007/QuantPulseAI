@@ -6,6 +6,10 @@ QuantPulseAI is a FastAPI and React crypto-market intelligence platform aligned 
 
 Phase 1 simulated-trading status: validated locally. Live exchange execution remains disabled.
 
+Extended paper-trading measurement is now available. New paper trades snapshot their mode,
+entry timeframe, timeframe stack, regime, and simulated fee assumptions so performance can
+be evaluated by cohort without reconstructing historical context.
+
 The next product phase is strategy validation:
 
 - Extend the Backtester V2 chronological execution kernel with historical signal replay.
@@ -76,6 +80,7 @@ Useful endpoints:
 - `GET /docs`
 - `GET /backtest/summary`
 - `GET /backtest/walk-forward`
+- `GET /paper-trade/measurement`
 
 ## Database
 
@@ -97,6 +102,47 @@ Run migrations from `backend` after dependencies and the database driver are ins
 ```powershell
 alembic upgrade head
 ```
+
+The extended paper-measurement migration adds nullable context and cost fields to existing
+trade-plan and paper-trade tables. Existing records remain usable, but the measurement report
+marks missing legacy context and fee snapshots as data-quality gaps.
+
+## Extended Paper-Trading Measurement
+
+The default evidence gate requires at least 100 closed trades observed over at least 56 days.
+After evidence is sufficient, the report passes only when all profitability gates pass:
+
+- Compounded net return is positive.
+- Per-trade expectancy is positive.
+- Profit factor is at least `1.25`.
+- Maximum drawdown is no greater than `15%`.
+
+Win rate is reported but deliberately is not a pass/fail gate. Simulated P&L for newly closed
+paper trades includes adverse entry/exit slippage and a configurable round-trip fee snapshot.
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/paper-trade/measurement" |
+    ConvertTo-Json -Depth 12
+```
+
+Thresholds can be overridden for diagnostics without changing stored results:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/paper-trade/measurement?min_closed_trades=100&min_observation_days=56&min_profit_factor=1.25&max_drawdown_percent=15" |
+    ConvertTo-Json -Depth 12
+```
+
+The response includes overall metrics and cohort scorecards for symbol, side, mode, entry
+timeframe, regime, and confidence band. A result remains `INSUFFICIENT_EVIDENCE` until both
+the trade-count and observation-period gates are met, even if early results are profitable.
+
+The default scheduler set now runs the paper-only evidence loop:
+
+`market -> feature/regime/orderflow/SMC -> watchlist persistence -> risk -> paper execution -> paper monitoring`
+
+`pipeline_cycle` is intentionally excluded from that set because it invokes the same paper
+jobs sequentially and would duplicate work. Automation settings must remain in `PAPER` mode;
+live execution is still unavailable.
 
 ## Tests
 

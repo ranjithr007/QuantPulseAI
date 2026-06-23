@@ -79,6 +79,10 @@ class TradePlanRepository:
             target3=plan["targets"][2],
             risk_reward=plan["rr"],
             confidence=plan["confidence"],
+            mode=plan.get("mode"),
+            entry_timeframe=plan.get("entry_timeframe"),
+            timeframe_stack=_timeframe_stack_value(plan.get("timeframe_stack")),
+            regime=plan.get("regime"),
             status="OPEN",
         )
 
@@ -90,7 +94,9 @@ class TradePlanRepository:
 
         return trade
 
-    def save_ready_trade_plan(self, db, symbol, side, plan, confidence=0):
+    def save_ready_trade_plan(self, db, symbol, side, plan, confidence=0, context=None):
+
+        context = context or {}
 
         trade = TradePlan(
             symbol=symbol,
@@ -102,6 +108,10 @@ class TradePlanRepository:
             target3=None,
             risk_reward=plan["risk_reward"],
             confidence=confidence,
+            mode=context.get("mode"),
+            entry_timeframe=context.get("entry_timeframe"),
+            timeframe_stack=_timeframe_stack_value(context.get("timeframe_stack")),
+            regime=context.get("regime"),
             status="OPEN",
         )
 
@@ -112,3 +122,9 @@ class TradePlanRepository:
         db.refresh(trade)
 
         return trade
+
+
+def _timeframe_stack_value(value):
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(item) for item in value)
+    return value

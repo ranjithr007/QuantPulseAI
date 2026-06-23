@@ -40,6 +40,10 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 target3=104.0,
                 risk_reward=2.0,
                 confidence=80.0,
+                mode="intraday",
+                entry_timeframe="5m",
+                timeframe_stack="5m,15m,1h",
+                regime="TRENDING_BULL",
                 status="OPEN",
                 created_at=now - timedelta(minutes=2),
             )
@@ -70,6 +74,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         self.assertEqual(1, execution["candidate_count"])
         self.assertEqual(1, execution["executed_count"])
         self.assertGreater(execution["executed"][0]["entry_price"], 100.0)
+        self.assertEqual("intraday", execution["executed"][0]["mode"])
+        self.assertEqual("5m", execution["executed"][0]["entry_timeframe"])
+        self.assertEqual("TRENDING_BULL", execution["executed"][0]["regime"])
         self.assertEqual("paper_trade_fill_model_v1", execution["executed"][0]["fill_profile"]["model"])
         self.assertEqual(0, duplicate["executed_count"])
         self.assertEqual("skipped_existing_open_paper_trade", duplicate["skipped"][0]["action"])
@@ -106,6 +113,11 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         self.assertEqual(1, bundle["summary"]["wins"])
         self.assertEqual(100.0, bundle["performance"]["win_rate"])
         self.assertGreater(bundle["performance"]["total_pnl_percent"], 0)
+        self.assertGreater(bundle["closedTrades"]["records"][0]["fees_percent"], 0)
+        self.assertGreater(
+            bundle["closedTrades"]["records"][0]["gross_pnl_percent"],
+            bundle["closedTrades"]["records"][0]["pnl_percent"],
+        )
 
 
 if __name__ == "__main__":

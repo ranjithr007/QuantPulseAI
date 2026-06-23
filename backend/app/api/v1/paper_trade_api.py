@@ -3,6 +3,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
+from app.paper_trading.measurement import MeasurementGates
+from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.risk_repository import RiskRepository
@@ -80,6 +82,48 @@ def get_paper_trade_performance(symbol: str | None = Query(default=None)):
             detail="Paper-trade performance is unavailable because the database is not reachable.",
         )
 
+    finally:
+        db.close()
+
+
+@router.get("/measurement")
+def get_paper_trade_measurement(
+    symbol: str | None = Query(default=None),
+    min_closed_trades: int = Query(default=100, ge=1, le=100000),
+    min_observation_days: int = Query(default=56, ge=1, le=3650),
+    min_profit_factor: float = Query(default=1.25, gt=0, le=100),
+    min_expectancy_percent: float = Query(default=0.0, ge=-100, le=100),
+    min_total_return_percent: float = Query(default=0.0, ge=-100, le=100000),
+    max_drawdown_percent: float = Query(default=15.0, gt=0, le=100),
+    min_cohort_closed_trades: int = Query(default=20, ge=1, le=100000),
+):
+    db = SessionLocal()
+
+    try:
+        normalized_symbol = symbol.upper() if symbol else None
+        trades = PaperTradeRepository().all_trades(db, symbol=normalized_symbol)
+        return {
+            "source": "extended_paper_trade_measurement",
+            "symbol_filter": normalized_symbol,
+            "report": build_measurement_report(
+                trades,
+                gates=MeasurementGates(
+                    min_closed_trades=min_closed_trades,
+                    min_observation_days=min_observation_days,
+                    min_profit_factor=min_profit_factor,
+                    min_expectancy_percent=min_expectancy_percent,
+                    min_total_return_percent=min_total_return_percent,
+                    max_drawdown_percent=max_drawdown_percent,
+                    min_cohort_closed_trades=min_cohort_closed_trades,
+                ),
+            ),
+        }
+    except SQLAlchemyError:
+        return _paper_trade_unavailable_payload(
+            operation="measurement",
+            symbol_filter=symbol,
+            detail="Paper-trade measurement is unavailable because the database is not reachable.",
+        )
     finally:
         db.close()
 
@@ -192,6 +236,7 @@ def get_paper_trade_fill_model(
     target1: float | None = Query(default=None),
     confidence: float = Query(default=50, ge=0, le=100),
     risk_reward: float | None = Query(default=None),
+    fee_bps: float = Query(default=4, ge=0, le=1000),
 ):
     return {
         "source": "paper_trade_fill_model",
@@ -202,6 +247,7 @@ def get_paper_trade_fill_model(
             target1=target1,
             confidence=confidence,
             risk_reward=risk_reward,
+            fee_bps=fee_bps,
         ),
     }
 
@@ -331,6 +377,13 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "risk_reward": paper_trade.risk_reward,
         "risk_percent": paper_trade.risk_percent,
         "confidence": paper_trade.confidence,
+        "mode": paper_trade.mode,
+        "entry_timeframe": paper_trade.entry_timeframe,
+        "timeframe_stack": paper_trade.timeframe_stack,
+        "regime": paper_trade.regime,
+        "fee_bps": paper_trade.fee_bps,
+        "fees_percent": paper_trade.fees_percent,
+        "gross_pnl_percent": paper_trade.gross_pnl_percent,
         "status": paper_trade.status,
         "exit_price": paper_trade.exit_price,
         "result": paper_trade.result,
@@ -389,6 +442,10 @@ def _trade_plan_payload(trade):
         "target3": trade.target3,
         "risk_reward": trade.risk_reward,
         "confidence": trade.confidence,
+        "mode": getattr(trade, "mode", None),
+        "entry_timeframe": getattr(trade, "entry_timeframe", None),
+        "timeframe_stack": getattr(trade, "timeframe_stack", None),
+        "regime": getattr(trade, "regime", None),
         "created_at": trade.created_at,
     }
 
@@ -518,6 +575,8 @@ def _paper_trade_unavailable_payload(operation, symbol_filter=None, status_filte
                 "closedTrades": {"count": 0, "records": []},
             }
         )
+    elif operation == "measurement":
+        payload["report"] = build_measurement_report([])
 
     return payload
 

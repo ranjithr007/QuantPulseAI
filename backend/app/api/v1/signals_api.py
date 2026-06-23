@@ -184,6 +184,8 @@ def build_entry_trigger_payload(
     return {
         "symbol": symbol,
         "source": "multi_timeframe_entry_trigger",
+        "mode": mode or _mode_from_stack(stack),
+        "timeframes_used": stack,
         "trigger": trigger,
         "confirmation": confirmation,
         "trade_plan": trade_plan,
@@ -785,6 +787,13 @@ def _timeframe_stack_from_mode(mode):
     return list(TIMEFRAME_MODES[normalized_mode])
 
 
+def _mode_from_stack(stack):
+    for mode, configured_stack in TIMEFRAME_MODES.items():
+        if list(stack) == list(configured_stack):
+            return mode
+    return "custom"
+
+
 def _normalize_timeframe_value(value):
     if value is None:
         return None
@@ -974,6 +983,16 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
         side,
         trade_plan,
         lower.get("confidence", 0),
+        context={
+            "mode": payload.get("mode"),
+            "entry_timeframe": lower.get("timeframe"),
+            "timeframe_stack": payload.get("timeframes_used"),
+            "regime": (
+                lower.get("component_scores", {})
+                .get("regime", {})
+                .get("value")
+            ),
+        },
     )
 
     return {

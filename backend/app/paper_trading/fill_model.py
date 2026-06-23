@@ -8,6 +8,7 @@ def build_fill_profile(
     target1=None,
     confidence=50,
     risk_reward=None,
+    fee_bps=4,
 ):
     if planned_entry_price is None:
         return {
@@ -21,6 +22,8 @@ def build_fill_profile(
             "exit_slippage_amount": 0,
             "fill_quality": "UNAVAILABLE",
             "effective_risk_reward": None,
+            "fee_bps": float(fee_bps),
+            "estimated_round_trip_fee_percent": round(float(fee_bps) * 2 / 100, 4),
             "notes": ["No planned entry price supplied"],
         }
 
@@ -78,6 +81,8 @@ def build_fill_profile(
         ),
         "fill_quality": fill_quality,
         "effective_risk_reward": effective_rr,
+        "fee_bps": float(fee_bps),
+        "estimated_round_trip_fee_percent": round(float(fee_bps) * 2 / 100, 4),
         "confidence": confidence,
         "notes": notes,
     }

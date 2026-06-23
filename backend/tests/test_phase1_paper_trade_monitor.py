@@ -139,7 +139,9 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         self.assertIn("def close_trade", source)
         self.assertIn('trade.status = "CLOSED"', source)
         self.assertIn("trade.exit_price = exit_price", source)
-        self.assertIn("trade.pnl_percent = round(pnl, 2)", source)
+        self.assertIn("trade.gross_pnl_percent = round(gross_pnl, 4)", source)
+        self.assertIn("trade.fees_percent = round(fees_percent, 4)", source)
+        self.assertIn("trade.pnl_percent = round(gross_pnl - fees_percent, 4)", source)
         self.assertIn("trade.closed_at = datetime.utcnow()", source)
 
 
