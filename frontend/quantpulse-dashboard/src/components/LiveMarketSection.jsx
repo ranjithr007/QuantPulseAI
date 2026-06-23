@@ -141,7 +141,7 @@ export default function LiveMarketSection({
             onOpenSymbol={onOpenSymbol}
             getSymbolHref={getSymbolHref}
             title="Market scan table"
-            subtitle="Live Binance price, AI-calculated signal, RS, stage, regime, bias, and risk"
+            subtitle="Live price, AI-calculated signal, RS, stage, regime, bias, and risk"
           />
         </div>
       </div>

@@ -7,6 +7,20 @@ const STALE_AFTER_BY_TIMEFRAME = {
   "4h": (4 * 60 + 5) * 60,
   "1d": (24 * 60 + 25) * 60,
 };
+const PAGE_DATA_NEEDS = {
+  dashboard: { watchlist: true, paper: true, risk: true, signals: true },
+  "market-scan": { watchlist: true, paper: true, risk: true, signals: true },
+  signals: { watchlist: true, signals: true },
+  "coin-details": {},
+  "trading-details": { pipeline: true, paper: true, risk: true },
+  "risk-controls": { paper: true, risk: true },
+  "auto-trading": { paper: true, risk: true },
+  pnl: { paper: true },
+  backtest: { paper: true },
+  rotation: { watchlist: true, signals: true },
+  "rs-ranking": { watchlist: true, signals: true },
+  "stage-analysis": { watchlist: true, signals: true },
+};
 
 export function liveMarketWebSocketUrl(symbols = []) {
   const url = new URL("/ws/live-market", API_BASE);
@@ -120,14 +134,17 @@ export async function saveAutomationEmergencyStop({ active, signal } = {}) {
   return response?.settings || null;
 }
 
-export async function loadDashboardBatches({ view, filters, auto, symbols, signal }) {
+export async function loadDashboardBatches({ activePage, view, filters, auto, symbols, signal }) {
   const common = {
     timeframe: view.timeframe,
     stale_after_seconds: staleAfterSeconds(view.timeframe),
   };
+  const needs = PAGE_DATA_NEEDS[activePage] || PAGE_DATA_NEEDS.dashboard;
 
-  const overviewRequests = [
-    {
+  const overviewRequests = [];
+
+  if (needs.watchlist) {
+    overviewRequests.push({
       key: "watchlist",
       promise: requestJson(
         "/signals/watchlist",
@@ -139,8 +156,11 @@ export async function loadDashboardBatches({ view, filters, auto, symbols, signa
         },
         signal
       ),
-    },
-    {
+    });
+  }
+
+  if (needs.pipeline) {
+    overviewRequests.push({
       key: "pipeline",
       promise: requestJson(
         "/pipeline/status",
@@ -149,20 +169,36 @@ export async function loadDashboardBatches({ view, filters, auto, symbols, signa
         },
         signal
       ),
-    },
-    {
+    });
+  }
+
+  if (needs.paper) {
+    overviewRequests.push({
       key: "paperTradeBundle",
       promise: requestJson("/paper-trade/bundle", {}, signal),
-    },
-    {
+    });
+  }
+
+  if (needs.risk) {
+    overviewRequests.push({
       key: "riskBundle",
       promise: loadRiskBundle({ view, auto, signal }),
-    },
-    ...symbols.map((symbol) => ({
-      key: `signal:${symbol}`,
-      promise: requestJson(`/signals/${symbol}`, common, signal),
-    })),
-  ];
+    });
+  }
+
+  if (needs.signals) {
+    overviewRequests.push({
+      key: "signalBatch",
+      promise: requestJson(
+        "/signals/batch",
+        {
+          ...common,
+          symbols: symbols.join(","),
+        },
+        signal
+      ),
+    });
+  }
 
   const [overviewByKey] = await Promise.all([resolveBatch(overviewRequests)]);
 

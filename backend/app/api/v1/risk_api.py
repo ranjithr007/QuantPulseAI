@@ -20,8 +20,16 @@ repo = RiskRepository()
 
 @router.get("/{symbol}")
 def get_risk(symbol: str, stale_after_seconds: int = Query(default=900, ge=1)):
+    db = SessionLocal()
 
-    risk = repo.latest(symbol)
+    try:
+        return build_risk_payload(db, symbol, stale_after_seconds)
+    finally:
+        db.close()
+
+
+def build_risk_payload(db, symbol, stale_after_seconds=900):
+    risk = repo.latest_for_symbol(db, symbol)
 
     if not risk:
 
@@ -86,7 +94,7 @@ def get_risk_bundle(
 
     try:
         signal = build_signal_payload(db, symbol, timeframe=timeframe, stale_after_seconds=stale_after_seconds)
-        risk = get_risk(symbol, stale_after_seconds=stale_after_seconds)
+        risk = build_risk_payload(db, symbol, stale_after_seconds=stale_after_seconds)
         multi_timeframe = build_multi_timeframe_signal_payload(
             db,
             symbol,

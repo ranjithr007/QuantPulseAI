@@ -75,12 +75,13 @@ function createSelectedBundleData(view, bundle) {
   };
 }
 
-function mergeDashboardBatches(current, { overviewByKey }, symbols) {
+function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
   const paperTradeBundle = overviewByKey.paperTradeBundle || {};
+  const signalBatch = overviewByKey.signalBatch?.records_by_symbol || {};
   return {
     ...current,
     signalsBySymbol: Object.fromEntries(
-      symbols.map((symbol) => [symbol, overviewByKey[`signal:${symbol}`] || current.signalsBySymbol[symbol] || null])
+      symbols.map((symbol) => [symbol, signalBatch[symbol] || current.signalsBySymbol[symbol] || null])
     ),
     watchlist: overviewByKey.watchlist || current.watchlist,
     pipeline: overviewByKey.pipeline || current.pipeline,
@@ -89,6 +90,7 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols) {
     closedTrades: paperTradeBundle.closedTrades?.records || current.closedTrades,
     selected: {
       ...current.selected,
+      signal: signalBatch[view.symbol] || current.selected.signal,
       risk: current.selected.risk || overviewByKey.riskBundle?.risk || null,
       autoDecision: current.selected.autoDecision || overviewByKey.riskBundle?.autoDecision || null,
     },
@@ -120,15 +122,26 @@ function withLiveMarketPrice(signal, liveRecord) {
   };
 }
 
-export default function useDashboardData({ view, filters, auto, symbols, autoRefreshMs }) {
+export default function useDashboardData({ activePage, view, filters, auto, symbols, autoRefreshMs }) {
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(createInitialDashboardData);
   const [liveMarket, setLiveMarket] = useState({});
   const [liveStatus, setLiveStatus] = useState({});
+  const [pageVisible, setPageVisible] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
 
   useEffect(() => {
+    const handleVisibilityChange = () => setPageVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    if (!pageVisible) {
+      return undefined;
+    }
+
     let socket;
     let closed = false;
     let reconnectTimer = null;
@@ -207,9 +220,14 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
         socket.close();
       }
     };
-  }, [symbols]);
+  }, [symbols, pageVisible]);
 
   useEffect(() => {
+    if (!pageVisible) {
+      setLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     const controller = new AbortController();
 
@@ -246,9 +264,13 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
       controller.abort();
       window.clearInterval(id);
     };
-  }, [autoRefreshMs, symbols]);
+  }, [autoRefreshMs, symbols, pageVisible]);
 
   useEffect(() => {
+    if (!pageVisible) {
+      return undefined;
+    }
+
     let cancelled = false;
     const controller = new AbortController();
 
@@ -277,9 +299,13 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
       cancelled = true;
       controller.abort();
     };
-  }, [symbols]);
+  }, [symbols, pageVisible]);
 
   useEffect(() => {
+    if (!pageVisible) {
+      return undefined;
+    }
+
     let cancelled = false;
     const controller = new AbortController();
 
@@ -293,7 +319,6 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
       }
     }
 
-    pollLiveStatus();
     const id = window.setInterval(pollLiveStatus, 10000);
 
     return () => {
@@ -301,9 +326,14 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
       controller.abort();
       window.clearInterval(id);
     };
-  }, []);
+  }, [pageVisible]);
 
   useEffect(() => {
+    if (!pageVisible) {
+      setLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     const controller = new AbortController();
     let refreshTimer = null;
@@ -313,26 +343,28 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
       setError("");
 
       try {
-        const selectedBundle = await loadIntelligenceBundle({ view, signal: controller.signal });
+        if (pageNeedsSelectedBundle(activePage)) {
+          const selectedBundle = await loadIntelligenceBundle({ view, signal: controller.signal });
+
+          if (cancelled) {
+            return;
+          }
+
+          if (!selectedBundle?.signal) {
+            setData(buildDemoDashboardData(view, symbols));
+            setError("Live backend unavailable; showing demo market data.");
+            return;
+          }
+
+          setData(createSelectedBundleData(view, selectedBundle));
+        }
+        const dashboardBatches = await loadDashboardBatches({ activePage, view, filters, auto, symbols, signal: controller.signal });
 
         if (cancelled) {
           return;
         }
 
-        if (!selectedBundle?.signal) {
-          setData(buildDemoDashboardData(view, symbols));
-          setError("Live backend unavailable; showing demo market data.");
-          return;
-        }
-
-        setData(createSelectedBundleData(view, selectedBundle));
-        const dashboardBatches = await loadDashboardBatches({ view, filters, auto, symbols, signal: controller.signal });
-
-        if (cancelled) {
-          return;
-        }
-
-        setData((current) => mergeDashboardBatches(current, dashboardBatches, symbols));
+        setData((current) => mergeDashboardBatches(current, dashboardBatches, symbols, view));
       } catch (exception) {
         if (!cancelled) {
           setError(exception instanceof Error ? exception.message : "Unable to load dashboard");
@@ -356,6 +388,7 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
     view.symbol,
     view.timeframe,
     view.mode,
+    activePage,
     auto.enabled,
     auto.locked,
     auto.emergencyStop,
@@ -372,6 +405,7 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
     filters.failedMax,
     tick,
     symbols,
+    pageVisible,
   ]);
 
   const signalsBySymbol = useMemo(
@@ -543,4 +577,16 @@ export default function useDashboardData({ view, filters, auto, symbols, autoRef
     losingTrades,
     winRate,
   };
+}
+
+function pageNeedsSelectedBundle(activePage) {
+  return new Set([
+    "dashboard",
+    "market-scan",
+    "coin-details",
+    "trading-details",
+    "risk-controls",
+    "auto-trading",
+    "backtest",
+  ]).has(activePage);
 }

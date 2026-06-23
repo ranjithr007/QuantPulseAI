@@ -42,6 +42,7 @@ def get_pipeline_status(
         _, candidates = build_paper_trade_candidates(
             db,
             stale_after_seconds=stale_after_seconds,
+            trades=open_trade_plans,
         )
         eligible_candidates = [
             item

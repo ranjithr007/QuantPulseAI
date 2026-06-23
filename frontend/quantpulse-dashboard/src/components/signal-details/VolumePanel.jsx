@@ -3,13 +3,13 @@ import { tooltipStyle } from "../../utils/formatters";
 
 export default function VolumePanel({ volumeSeries = [] }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2">
+    <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-2">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-white">Volume</h3>
         <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Bars</span>
       </div>
-      <div className="h-36">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-36 min-w-0 w-full">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 640, height: 144 }}>
           <BarChart data={volumeSeries}>
             <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
             <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />

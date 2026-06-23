@@ -20,6 +20,7 @@ class Phase0SignalsApiStaticTests(unittest.TestCase):
         self.assertIn("is_usable", source)
         self.assertIn("Persisted signal is stale", source)
         self.assertIn('@router.get("/watchlist")', source)
+        self.assertIn('@router.get("/batch")', source)
         self.assertIn('@router.post("/watchlist/persist-ready")', source)
         self.assertIn("persist_ready_watchlist_setups_for_stack", source)
         self.assertIn('@router.get("/{symbol}/diagnostics")', source)

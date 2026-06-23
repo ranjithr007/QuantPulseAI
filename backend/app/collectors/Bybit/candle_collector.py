@@ -28,7 +28,7 @@ class CandleCollector:
 
                 for x in data:
 
-                    print(data)
+                    # print(data)
                     candles.append(
                         {
                             "symbol": symbol,

@@ -13,7 +13,9 @@ class Phase0StartScriptStaticTests(unittest.TestCase):
 
         self.assertIn("SETUPTOOLS_USE_DISTUTILS", source)
         self.assertIn("stdlib", source)
-        self.assertIn("uvicorn app.main:app --reload", source)
+        self.assertIn('"app.main:app"', source)
+        self.assertIn("if ($Reload)", source)
+        self.assertIn('"--reload"', source)
 
 
 if __name__ == "__main__":

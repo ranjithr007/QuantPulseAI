@@ -76,7 +76,7 @@ export default function PnLSection({
         </div>
 
         <div className="mt-3.5 grid gap-3.5 xl:grid-cols-[1.35fr_0.65fr]">
-          <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
+          <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">Equity curve</div>
@@ -84,8 +84,8 @@ export default function PnLSection({
               </div>
               <Pill tone="cyan">{formatSigned(maxDrawdown)} max drawdown</Pill>
             </div>
-            <div className="h-60">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-60 min-w-0 w-full">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 720, height: 240 }}>
                 <AreaChart data={equitySeries}>
                   <defs>
                     <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
@@ -103,7 +103,7 @@ export default function PnLSection({
             </div>
           </div>
 
-          <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
+          <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">PnL mix</div>
@@ -111,8 +111,8 @@ export default function PnLSection({
               </div>
               <Pill tone="slate">{tradeHistory.length} closed</Pill>
             </div>
-            <div className="h-36">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-36 min-w-0 w-full">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 420, height: 144 }}>
                 <PieChart>
                   <Pie data={pnlBySide} dataKey="value" nameKey="name" innerRadius={35} outerRadius={65}>
                     {pnlBySide.map((entry, index) => (
@@ -139,15 +139,15 @@ export default function PnLSection({
         </div>
 
         <div className="mt-3.5 grid gap-3.5 xl:grid-cols-[0.9fr_1.1fr]">
-          <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
+          <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">PNL by symbol</div>
                 <div className="text-xs text-slate-500">Closed trade performance</div>
               </div>
             </div>
-            <div className="h-60">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-60 min-w-0 w-full">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 560, height: 240 }}>
                 <BarChart data={pnlBySymbol} layout="vertical">
                   <CartesianGrid stroke="rgba(148,163,184,0.12)" horizontal={false} />
                   <XAxis type="number" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />

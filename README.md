@@ -1,28 +1,31 @@
 # QuantPulseAI
 
-QuantPulseAI is a FastAPI-based crypto market intelligence prototype aligned to the QuantPulse AI v3 architecture documents. The current codebase is in Phase 0 stabilization: backend modules exist for market data, features, SMC/orderflow, risk, ML basics, jobs, and migrations, but the full institutional v3 platform is not complete yet.
+QuantPulseAI is a FastAPI and React crypto-market intelligence platform aligned to the QuantPulse AI v3 architecture documents. It currently supports a local, paper-only workflow from market ingestion and multi-timeframe analysis through risk approval, simulated execution, monitoring, and performance reporting.
 
 ## Current Phase
 
-Phase 0 focus:
+Phase 1 simulated-trading status: validated locally. Live exchange execution remains disabled.
 
-- Make the backend runnable from a clean checkout.
-- Move local settings into environment variables.
-- Add health/dependency endpoints.
-- Wire intentionally available routers.
-- Add smoke tests before expanding intelligence logic.
-- Keep generated folders such as `.vs`, `backend/venv`, `__pycache__`, and local model artifacts out of source control.
+The next product phase is strategy validation:
+
+- Extend the Backtester V2 chronological execution kernel with historical signal replay.
+- Replay historical intelligence, risk, and trade decisions without look-ahead.
+- Add fees, slippage, equity curves, drawdown, Sharpe, and expectancy.
+- Add walk-forward and regime-specific evaluation.
+- Continue paper trading before considering any live execution.
+
+Backtester V2 now includes an initial leakage-controlled walk-forward validator. It selects stop/target parameters on each training window and evaluates frozen parameters on the following non-overlapping test window. Both expanding and rolling training modes are supported.
 
 ## Project Layout
 
 - `backend/app/main.py` - FastAPI application entrypoint.
-- `backend/app/config.py` - environment-driven runtime settings.
-- `backend/app/database/sqlserver.py` - SQLAlchemy SQL Server session setup.
-- `backend/app/api` - API routers.
-- `backend/app/jobs` - scheduled ingestion/engine jobs.
-- `backend/app/database/models` - SQLAlchemy models.
+- `backend/app/intelligence` - scenario, probability, contradiction, fusion, and multi-timeframe intelligence.
+- `backend/app/regimes` - 13-regime classification and transition logic.
+- `backend/app/paper_trading` - paper fills, lifecycle monitoring, and performance.
+- `backend/app/backtesting` - Backtester V2 execution kernel and performance metrics.
+- `backend/app/jobs` and `backend/app/scheduler` - ingestion and pipeline orchestration.
 - `backend/alembic` - database migrations.
-- `frontend` - placeholder; no frontend implementation exists yet.
+- `frontend/quantpulse-dashboard` - React/Vite/Tailwind dashboard.
 
 ## Environment Setup
 
@@ -71,6 +74,8 @@ Useful endpoints:
 - `GET /health`
 - `GET /health/dependencies`
 - `GET /docs`
+- `GET /backtest/summary`
+- `GET /backtest/walk-forward`
 
 ## Database
 
@@ -87,7 +92,7 @@ You can override the full SQLAlchemy URL with:
 $env:QUANTPULSE_DATABASE_URL="mssql+pyodbc://@(localdb)\MSSQLLocalDB/QuantPulseAI?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
 ```
 
-Run migrations from `backend` after dependencies and database driver are installed:
+Run migrations from `backend` after dependencies and the database driver are installed:
 
 ```powershell
 alembic upgrade head
@@ -95,28 +100,29 @@ alembic upgrade head
 
 ## Tests
 
-The first Phase 0 tests are static smoke tests that avoid external dependencies:
+Run the backend suite from `backend`:
 
 ```powershell
-cd C:\Users\Ranjith.Rallapalli\OneDrive\Documents\QuentPulseAI\QuantPulseAI
-python -m unittest discover -s backend\tests
+cd C:\Users\Ranjith.Rallapalli\OneDrive\Documents\QuentPulseAI\QuantPulseAI\backend
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Once backend dependencies are installed, add API-level tests that import `app.main` with `QUANTPULSE_START_SCHEDULER=false`.
+Build the frontend from `frontend\quantpulse-dashboard`:
+
+```powershell
+npm install
+npm run build
+```
 
 ## Known Gaps
 
-See the implementation roadmap:
-
-`C:\Users\Ranjith.Rallapalli\OneDrive\Documents\QuentPulseAI\outputs\QuantPulseAI_implementation_gap_roadmap.md`
-
 High-priority gaps:
 
-- Frontend is not implemented.
-- Several backend modules are still placeholders.
-- No paper trading ledger exists yet.
-- The v3 13-regime state machine is not complete.
-- Thesis, scenario, probability, contradiction, feature store, digital twin, XAI, governance, SRE, enterprise security, and AI agent layers remain future work.
+- Backtester V2 currently runs a directional re-entry baseline; historical AI-signal replay and walk-forward orchestration are still required for strategy claims.
+- Market/pipeline queries need performance work under the fallback database.
+- Phase 1B intelligence needs historical calibration rather than more rule accumulation.
+- ML registry, drift monitoring, model governance, portfolio risk, RBAC, audit hardening, and SRE remain future work.
+- Live exchange execution is intentionally unavailable.
 
 ## Scheduler Dry Run
 
@@ -153,5 +159,13 @@ $env:QUANTPULSE_START_SCHEDULER="true"
 $env:QUANTPULSE_SCHEDULER_JOBS="market"
 .\start_backend.ps1
 ```
+
+Automatic reload is opt-in because Windows reload subprocesses can generate repeated permission errors in some environments:
+
+```powershell
+.\start_backend.ps1 -Reload
+```
+
+The startup script archives legacy `backend-run.*.log` files once they exceed 25 MB. Change the threshold with `-MaxLegacyLogSizeMB`.
 
 Use comma-separated job ids to add more jobs gradually, or `all` only after every job has passed dry-run validation.

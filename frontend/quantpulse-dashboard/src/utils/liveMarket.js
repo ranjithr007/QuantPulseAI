@@ -6,7 +6,7 @@ export function getLiveMarketState({ liveStatus, updatedAt, hasLiveRecord = fals
   const connected = liveStatus?.connected ?? Boolean(liveStatus?.running);
 
   if (hasLiveRecord && ageSeconds !== null && ageSeconds <= LIVE_AFTER_MS / 1000) {
-    return { state: "LIVE", label: "LIVE", source: "Binance WebSocket", tone: "emerald", ageSeconds };
+    return { state: "LIVE", label: "LIVE", source: "", tone: "emerald", ageSeconds };
   }
 
   if (hasLiveRecord && ageSeconds !== null && ageSeconds <= FALLBACK_AFTER_MS / 1000) {

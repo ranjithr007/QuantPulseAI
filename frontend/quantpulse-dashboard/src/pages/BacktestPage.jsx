@@ -41,7 +41,15 @@ export default function BacktestPage({
   const [engineError, setEngineError] = useState("");
   const [engineLoading, setEngineLoading] = useState(false);
   const dailySeries = buildDailyPnlSeries(tradeHistory);
-  const drawdownSeries = buildDrawdownSeries(equitySeries);
+  const displayedEquitySeries = useMemo(() => {
+    const engineSeries = engineSummary?.result?.equity_curve;
+    if (!engineSeries?.length) return equitySeries;
+    return engineSeries.map((point) => ({
+      label: formatDate(point.label, point.label),
+      equity: safeNumber(point.equity, 0),
+    }));
+  }, [engineSummary, equitySeries]);
+  const drawdownSeries = buildDrawdownSeries(displayedEquitySeries);
   const winLossSeries = [
     { name: "Wins", value: winningTrades },
     { name: "Losses", value: losingTrades },
@@ -122,7 +130,7 @@ export default function BacktestPage({
         <div className="mt-3.5 rounded-lg border border-white/10 bg-slate-900/70 p-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <div className="text-sm font-medium text-white">Live backtest summary</div>
+              <div className="text-sm font-medium text-white">Backtester V2 summary</div>
               <div className="text-xs text-slate-500">
                 {signalSide
                   ? `${view.symbol} ${signalSide} backtest on ${view.timeframe || "15m"}`
@@ -140,12 +148,16 @@ export default function BacktestPage({
           {engineError ? <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{engineError}</div> : null}
 
           {engineSummary?.result ? (
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-9">
               <MiniSummary label="Trades" value={engineSummary.result.total_trades} />
               <MiniSummary label="Wins" value={engineSummary.result.wins} />
               <MiniSummary label="Losses" value={engineSummary.result.losses} />
               <MiniSummary label="Profit" value={formatSigned(engineSummary.result.profit)} />
               <MiniSummary label="Profit factor" value={formatSigned(engineSummary.result.profit_factor, 2)} />
+              <MiniSummary label="Return" value={formatPercent(engineSummary.result.total_return_percent, 2)} />
+              <MiniSummary label="Max drawdown" value={formatPercent(engineSummary.result.max_drawdown_percent, 2)} />
+              <MiniSummary label="Trade Sharpe" value={formatSigned(engineSummary.result.sharpe_ratio, 2)} />
+              <MiniSummary label="Fees" value={formatSigned(engineSummary.result.fees_paid, 2)} />
             </div>
           ) : null}
         </div>
@@ -153,7 +165,7 @@ export default function BacktestPage({
         <div className="mt-3.5 grid gap-3.5 xl:grid-cols-[1.3fr_0.7fr]">
           <ChartCard title="Equity curve" subtitle="Cumulative closed trade PNL">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={equitySeries}>
+              <AreaChart data={displayedEquitySeries}>
                 <defs>
                   <linearGradient id="backtestEquityFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.4} />

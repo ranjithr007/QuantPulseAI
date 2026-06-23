@@ -16,6 +16,12 @@ def _normalized_candle_time(candle):
 def get_latest_candles(db, symbol, timeframe, limit=200):
 
     candidate_limit = max(limit * 4, 500)
+    cache = _session_cache(db, "quantpulse_latest_candles")
+    cache_key = (symbol, timeframe, candidate_limit)
+
+    if cache is not None and cache_key in cache:
+        return cache[cache_key][:limit]
+
     raw_time_candidates = (
         db.query(MarketCandle)
         .filter(MarketCandle.symbol == symbol)
@@ -44,14 +50,26 @@ def get_latest_candles(db, symbol, timeframe, limit=200):
         if _normalized_candle_time(candle) <= max_usable_time
     ]
 
-    return sorted(
+    sorted_candidates = sorted(
         usable_candidates,
         key=_normalized_candle_time,
         reverse=True,
-    )[:limit]
+    )
+    if cache is not None:
+        cache[cache_key] = sorted_candidates
+
+    return sorted_candidates[:limit]
 
 
 def get_latest_candle(db, symbol, timeframe):
     candles = get_latest_candles(db, symbol, timeframe, limit=1)
 
     return candles[0] if candles else None
+
+
+def _session_cache(db, key):
+    info = getattr(db, "info", None)
+    if not isinstance(info, dict):
+        return None
+
+    return info.setdefault(key, {})

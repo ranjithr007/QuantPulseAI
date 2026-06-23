@@ -20,32 +20,38 @@ def get_orderflow(
     db = SessionLocal()
 
     try:
-
-        query = db.query(MarketOrderFlow).filter(MarketOrderFlow.Symbol == symbol)
-
-        if timeframe:
-
-            query = query.filter(MarketOrderFlow.Timeframe == timeframe)
-
-        records = (
-            query.order_by(MarketOrderFlow.CreatedAt.desc())
-            .limit(limit)
-            .all()
+        return build_orderflow_payload(
+            db,
+            symbol,
+            timeframe,
+            limit,
+            stale_after_seconds,
         )
 
-        items = [
-            with_freshness(record, "CreatedAt", stale_after_seconds)
-            for record in records
-        ]
-
-        return {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "count": len(items),
-            "latest": items[0] if items else None,
-            "records": items,
-        }
-
     finally:
-
         db.close()
+
+
+def build_orderflow_payload(db, symbol, timeframe=None, limit=20, stale_after_seconds=900):
+    query = db.query(MarketOrderFlow).filter(MarketOrderFlow.Symbol == symbol)
+
+    if timeframe:
+        query = query.filter(MarketOrderFlow.Timeframe == timeframe)
+
+    records = (
+        query.order_by(MarketOrderFlow.CreatedAt.desc())
+        .limit(limit)
+        .all()
+    )
+    items = [
+        with_freshness(record, "CreatedAt", stale_after_seconds)
+        for record in records
+    ]
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "count": len(items),
+        "latest": items[0] if items else None,
+        "records": items,
+    }

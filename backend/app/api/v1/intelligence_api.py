@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Query
 
-from app.api.v1.ai_scores_api import get_ai_scores
-from app.api.v1.market_api import get_market_candles
-from app.api.v1.orderflow_api import get_orderflow
-from app.api.v1.risk_api import get_risk
+from app.api.v1.ai_scores_api import build_ai_scores_payload
+from app.api.v1.market_api import build_market_candles_payload
+from app.api.v1.orderflow_api import build_orderflow_payload
+from app.api.v1.risk_api import build_risk_payload
 from app.api.v1.signals_api import build_entry_trigger_payload
+from app.api.v1.signals_api import build_multi_timeframe_context
 from app.api.v1.signals_api import build_multi_timeframe_signal_payload
+from app.api.v1.signals_api import build_signal_diagnostics_payload
 from app.api.v1.signals_api import build_signal_payload
 from app.api.v1.signals_api import build_trade_setup_payload
-from app.api.v1.signals_api import get_signal_diagnostics
-from app.api.v1.smc_api import get_smc
+from app.api.v1.smc_api import build_smc_payload
 from app.database.models.market_candles import MarketCandle
 from app.database.sqlserver import SessionLocal
 from app.intelligence.master_ai_engine import generate_master_signal
@@ -91,12 +92,18 @@ def get_intelligence_bundle(
 
     try:
         signal = build_signal_payload(db, symbol, timeframe=timeframe, stale_after_seconds=stale_after_seconds)
-        diagnostics = get_signal_diagnostics(symbol, timeframe=timeframe, stale_after_seconds=stale_after_seconds)
-        candles = get_market_candles(symbol, timeframe=timeframe, limit=80, stale_after_seconds=stale_after_seconds)
-        orderflow = get_orderflow(symbol, timeframe=timeframe, limit=20, stale_after_seconds=stale_after_seconds)
-        smc = get_smc(symbol, timeframe=timeframe, limit=20, stale_after_seconds=stale_after_seconds)
-        risk = get_risk(symbol, stale_after_seconds=stale_after_seconds)
-        ai_scores = get_ai_scores(symbol, timeframe=timeframe, limit=20, stale_after_seconds=stale_after_seconds)
+        diagnostics = build_signal_diagnostics_payload(db, symbol, timeframe, stale_after_seconds)
+        candles = build_market_candles_payload(db, symbol, timeframe, 80, stale_after_seconds)
+        orderflow = build_orderflow_payload(db, symbol, timeframe, 20, stale_after_seconds)
+        smc = build_smc_payload(db, symbol, timeframe, 20, stale_after_seconds)
+        risk = build_risk_payload(db, symbol, stale_after_seconds)
+        ai_scores = build_ai_scores_payload(db, symbol, timeframe, 20, stale_after_seconds)
+        multi_timeframe_context = build_multi_timeframe_context(
+            db,
+            symbol,
+            mode=mode,
+            stale_after_seconds=stale_after_seconds,
+        )
         multi_timeframe = build_multi_timeframe_signal_payload(
             db=db,
             symbol=symbol,
@@ -105,6 +112,7 @@ def get_intelligence_bundle(
             middle=None,
             higher=None,
             stale_after_seconds=stale_after_seconds,
+            context=multi_timeframe_context,
         )
         trade_setup = build_trade_setup_payload(
             db=db,
@@ -114,6 +122,7 @@ def get_intelligence_bundle(
             middle=None,
             higher=None,
             stale_after_seconds=stale_after_seconds,
+            context=multi_timeframe_context,
         )
         entry_trigger = build_entry_trigger_payload(
             db=db,
@@ -123,6 +132,7 @@ def get_intelligence_bundle(
             middle=None,
             higher=None,
             stale_after_seconds=stale_after_seconds,
+            context=multi_timeframe_context,
         )
 
         return {

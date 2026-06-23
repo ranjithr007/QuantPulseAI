@@ -413,6 +413,7 @@
     <Content Include="backend\app\storage\models\ETHUSDT\lightgbm.pkl" />
     <Content Include="backend\app\storage\models\ETHUSDT\randomforest.pkl" />
     <Content Include="backend\app\storage\models\ETHUSDT\xgboost.pkl" />
+    <Content Include="backend\pytest.ini" />
     <Content Include="backend\requirements.txt" />
     <Content Include="backend\start_backend.ps1" />
     <Content Include="backend\tests\__pycache__\test_phase0_ai_scores_static.cpython-312.pyc.1319016629040" />

@@ -206,7 +206,7 @@ function SourceStrip({ selectedDetail, loading, liveStatus }) {
     <div className="flex flex-wrap gap-1.5 2xl:justify-end">
       <SourceChip
         icon={RadioTower}
-        label="Binance WebSocket"
+        label="B WebSocket"
         value={liveValue}
         tone={liveState.tone}
       />

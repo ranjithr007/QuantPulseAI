@@ -280,10 +280,15 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
         db.close()
 
 
-def build_paper_trade_candidates(db, symbol=None, stale_after_seconds=900):
+def build_paper_trade_candidates(
+    db,
+    symbol=None,
+    stale_after_seconds=900,
+    trades=None,
+):
     trade_repo = TradePlanRepository()
     risk_repo = RiskRepository()
-    trades = trade_repo.get_open_trades(db)
+    trades = trades if trades is not None else trade_repo.get_open_trades(db)
 
     if symbol:
         normalized_symbol = symbol.upper()
@@ -295,10 +300,14 @@ def build_paper_trade_candidates(db, symbol=None, stale_after_seconds=900):
     else:
         normalized_symbol = None
 
+    latest_risks = risk_repo.latest_for_symbols(
+        db,
+        [trade.symbol for trade in trades],
+    )
     records = [
         _paper_trade_candidate(
             trade,
-            risk_repo.latest_for_symbol(db, trade.symbol),
+            latest_risks.get(trade.symbol),
             stale_after_seconds,
         )
         for trade in trades

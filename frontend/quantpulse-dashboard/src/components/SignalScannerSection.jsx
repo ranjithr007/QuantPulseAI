@@ -6,7 +6,7 @@ const WATCHLIST_STATUSES = ["ALL", "READY", "WAIT"];
 const WATCHLIST_SIDES = ["ALL", "LONG", "SHORT"];
 const FAILED_MAX_OPTIONS = ["0", "1", "2", "3", "4"];
 
-export default function SignalScannerSection({ view, filters, setView, setFilters, signalRows, watchlist, liveStatus, onOpenSignal, getSymbolHref }) {
+export default function F({ view, filters, setView, setFilters, signalRows, watchlist, liveStatus, onOpenSignal, getSymbolHref }) {
   function selectSignal(symbol) {
     setView((current) => ({ ...current, symbol }));
     onOpenSignal?.(symbol);

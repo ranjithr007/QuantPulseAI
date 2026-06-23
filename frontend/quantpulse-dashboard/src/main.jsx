@@ -159,6 +159,7 @@ function DashboardApp() {
     losingTrades,
     winRate,
   } = useDashboardData({
+    activePage,
     view,
     filters,
     auto,

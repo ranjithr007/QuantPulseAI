@@ -22,6 +22,7 @@ class Phase1PipelineStatusStaticTests(unittest.TestCase):
         self.assertIn("TradePlanRepository", source)
         self.assertIn("RiskDecision", source)
         self.assertIn("build_paper_trade_candidates", source)
+        self.assertIn("trades=open_trade_plans", source)
         self.assertIn("PaperTradeRepository", source)
         self.assertIn("paper_trade_performance", source)
 

@@ -1,3 +1,4 @@
+from typing import final
 from app.features.trend_features import calculate_trend
 from app.features.momentum_features import calculate_momentum
 from app.features.volatility_features import calculate_volatility
@@ -14,13 +15,16 @@ def build_features(symbol, timeframe, candles):
     volatility_score, atr = calculate_volatility(candles)
 
     liquidity_score = calculate_liquidity(candles)
-
+    
+    # print(f"trend_score : {trend_score}")
     final_score = (
         trend_score * 0.35
         + momentum_score * 0.35
         + volatility_score * 0.15
         + liquidity_score * 0.15
     )
+
+    # print(f"Final Score :{final_score}")
 
     if final_score > 70:
 
@@ -33,7 +37,6 @@ def build_features(symbol, timeframe, candles):
     else:
 
         signal = "WAIT"
-
     quality = build_feature_quality_profile(
         db=None,
         symbol=symbol,

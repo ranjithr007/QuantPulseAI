@@ -1,3 +1,7 @@
+import copy
+import threading
+import time
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.database.models.market_candles import MarketCandle
@@ -39,6 +43,10 @@ WATCHLIST_PERMISSION_PRIORITY = {
     "SHORT_ALLOWED": 1,
     "WAIT": 3,
 }
+WATCHLIST_CACHE_TTL_SECONDS = 15.0
+_watchlist_payload_cache = {}
+_watchlist_cache_key_locks = {}
+_watchlist_cache_guard = threading.Lock()
 
 
 def build_multi_timeframe_signal_payload(
@@ -49,13 +57,20 @@ def build_multi_timeframe_signal_payload(
     middle=None,
     higher=None,
     stale_after_seconds=900,
+    context=None,
 ):
-    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
-    timeframes = [
-        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
-        for timeframe in stack
-    ]
-    confirmation = combine_timeframe_signals(timeframes)
+    context = context or build_multi_timeframe_context(
+        db,
+        symbol,
+        mode,
+        lower,
+        middle,
+        higher,
+        stale_after_seconds,
+    )
+    stack = context["stack"]
+    timeframes = context["timeframes"]
+    confirmation = context["confirmation"]
 
     return {
         "symbol": symbol,
@@ -75,13 +90,20 @@ def build_trade_setup_payload(
     middle=None,
     higher=None,
     stale_after_seconds=900,
+    context=None,
 ):
-    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
-    timeframes = [
-        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
-        for timeframe in stack
-    ]
-    confirmation = combine_timeframe_signals(timeframes)
+    context = context or build_multi_timeframe_context(
+        db,
+        symbol,
+        mode,
+        lower,
+        middle,
+        higher,
+        stale_after_seconds,
+    )
+    stack = context["stack"]
+    timeframes = context["timeframes"]
+    confirmation = context["confirmation"]
     setup = build_trade_setup_decision(confirmation, timeframes)
     scenario = build_scenario_plan(confirmation, timeframes)
     trade_plan = None
@@ -128,13 +150,20 @@ def build_entry_trigger_payload(
     middle=None,
     higher=None,
     stale_after_seconds=900,
+    context=None,
 ):
-    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
-    timeframes = [
-        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
-        for timeframe in stack
-    ]
-    confirmation = combine_timeframe_signals(timeframes)
+    context = context or build_multi_timeframe_context(
+        db,
+        symbol,
+        mode,
+        lower,
+        middle,
+        higher,
+        stale_after_seconds,
+    )
+    stack = context["stack"]
+    timeframes = context["timeframes"]
+    confirmation = context["confirmation"]
     trigger = build_entry_trigger_decision(confirmation, timeframes)
     trade_plan = None
     validation = None
@@ -163,6 +192,28 @@ def build_entry_trigger_payload(
     }
 
 
+def build_multi_timeframe_context(
+    db,
+    symbol,
+    mode=None,
+    lower=None,
+    middle=None,
+    higher=None,
+    stale_after_seconds=900,
+):
+    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
+    timeframes = [
+        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
+        for timeframe in stack
+    ]
+
+    return {
+        "stack": stack,
+        "timeframes": timeframes,
+        "confirmation": combine_timeframe_signals(timeframes),
+    }
+
+
 def _build_entry_trigger_payload(db, symbol, timeframes_to_use, stale_after_seconds):
     return build_entry_trigger_payload(
         db,
@@ -172,6 +223,74 @@ def _build_entry_trigger_payload(db, symbol, timeframes_to_use, stale_after_seco
         higher=timeframes_to_use[2] if len(timeframes_to_use) > 2 else None,
         stale_after_seconds=stale_after_seconds,
     )
+
+
+def _get_cached_watchlist_payloads(db, stack, stale_after_seconds):
+    key = (tuple(stack), int(stale_after_seconds))
+    cached = _read_watchlist_cache(key)
+    if cached is not None:
+        return cached
+
+    with _watchlist_cache_guard:
+        key_lock = _watchlist_cache_key_locks.setdefault(key, threading.Lock())
+
+    # Only one request computes a given timeframe stack at a time.
+    with key_lock:
+        cached = _read_watchlist_cache(key)
+        if cached is not None:
+            return cached
+
+        symbols = SymbolRepository().get_active_symbols(db)
+        payloads = [
+            _build_entry_trigger_payload(
+                db,
+                item.symbol,
+                stack,
+                stale_after_seconds,
+            )
+            for item in symbols
+        ]
+        cached_at = time.monotonic()
+
+        with _watchlist_cache_guard:
+            _watchlist_payload_cache[key] = {
+                "cached_at": cached_at,
+                "payloads": copy.deepcopy(payloads),
+            }
+
+        return copy.deepcopy(payloads), _watchlist_cache_metadata(False, 0.0)
+
+
+def _read_watchlist_cache(key):
+    now = time.monotonic()
+
+    with _watchlist_cache_guard:
+        entry = _watchlist_payload_cache.get(key)
+        if entry is None:
+            return None
+
+        age_seconds = max(0.0, now - entry["cached_at"])
+        if age_seconds >= WATCHLIST_CACHE_TTL_SECONDS:
+            _watchlist_payload_cache.pop(key, None)
+            return None
+
+        payloads = copy.deepcopy(entry["payloads"])
+
+    return payloads, _watchlist_cache_metadata(True, age_seconds)
+
+
+def _watchlist_cache_metadata(hit, age_seconds):
+    return {
+        "hit": hit,
+        "age_seconds": round(age_seconds, 3),
+        "ttl_seconds": int(WATCHLIST_CACHE_TTL_SECONDS),
+    }
+
+
+def _clear_watchlist_cache():
+    with _watchlist_cache_guard:
+        _watchlist_payload_cache.clear()
+        _watchlist_cache_key_locks.clear()
 
 
 @router.get("/watchlist")
@@ -189,12 +308,14 @@ def get_signal_watchlist(
 
     try:
         stack = _resolve_timeframe_stack(mode, lower, middle, higher)
-        symbols = SymbolRepository().get_active_symbols(db)
+        payloads, cache = _get_cached_watchlist_payloads(
+            db,
+            stack,
+            stale_after_seconds,
+        )
         records = [
-            _watchlist_row(
-                _build_entry_trigger_payload(db, item.symbol, stack, stale_after_seconds)
-            )
-            for item in symbols
+            _watchlist_row(payload)
+            for payload in payloads
         ]
         filtered_records, filters = _filter_watchlist(
             records,
@@ -214,6 +335,7 @@ def get_signal_watchlist(
             "total_count": len(records),
             "summary": _summarize_watchlist(sorted_records),
             "records": sorted_records,
+            "cache": cache,
         }
 
     finally:
@@ -252,17 +374,15 @@ def persist_ready_watchlist_setups_for_stack(
     try:
         stack = _resolve_timeframe_stack(mode, lower, middle, higher)
         normalized_side = _normalize_watchlist_filter(side, WATCHLIST_SIDES, "side")
-        symbols = SymbolRepository().get_active_symbols(db)
+        payloads, cache = _get_cached_watchlist_payloads(
+            db,
+            stack,
+            stale_after_seconds,
+        )
         trade_repo = TradePlanRepository()
         records = []
 
-        for item in symbols:
-            payload = _build_entry_trigger_payload(
-                db,
-                item.symbol,
-                stack,
-                stale_after_seconds,
-            )
+        for payload in payloads:
             records.append(
                 _persist_ready_watchlist_payload(
                     db,
@@ -295,7 +415,35 @@ def persist_ready_watchlist_setups_for_stack(
             "skipped_count": len(skipped),
             "saved": saved,
             "skipped": skipped,
+            "cache": cache,
         }
+
+    finally:
+        db.close()
+
+
+@router.get("/batch")
+def get_signal_batch(
+    symbols: str | None = Query(default=None),
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    db = SessionLocal()
+
+    try:
+        requested_symbols = _normalize_signal_batch_symbols(symbols)
+        if not requested_symbols:
+            requested_symbols = [
+                item.symbol
+                for item in SymbolRepository().get_active_symbols(db)
+            ]
+
+        return build_signal_batch_payload(
+            db,
+            requested_symbols,
+            timeframe,
+            stale_after_seconds,
+        )
 
     finally:
         db.close()
@@ -452,10 +600,14 @@ def get_signal_diagnostics(
     db = SessionLocal()
 
     try:
-        return _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
+        return build_signal_diagnostics_payload(db, symbol, timeframe, stale_after_seconds)
 
     finally:
         db.close()
+
+
+def build_signal_diagnostics_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
+    return _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
 
 
 def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
@@ -541,6 +693,25 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
     }
 
 
+def build_signal_batch_payload(db, symbols, timeframe="5m", stale_after_seconds=900):
+    normalized_symbols = _normalize_signal_batch_symbols(symbols)
+    records = [
+        build_signal_payload(db, symbol, timeframe, stale_after_seconds)
+        for symbol in normalized_symbols
+    ]
+
+    return {
+        "source": "computed_current_batch",
+        "timeframe": timeframe,
+        "count": len(records),
+        "records": records,
+        "records_by_symbol": {
+            record["symbol"]: record
+            for record in records
+        },
+    }
+
+
 @router.get("/{symbol}")
 def get_signal(
     symbol: str,
@@ -558,6 +729,21 @@ def get_signal(
 
 def _latest_candle(db, symbol, timeframe):
     return get_latest_candle(db, symbol, timeframe)
+
+
+def _normalize_signal_batch_symbols(symbols):
+    values = symbols.split(",") if isinstance(symbols, str) else symbols or []
+    normalized = []
+
+    for value in values:
+        symbol = str(value or "").strip().upper()
+        if symbol and symbol not in normalized:
+            normalized.append(symbol)
+
+    if len(normalized) > 50:
+        raise HTTPException(status_code=400, detail="A maximum of 50 symbols is supported")
+
+    return normalized
 
 
 def _resolve_timeframe_stack(mode=None, lower=None, middle=None, higher=None):

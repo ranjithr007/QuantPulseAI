@@ -63,7 +63,7 @@ export default function SignalDetailsSection({
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
           <span className={clsx("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium", feedConnected ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200" : "border-amber-400/20 bg-amber-500/10 text-amber-200")}>
             <span className={clsx("h-1.5 w-1.5 rounded-full", feedConnected ? "bg-emerald-300" : "bg-amber-300")} />
-            {feedConnected ? `Binance connected${liveStatus?.cached_count ? ` (${liveStatus.cached_count} cached)` : ""}` : liveStatus?.running ? "Binance reconnecting" : "Live feed stopped"}
+            {feedConnected ? `Live connected${liveStatus?.cached_count ? ` (${liveStatus.cached_count} cached)` : ""}` : liveStatus?.running ? "Binance reconnecting" : "Live feed stopped"}
           </span>
           {liveStatus?.symbols?.length ? <span>{liveStatus.symbols.length} symbols streaming</span> : null}
         </div>
@@ -441,7 +441,7 @@ function fundingOiSnapshot(selectedDetail) {
   if (shortPct > longPct + 15) {
     return { bias: "SHORT", funding: "Unavailable", openInterest: "Unavailable", note: "Probability favors short exposure", tone: "rose" };
   }
-  return { bias: "NEUTRAL", funding: "Unavailable", openInterest: "Unavailable", note: "No derivative feed in current payload", tone: "slate" };
+    return { bias: `NEUTRAL funding Rate ${openInterest}`, funding: "Unavailable", openInterest: "Unavailable", note: "No derivative feed in current payload", tone: "slate" };
 }
 
 function normalizeProbability(value) {

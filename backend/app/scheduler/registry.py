@@ -1,8 +1,18 @@
 from dataclasses import dataclass
 from importlib import import_module
 
-
-DEFAULT_JOB_IDS = ["market", "feature", "regime", "orderflow", "smc"]
+DEFAULT_JOB_IDS = [
+    "market",
+    "feature",
+    "regime",
+    "orderflow",
+    "smc",
+    "heatmap",
+    "whales",
+    "whale_ai",
+    "intelligence",
+    "master_ai",
+]
 
 
 @dataclass(frozen=True)

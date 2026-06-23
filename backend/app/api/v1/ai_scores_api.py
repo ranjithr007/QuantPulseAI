@@ -22,33 +22,42 @@ def get_ai_scores(
     db = SessionLocal()
 
     try:
-        records = (
-            db.query(AIScore)
-            .filter(AIScore.symbol == symbol)
-            .order_by(AIScore.created_at.desc())
-            .limit(limit)
-            .all()
+        return build_ai_scores_payload(
+            db,
+            symbol,
+            timeframe,
+            limit,
+            stale_after_seconds,
         )
-
-        items = [
-            with_freshness(record, "created_at", stale_after_seconds)
-            for record in records
-        ]
-
-        return {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "source": "ai_scores" if items else "computed_current",
-            "count": len(items),
-            "latest": items[0] if items else None,
-            "records": items,
-            "computed": None
-            if items
-            else _compute_current_score(db, symbol, timeframe, stale_after_seconds),
-        }
 
     finally:
         db.close()
+
+
+def build_ai_scores_payload(db, symbol, timeframe="5m", limit=20, stale_after_seconds=900):
+    records = (
+        db.query(AIScore)
+        .filter(AIScore.symbol == symbol)
+        .order_by(AIScore.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = [
+        with_freshness(record, "created_at", stale_after_seconds)
+        for record in records
+    ]
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "source": "ai_scores" if items else "computed_current",
+        "count": len(items),
+        "latest": items[0] if items else None,
+        "records": items,
+        "computed": None
+        if items
+        else _compute_current_score(db, symbol, timeframe, stale_after_seconds),
+    }
 
 
 def _compute_current_score(db, symbol, timeframe, stale_after_seconds):

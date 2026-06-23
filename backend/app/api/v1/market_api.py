@@ -20,35 +20,45 @@ def get_market_candles(
     db = SessionLocal()
 
     try:
-        effective_stale_after_seconds = (
-            stale_after_seconds
-            if stale_after_seconds is not None
-            else stale_after_seconds_for_timeframe(timeframe)
+        return build_market_candles_payload(
+            db,
+            symbol,
+            timeframe,
+            limit,
+            stale_after_seconds,
         )
-
-        if timeframe:
-            records = get_latest_candles(db, symbol, timeframe, limit)
-        else:
-            records = (
-                db.query(MarketCandle)
-                .filter(MarketCandle.symbol == symbol)
-                .order_by(MarketCandle.candle_time.desc())
-                .limit(limit)
-                .all()
-            )
-
-        items = [
-            with_freshness(record, "candle_time", effective_stale_after_seconds)
-            for record in records
-        ]
-
-        return {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "count": len(items),
-            "latest": items[0] if items else None,
-            "records": items,
-        }
 
     finally:
         db.close()
+
+
+def build_market_candles_payload(db, symbol, timeframe=None, limit=100, stale_after_seconds=None):
+    effective_stale_after_seconds = (
+        stale_after_seconds
+        if stale_after_seconds is not None
+        else stale_after_seconds_for_timeframe(timeframe)
+    )
+
+    if timeframe:
+        records = get_latest_candles(db, symbol, timeframe, limit)
+    else:
+        records = (
+            db.query(MarketCandle)
+            .filter(MarketCandle.symbol == symbol)
+            .order_by(MarketCandle.candle_time.desc())
+            .limit(limit)
+            .all()
+        )
+
+    items = [
+        with_freshness(record, "candle_time", effective_stale_after_seconds)
+        for record in records
+    ]
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "count": len(items),
+        "latest": items[0] if items else None,
+        "records": items,
+    }

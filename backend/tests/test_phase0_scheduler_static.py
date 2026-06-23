@@ -13,7 +13,18 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
     def test_default_scheduler_jobs_cover_live_intelligence_pipeline(self):
         self.assertEqual(
             resolve_job_ids([]),
-            ["market", "feature", "regime", "orderflow", "smc"],
+            [
+                "market",
+                "feature",
+                "regime",
+                "orderflow",
+                "smc",
+                "heatmap",
+                "whales",
+                "whale_ai",
+                "intelligence",
+                "master_ai",
+            ],
         )
 
     def test_known_job_definitions_are_lazy_import_metadata(self):

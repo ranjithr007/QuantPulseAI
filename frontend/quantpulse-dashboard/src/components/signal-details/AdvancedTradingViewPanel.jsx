@@ -117,7 +117,7 @@ export default function AdvancedTradingViewPanel({
           <div className="text-xs text-slate-500">TradingView tools, indicators, drawings, and Binance market data</div>
         </div>
         <div className="flex items-center gap-2">
-          <Pill tone="cyan">BINANCE / {String(timeframe || "1h").toUpperCase()}</Pill>
+          <Pill tone="cyan">{String(timeframe || "1h").toUpperCase()}</Pill>
           <Pill tone="slate">{formatPrice(currentPrice)}</Pill>
         </div>
       </div>

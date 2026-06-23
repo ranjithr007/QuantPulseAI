@@ -16,7 +16,7 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
         self.assertIn("TradePlanRepository", source)
         self.assertIn("RiskRepository", source)
         self.assertIn("get_open_trades(db)", source)
-        self.assertIn("latest_for_symbol(db, trade.symbol)", source)
+        self.assertIn("latest_for_symbols", source)
         self.assertIn('"source": "paper_trade_candidates"', source)
         self.assertIn('"eligible_count"', source)
         self.assertIn('"blocked_count"', source)
@@ -103,6 +103,8 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
 
         self.assertIn("def latest_for_symbol(self, db, symbol)", source)
         self.assertIn("return self.latest_for_symbol(db, symbol)", source)
+        self.assertIn("def latest_for_symbols(self, db, symbols)", source)
+        self.assertIn("func.max(RiskDecision.created_at)", source)
 
     def test_paper_trade_repository_blocks_duplicate_open_positions(self):
         source = (APP_ROOT / "repositories" / "paper_trade_repository.py").read_text(

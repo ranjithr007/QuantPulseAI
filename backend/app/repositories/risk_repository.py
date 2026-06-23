@@ -1,3 +1,5 @@
+from sqlalchemy import and_, func
+
 from app.database.sqlserver import SessionLocal
 
 from app.database.models.risk_decision import RiskDecision
@@ -54,3 +56,31 @@ class RiskRepository:
             .order_by(RiskDecision.created_at.desc())
             .first()
         )
+
+    def latest_for_symbols(self, db, symbols):
+        normalized_symbols = list(dict.fromkeys(symbols))
+        if not normalized_symbols:
+            return {}
+
+        latest_created = (
+            db.query(
+                RiskDecision.symbol.label("symbol"),
+                func.max(RiskDecision.created_at).label("created_at"),
+            )
+            .filter(RiskDecision.symbol.in_(normalized_symbols))
+            .group_by(RiskDecision.symbol)
+            .subquery()
+        )
+        rows = (
+            db.query(RiskDecision)
+            .join(
+                latest_created,
+                and_(
+                    RiskDecision.symbol == latest_created.c.symbol,
+                    RiskDecision.created_at == latest_created.c.created_at,
+                ),
+            )
+            .all()
+        )
+
+        return {row.symbol: row for row in rows}
