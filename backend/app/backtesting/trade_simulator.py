@@ -3,6 +3,7 @@ from app.database.sqlserver import SessionLocal
 from app.repositories.candle_repository import get_latest_candles
 
 from app.backtesting.backtest_engine import run_backtest
+from app.backtesting.filtered_replay_engine import run_filtered_replay
 from app.backtesting.walk_forward_validator import run_walk_forward
 
 def execute_backtest(
@@ -53,6 +54,42 @@ def execute_backtest(
 
     finally:
 
+        db.close()
+
+
+def execute_filtered_backtest(
+    symbol,
+    timeframe,
+    signal,
+    *,
+    limit=500,
+    initial_capital=10_000,
+    position_size_percent=100,
+    min_confidence=70,
+    stop_atr_multiple=1.5,
+    target_atr_multiple=3.5,
+    cooldown_candles=3,
+    fee_bps=4,
+    slippage_bps=2,
+):
+    db = SessionLocal()
+    try:
+        candles = get_latest_candles(db, symbol, timeframe, limit)
+        result = run_filtered_replay(
+            candles,
+            signal,
+            initial_capital=initial_capital,
+            position_size_percent=position_size_percent,
+            min_confidence=min_confidence,
+            stop_atr_multiple=stop_atr_multiple,
+            target_atr_multiple=target_atr_multiple,
+            cooldown_candles=cooldown_candles,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        )
+        result.update({"symbol": symbol, "timeframe": timeframe})
+        return result
+    finally:
         db.close()
 
 

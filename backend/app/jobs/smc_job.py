@@ -44,5 +44,5 @@ def run_smc_job():
 
             smc_repo.save(db, result)
 
-            print(symbol, result["structure"], result["smc_score"])
+            # print(symbol, result["structure"], result["smc_score"])
             # print(symbol, tf, result)

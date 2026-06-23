@@ -107,7 +107,7 @@ export async function loadRiskBundle({ view, auto, signal }) {
 
 export async function loadBacktestSummary({ symbol, signalSide, timeframe = "15m", signal }) {
   const response = await requestJson(
-    "/backtest/summary",
+    "/backtest/filtered-summary",
     {
       symbol,
       signal: signalSide,

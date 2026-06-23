@@ -79,6 +79,7 @@ Useful endpoints:
 - `GET /health/dependencies`
 - `GET /docs`
 - `GET /backtest/summary`
+- `GET /backtest/filtered-summary`
 - `GET /backtest/walk-forward`
 - `GET /paper-trade/measurement`
 
@@ -143,6 +144,17 @@ The default scheduler set now runs the paper-only evidence loop:
 `pipeline_cycle` is intentionally excluded from that set because it invokes the same paper
 jobs sequentially and would duplicate work. Automation settings must remain in `PAPER` mode;
 live execution is still unavailable.
+
+## Filtered Historical Replay
+
+`/backtest/summary` remains the constant-direction re-entry baseline. It is useful as a control,
+but it is not an AI strategy claim. `/backtest/filtered-summary` reconstructs candle-derived
+trend, momentum, volatility, liquidity, and regime state at each historical close. It applies
+confidence and directional regime gates, enters at the next candle open, uses ATR-based stop
+and target levels, permits one position at a time, and requires cooldown plus signal re-arming.
+
+Historical SMC and order-flow snapshots currently cover only the live collection period, so the
+filtered replay labels those inputs unavailable and must not be presented as full Master AI replay.
 
 ## Tests
 

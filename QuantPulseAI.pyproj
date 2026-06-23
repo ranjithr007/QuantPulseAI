@@ -112,6 +112,7 @@
     <Compile Include="backend\app\api\v1\signals_api.py" />
     <Compile Include="backend\app\api\v1\smc_api.py" />
     <Compile Include="backend\app\backtesting\backtest_engine.py" />
+    <Compile Include="backend\app\backtesting\filtered_replay_engine.py" />
     <Compile Include="backend\app\backtesting\trade_simulator.py" />
     <Compile Include="backend\app\backtesting\performance_engine.py" />
     <Compile Include="backend\app\backtesting\__init__.py" />

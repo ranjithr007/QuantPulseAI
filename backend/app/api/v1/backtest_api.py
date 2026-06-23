@@ -1,9 +1,46 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from app.backtesting.trade_simulator import execute_backtest, execute_walk_forward
+from app.backtesting.trade_simulator import execute_backtest, execute_filtered_backtest, execute_walk_forward
 
 
 router = APIRouter(prefix="/backtest", tags=["Backtesting"])
+
+
+@router.get("/filtered-summary")
+def filtered_backtest_summary(
+    symbol: str,
+    signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
+    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    limit: int = Query(default=500, ge=51, le=5000),
+    initial_capital: float = Query(default=10_000, gt=0),
+    position_size_percent: float = Query(default=100, gt=0, le=100),
+    min_confidence: float = Query(default=70, ge=0, le=100),
+    stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
+    target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
+    cooldown_candles: int = Query(default=3, ge=0, le=100),
+    fee_bps: float = Query(default=4, ge=0, le=1000),
+    slippage_bps: float = Query(default=2, ge=0, le=1000),
+):
+    return {
+        "source": "filtered_backtest_summary_v1",
+        "symbol": symbol,
+        "signal": signal,
+        "timeframe": timeframe,
+        "result": execute_filtered_backtest(
+            symbol,
+            timeframe,
+            signal,
+            limit=limit,
+            initial_capital=initial_capital,
+            position_size_percent=position_size_percent,
+            min_confidence=min_confidence,
+            stop_atr_multiple=stop_atr_multiple,
+            target_atr_multiple=target_atr_multiple,
+            cooldown_candles=cooldown_candles,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        ),
+    }
 
 
 @router.get("/walk-forward")
