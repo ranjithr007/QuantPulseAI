@@ -11,6 +11,9 @@ from app.database.models.liquidation_heatmaps import LiquidationHeatmap
 from app.database.models.whale_signals import WhaleSignal
 from app.engines.atr_engine import ATREngine
 from app.trading.trade_plan_engine import build_trade_plan
+from app.repositories._db_utils import safe_rollback
+from app.utils.network_resilience import is_transient_network_error
+from app.utils.network_resilience import summarize_network_error
 
 
 def run_master_ai_job():
@@ -79,6 +82,7 @@ def run_master_ai_job():
                 atr,
             )
 
+            result["timeframe"] = "5m"
             trade_plan = build_trade_plan(result["signal"], current_price, atr)
             result["entry_price"] = trade_plan["entry"]
             result["target_price"] = trade_plan["target1"]
@@ -88,8 +92,9 @@ def run_master_ai_job():
             print("Master AI saved:", symbol, result["signal"], result["confidence"])
 
     except Exception as e:
-
-        print("Master AI Error:", e)
+        safe_rollback(db)
+        if not is_transient_network_error(e):
+            print("Master AI Error:", summarize_network_error(e))
 
     finally:
 

@@ -3,10 +3,24 @@ from fastapi import APIRouter, Query
 from app.database.sqlserver import SessionLocal
 
 from app.database.models.market_smc import MarketSMCSignal
+from app.utils.network_resilience import summarize_network_error
 from app.utils.freshness import with_freshness
 
 
 router = APIRouter(prefix="/smc", tags=["SMC"])
+
+
+def _smc_error_payload(symbol, timeframe, exc):
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "source": "smc_signals",
+        "count": 0,
+        "latest": None,
+        "records": [],
+        "status": "FAILED",
+        "error": summarize_network_error(exc),
+    }
 
 
 @router.get("/{symbol}")
@@ -27,6 +41,10 @@ def get_smc(
             limit,
             stale_after_seconds,
         )
+
+    except Exception as exc:
+        db.rollback()
+        return _smc_error_payload(symbol, timeframe, exc)
 
     finally:
         db.close()

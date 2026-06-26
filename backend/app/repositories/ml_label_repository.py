@@ -1,4 +1,5 @@
 from app.database.models.ml_label import MLLabel
+from app.repositories._db_utils import commit_or_rollback
 
 
 class MLLabelRepository:
@@ -16,6 +17,6 @@ class MLLabelRepository:
 
         db.add(entity)
 
-        db.commit()
+        commit_or_rollback(db)
 
         return entity

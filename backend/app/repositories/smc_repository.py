@@ -1,4 +1,5 @@
 from app.database.models.market_smc import MarketSMCSignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class SMCRepository:
@@ -22,11 +23,21 @@ class SMCRepository:
 
         db.add(record)
 
-        db.commit()
+        commit_or_rollback(db)
 
         return record
 
     def save(self, db, data):
+        smc_bias = data.get("smc_bias")
+        smc_score = data.get("smc_score")
+
+        if smc_bias is None:
+            if smc_score is not None and smc_score > 55:
+                smc_bias = "LONG"
+            elif smc_score is not None and smc_score < 45:
+                smc_bias = "SHORT"
+            else:
+                smc_bias = "NEUTRAL"
 
         signal = MarketSMCSignal(
             symbol=data["symbol"],
@@ -56,20 +67,21 @@ class SMCRepository:
             # ==================
             fvg_detected=(data.get("fvg_direction", "NONE") != "NONE"),
             fvg_price=data.get("fvg_size", 0),
+            smc_bias=smc_bias,
             confidence=data["smc_score"],
         )
 
         db.add(signal)
 
-        db.commit()
+        commit_or_rollback(db)
 
         return signal
 
-    def latest(self, db, symbol):
+    def latest(self, db, symbol, timeframe=None):
 
-        return (
-            db.query(MarketSMCSignal)
-            .filter(MarketSMCSignal.symbol == symbol)
-            .order_by(MarketSMCSignal.created_at.desc())
-            .first()
-        )
+        query = db.query(MarketSMCSignal).filter(MarketSMCSignal.symbol == symbol)
+
+        if timeframe:
+            query = query.filter(MarketSMCSignal.timeframe == timeframe)
+
+        return query.order_by(MarketSMCSignal.created_at.desc()).first()

@@ -7,6 +7,7 @@ from app.database.models.market_features import MarketFeature
 from app.database.models.market_regimes import MarketRegime
 from app.database.models.market_order_flow import MarketOrderFlow
 from app.database.models.market_smc import MarketSMCSignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class DatasetBuilder:
@@ -71,6 +72,6 @@ class DatasetBuilder:
 
             count += 1
 
-        self.db.commit()
+        commit_or_rollback(self.db)
 
         return {"created": count}

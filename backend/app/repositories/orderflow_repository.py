@@ -1,5 +1,6 @@
 from app.database.models.market_order_flow import MarketOrderFlow
 from app.database.models.order_flow_signal import OrderFlowSignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class OrderFlowRepository:
@@ -57,7 +58,7 @@ class OrderFlowRepository:
 
         db.add(signal)
 
-        db.commit()
+        commit_or_rollback(db)
 
     def latest(self, db, symbol):
 
@@ -68,26 +69,34 @@ class OrderFlowRepository:
             .first()
         )
 
+    @staticmethod
     def save_orderflow(db, symbol, timeframe, data):
+
+        cvd = data.get("cumulative_delta", data.get("cvd", data.get("delta", 0)))
+        buyer_strength = data.get("buyer_strength", data.get("buyerStrength", 50))
+        seller_strength = data.get("seller_strength", data.get("sellerStrength", 50))
+        absorption = data.get("absorption", data.get("absorption_type", "NONE"))
+        signal = data.get("signal", data.get("flow_signal", "NEUTRAL"))
+        confidence = data.get("confidence", 0)
 
         record = MarketOrderFlow(
             Symbol=symbol,
             Timeframe=timeframe,
-            BuyVolume=data["buy_volume"],
-            SellVolume=data["sell_volume"],
-            Delta=data["delta"],
-            CVD=data.get("cvd", 0),
-            BuyerStrength=data["buyer_strength"],
-            SellerStrength=data["seller_strength"],
-            Absorption=data["absorption"],
+            BuyVolume=data.get("buy_volume", 0),
+            SellVolume=data.get("sell_volume", 0),
+            Delta=data.get("delta", 0),
+            CVD=cvd,
+            BuyerStrength=buyer_strength,
+            SellerStrength=seller_strength,
+            Absorption=absorption,
             Exhaustion="NONE",
-            FlowSignal=data["signal"],
-            Confidence=data["confidence"],
+            FlowSignal=signal,
+            Confidence=confidence,
         )
 
         db.add(record)
 
-        db.commit()
+        commit_or_rollback(db)
 
         return record
 

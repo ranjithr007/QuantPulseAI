@@ -5,6 +5,7 @@ from fastapi import WebSocketDisconnect
 
 from app.services.live_market_service import get_live_market_service
 from app.services.live_market_service import start_live_market_listener
+from app.utils.network_resilience import summarize_network_error
 
 
 router = APIRouter(tags=["Live Market"])
@@ -13,34 +14,44 @@ router = APIRouter(tags=["Live Market"])
 @router.get("/live/market-snapshot")
 async def get_live_market_snapshot(symbols: str | None = Query(default=None)):
     service = get_live_market_service()
-    records = service.snapshot(symbols)
 
-    return {
-        "source": "live_market_cache",
-        "count": len(records),
-        "records": records,
-    }
+    try:
+        records = service.snapshot(symbols)
+        return {
+            "source": "live_market_cache",
+            "count": len(records),
+            "records": records,
+        }
+    except Exception as exc:
+        return _live_market_error_payload("snapshot", exc, symbols=symbols)
 
 
 @router.get("/live/status")
 async def get_live_market_status():
     service = get_live_market_service()
-    return {
-        "source": "live_market_cache",
-        **service.status(),
-    }
+
+    try:
+        return {
+            "source": "live_market_cache",
+            **service.status(),
+        }
+    except Exception as exc:
+        return _live_market_error_payload("status", exc)
 
 
 @router.post("/live/start")
 async def start_live_market(symbols: str | None = Query(default=None)):
-    started = start_live_market_listener(symbols)
     service = get_live_market_service()
 
-    return {
-        "source": "live_market_cache",
-        "started": started,
-        **service.status(),
-    }
+    try:
+        started = start_live_market_listener(symbols)
+        return {
+            "source": "live_market_cache",
+            "started": started,
+            **service.status(),
+        }
+    except Exception as exc:
+        return _live_market_error_payload("start", exc, symbols=symbols)
 
 
 @router.websocket("/ws/live-market")
@@ -77,6 +88,8 @@ async def live_market_websocket(websocket: WebSocket, symbols: str | None = None
 
     except WebSocketDisconnect:
         pass
+    except Exception:
+        await websocket.close(code=1011)
     finally:
         service.unsubscribe(queue)
 
@@ -86,3 +99,18 @@ def _parse_symbols(symbols):
         return None
 
     return {item.strip().upper() for item in symbols.split(",") if item.strip()}
+
+
+def _live_market_error_payload(operation, exc, symbols=None):
+    payload = {
+        "source": "live_market_cache",
+        "available": False,
+        "operation": operation,
+        "status": "FAILED",
+        "error": summarize_network_error(exc),
+    }
+
+    if symbols is not None:
+        payload["symbols"] = symbols
+
+    return payload

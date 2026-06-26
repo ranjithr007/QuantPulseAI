@@ -1,4 +1,5 @@
 from app.database.models.whale_trades import WhaleTrade
+from app.repositories._db_utils import commit_or_rollback
 
 
 class WhaleRepository:
@@ -7,4 +8,4 @@ class WhaleRepository:
 
         db.add(WhaleTrade(**trade))
 
-        db.commit()
+        commit_or_rollback(db)

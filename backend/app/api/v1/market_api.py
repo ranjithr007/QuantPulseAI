@@ -28,6 +28,10 @@ def get_market_candles(
             stale_after_seconds,
         )
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
         db.close()
 

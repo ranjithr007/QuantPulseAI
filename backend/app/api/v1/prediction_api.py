@@ -22,6 +22,10 @@ def predict(symbol: str):
 
         return PredictionEngine(db).predict(symbol)
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
 
         db.close()

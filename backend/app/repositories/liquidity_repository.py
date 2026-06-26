@@ -1,4 +1,5 @@
 from app.database.models.liquidity_signals import LiquiditySignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class LiquidityRepository:
@@ -25,4 +26,4 @@ class LiquidityRepository:
             )
         )
 
-        db.commit()
+        commit_or_rollback(db)

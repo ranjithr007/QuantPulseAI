@@ -76,6 +76,28 @@ class Phase0MasterSignalTests(unittest.TestCase):
             -20,
         )
 
+    def test_master_signal_includes_governed_scoring_profile(self):
+        result = generate_master_signal(
+            feature=Obj(Trend="BULLISH"),
+            regime=Obj(Regime="TRENDING_BULL"),
+            orderflow=Obj(FlowSignal="BUYERS_CONTROL"),
+            smc=Obj(smc_bias="LONG"),
+        )
+
+        profile = result["scoring_profile"]
+        self.assertEqual(profile["source"], "governed_master_ai_scoring")
+        self.assertEqual(profile["score"], 100)
+        self.assertEqual(profile["signal"], "LONG")
+        self.assertEqual(profile["bias"], "LONG")
+        self.assertEqual(profile["score_range"]["min"], -100)
+        self.assertEqual(profile["score_range"]["max"], 100)
+        self.assertEqual(len(profile["components"]), 4)
+        self.assertAlmostEqual(
+            sum(item["normalized_weight"] for item in profile["components"]),
+            1.0,
+            places=4,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

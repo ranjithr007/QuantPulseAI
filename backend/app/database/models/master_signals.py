@@ -14,6 +14,8 @@ class MasterSignal(Base):
 
     symbol = Column(String(30), index=True)
 
+    timeframe = Column(String(10), index=True, nullable=True)
+
     signal = Column(String(20))
 
     confidence = Column(Float)

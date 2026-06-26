@@ -10,10 +10,7 @@ from app.backtesting.backtest_engine import _time_label
 from app.backtesting.backtest_engine import _time_value
 from app.backtesting.backtest_engine import chronological_candles
 from app.backtesting.performance_engine import calculate_performance
-from app.features.liquidity_features import calculate_liquidity
-from app.features.momentum_features import calculate_momentum
-from app.features.trend_features import calculate_trend
-from app.features.volatility_features import calculate_volatility
+from app.features.point_in_time_feature_service import build_feature_snapshot
 from app.regimes.rules import detect_regime
 
 
@@ -269,16 +266,15 @@ def run_filtered_replay(
 
 
 def build_candle_decision(candles, requested_side, min_confidence):
-    trend_score, trend = calculate_trend(candles)
-    momentum_score = calculate_momentum(candles)
-    volatility_score, atr = calculate_volatility(candles)
-    liquidity_score = calculate_liquidity(candles)
-    final_score = (
-        trend_score * 0.35
-        + momentum_score * 0.35
-        + volatility_score * 0.15
-        + liquidity_score * 0.15
-    )
+    feature_contract = build_feature_snapshot("REPLAY", "REPLAY", candles)
+    features = feature_contract["feature"]
+    trend_score = features["trend_score"]
+    trend = features["trend"]
+    momentum_score = features["momentum_score"]
+    volatility_score = features["volatility_score"]
+    liquidity_score = features["liquidity_score"]
+    final_score = features["final_score"]
+    atr = features["atr"]
     feature_snapshot = SimpleNamespace(
         TrendScore=trend_score,
         MomentumScore=momentum_score,

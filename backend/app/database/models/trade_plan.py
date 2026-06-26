@@ -38,6 +38,8 @@ class TradePlan(Base):
 
     regime = Column(String(50), nullable=True)
 
+    thesis_id = Column(Integer, nullable=True, index=True)
+
     status = Column(String(20), default="OPEN")
 
     exit_price = Column(Float, nullable=True)

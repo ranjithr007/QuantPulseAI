@@ -1,5 +1,6 @@
 from app.database.models.ml_training_data import MLTrainingData
 from app.database.models.market_data import MarketData
+from app.repositories._db_utils import commit_or_rollback
 
 
 class LabelGenerator:
@@ -52,6 +53,6 @@ class LabelGenerator:
 
             updated += 1
 
-        self.db.commit()
+        commit_or_rollback(self.db)
 
         return {"labels_created": updated}

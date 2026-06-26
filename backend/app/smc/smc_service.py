@@ -25,6 +25,10 @@ def run_smc_analysis(symbol, timeframe):
 
         return result
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
 
         db.close()

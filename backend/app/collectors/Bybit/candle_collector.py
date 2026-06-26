@@ -3,6 +3,9 @@ import time
 
 from datetime import datetime
 
+from app.utils.network_resilience import classify_network_error
+from app.utils.network_resilience import is_transient_network_error
+
 
 class CandleCollector:
 
@@ -14,27 +17,54 @@ class CandleCollector:
 
         params = {"symbol": symbol, "interval": interval, "limit": limit}
 
+        last_error = None
+
         for attempt in range(3):
-             
+
             try:
 
                 response = requests.get(url, params=params, timeout=20)
 
                 response.raise_for_status()
 
-                data = response.json()
+                payload = response.json()
+                if isinstance(payload, list):
+                    rows = payload
+                elif isinstance(payload, dict):
+                    rows = (
+                        payload.get("result", {}).get("list")
+                        or payload.get("result", {}).get("data")
+                        or payload.get("data")
+                        or []
+                    )
+                else:
+                    rows = []
 
                 candles = []
 
-                for x in data:
+                for x in rows:
 
-                    # print(data)
+                    if isinstance(x, dict):
+                        x = [
+                            x.get("open_time") or x.get("openTime") or x.get("startTime"),
+                            x.get("open"),
+                            x.get("high"),
+                            x.get("low"),
+                            x.get("close"),
+                            x.get("volume"),
+                        ]
+
+                    if len(x) < 6:
+                        continue
+
+                    open_time_ms = int(x[0])
+
                     candles.append(
                         {
                             "symbol": symbol,
                             "timeframe": interval,
-                            "open_time_ms": x[0],
-                            "open_time": datetime.fromtimestamp(x[0] / 1000),
+                            "open_time_ms": open_time_ms,
+                            "open_time": datetime.fromtimestamp(open_time_ms / 1000),
                             "open": float(x[1]),
                             "high": float(x[2]),
                             "low": float(x[3]),
@@ -43,12 +73,19 @@ class CandleCollector:
                         }
                     )
 
+                candles.sort(key=lambda item: item["open_time_ms"])
                 return candles
 
             except Exception as ex:
+                last_error = ex
+                time.sleep(_retry_delay_seconds(attempt + 1))
 
-                print(f"Candle error {symbol}: {ex}")
-
-                # time.sleep(3)
+        if last_error is not None:
+            if not is_transient_network_error(last_error):
+                print(f"Candle error {symbol}: {classify_network_error(last_error)}")
 
         return []
+
+
+def _retry_delay_seconds(attempt_number):
+    return min(30, 3 * (2 ** min(max(attempt_number - 1, 0), 4)))

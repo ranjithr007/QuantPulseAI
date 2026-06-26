@@ -1,4 +1,5 @@
 from app.database.models.whale_signals import WhaleSignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class WhaleSignalRepository:
@@ -7,4 +8,4 @@ class WhaleSignalRepository:
 
         db.add(WhaleSignal(**data))
 
-        db.commit()
+        commit_or_rollback(db)

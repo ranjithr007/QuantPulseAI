@@ -30,6 +30,10 @@ def get_ai_scores(
             stale_after_seconds,
         )
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
         db.close()
 

@@ -16,17 +16,19 @@ class TradeMemoryEngine:
         updated = []
 
         for trade in trades:
+            try:
+                price = price_provider(trade.symbol)
+                if price is None:
+                    continue
 
-            price = price_provider(trade.symbol)
-            if price is None:
+                result = self.tracker.evaluate(trade, price)
+
+                if result != "OPEN":
+
+                    closed = self.repo.close_trade(db, trade, price, result)
+
+                    updated.append(closed)
+            except Exception:
                 continue
-
-            result = self.tracker.evaluate(trade, price)
-
-            if result != "OPEN":
-
-                closed = self.repo.close_trade(db, trade, price, result)
-
-                updated.append(closed)
 
         return updated

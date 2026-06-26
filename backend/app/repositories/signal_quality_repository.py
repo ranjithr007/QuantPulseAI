@@ -1,4 +1,5 @@
 from app.database.models.signal_quality import SignalQuality
+from app.repositories._db_utils import commit_or_rollback
 
 
 class SignalQualityRepository:
@@ -7,4 +8,4 @@ class SignalQualityRepository:
 
         db.add(SignalQuality(**data))
 
-        db.commit()
+        commit_or_rollback(db)

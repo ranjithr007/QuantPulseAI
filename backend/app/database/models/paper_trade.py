@@ -25,6 +25,7 @@ class PaperTrade(Base):
     entry_timeframe = Column(String(10), nullable=True)
     timeframe_stack = Column(String(40), nullable=True)
     regime = Column(String(50), nullable=True)
+    thesis_id = Column(Integer, nullable=True, index=True)
     fee_bps = Column(Float, default=4.0)
     fees_percent = Column(Float, nullable=True)
     gross_pnl_percent = Column(Float, nullable=True)

@@ -5,6 +5,8 @@ from app.database.models.symbols import Symbol
 from app.database.sqlserver import SessionLocal
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.symbol_repository import SymbolRepository
+from app.repositories._db_utils import commit_or_rollback
+from app.utils.network_resilience import summarize_network_error
 from app.utils.freshness import freshness_status
 
 
@@ -19,6 +21,27 @@ DEFAULT_SYMBOLS = [
 
 
 router = APIRouter(prefix="/symbols", tags=["Symbols"])
+
+
+def _symbols_error_payload(exc):
+    return {
+        "timeframe": None,
+        "count": 0,
+        "active_count": 0,
+        "records": [],
+        "status": "FAILED",
+        "error": summarize_network_error(exc),
+    }
+
+
+def _seed_error_payload(exc):
+    return {
+        "created": [],
+        "activated": [],
+        "default_symbols": [symbol for symbol, _base, _quote in DEFAULT_SYMBOLS],
+        "status": "FAILED",
+        "error": summarize_network_error(exc),
+    }
 
 
 @router.get("")
@@ -40,6 +63,13 @@ def list_symbols(
             "count": len(records),
             "active_count": len([item for item in records if item["is_active"]]),
             "records": records,
+        }
+
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_symbols_error_payload(exc),
+            "timeframe": timeframe,
         }
 
     finally:
@@ -71,13 +101,17 @@ def seed_default_symbols():
                 record.is_active = True
                 activated.append(symbol)
 
-        db.commit()
+        commit_or_rollback(db)
 
         return {
             "created": created,
             "activated": activated,
             "default_symbols": [symbol for symbol, _base, _quote in DEFAULT_SYMBOLS],
         }
+
+    except Exception as exc:
+        db.rollback()
+        return _seed_error_payload(exc)
 
     finally:
         db.close()

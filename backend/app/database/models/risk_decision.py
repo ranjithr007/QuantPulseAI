@@ -33,4 +33,6 @@ class RiskDecision(Base):
 
     confidence = Column(Float)
 
+    thesis_id = Column(Integer, nullable=True, index=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)

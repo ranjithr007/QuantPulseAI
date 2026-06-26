@@ -1,4 +1,5 @@
 from app.database.models.fusion_signal import FusionSignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class FusionSignalRepository:
@@ -20,7 +21,7 @@ class FusionSignalRepository:
 
         db.add(record)
 
-        db.commit()
+        commit_or_rollback(db)
 
         db.refresh(record)
 

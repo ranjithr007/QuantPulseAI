@@ -7,7 +7,6 @@ import {
   loadLiveMarketStatus,
   startLiveMarketListener,
 } from "./dashboardApi";
-import { buildDemoDashboardData } from "./dashboardDemoData";
 import {
   buildEquityCurve,
   buildGroupPnL,
@@ -40,6 +39,7 @@ function createInitialDashboardData() {
       risk: null,
       autoDecision: null,
       aiScores: null,
+      derivatives: null,
       multiTimeframe: null,
       tradeSetup: null,
       entryTrigger: null,
@@ -67,6 +67,7 @@ function createSelectedBundleData(view, bundle) {
       risk: bundle?.risk || null,
       autoDecision: bundle?.autoDecision || null,
       aiScores: bundle?.aiScores || null,
+      derivatives: bundle?.derivatives || null,
       multiTimeframe: bundle?.multiTimeframe || null,
       tradeSetup: bundle?.tradeSetup || null,
       entryTrigger: bundle?.entryTrigger || null,
@@ -81,7 +82,13 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
   return {
     ...current,
     signalsBySymbol: Object.fromEntries(
-      symbols.map((symbol) => [symbol, signalBatch[symbol] || current.signalsBySymbol[symbol] || null])
+      symbols.map((symbol) => {
+        if (signalBatch && Object.prototype.hasOwnProperty.call(signalBatch, symbol)) {
+          return [symbol, signalBatch[symbol]];
+        }
+
+        return [symbol, current.signalsBySymbol[symbol] || null];
+      })
     ),
     watchlist: overviewByKey.watchlist || current.watchlist,
     pipeline: overviewByKey.pipeline || current.pipeline,
@@ -90,7 +97,12 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
     closedTrades: paperTradeBundle.closedTrades?.records || current.closedTrades,
     selected: {
       ...current.selected,
-      signal: signalBatch[view.symbol] || current.selected.signal,
+      signal:
+        signalBatch && Object.prototype.hasOwnProperty.call(signalBatch, view.symbol)
+          ? signalBatch[view.symbol]
+          : matchesSelectedSignal(current.selected.signal, view)
+            ? current.selected.signal
+            : null,
       risk: current.selected.risk || overviewByKey.riskBundle?.risk || null,
       autoDecision: current.selected.autoDecision || overviewByKey.riskBundle?.autoDecision || null,
     },
@@ -188,11 +200,8 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       };
 
       socket.onerror = () => {
-        try {
-          socket?.close();
-        } catch {
-          // No-op.
-        }
+        // Let the browser surface the transport error and use onclose/reconnect.
+        // Closing here can produce noisy "no close frame" errors on transient drops.
       };
 
       socket.onclose = () => {
@@ -344,20 +353,23 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
 
       try {
         if (pageNeedsSelectedBundle(activePage)) {
-          const selectedBundle = await loadIntelligenceBundle({ view, signal: controller.signal });
+          try {
+            const selectedBundle = await loadIntelligenceBundle({ view, signal: controller.signal });
 
-          if (cancelled) {
-            return;
+            if (cancelled) {
+              return;
+            }
+
+            if (selectedBundle?.signal) {
+              setData(createSelectedBundleData(view, selectedBundle));
+            }
+          } catch {
+            if (!cancelled) {
+              setError("Selected signal bundle unavailable; keeping live batch data.");
+            }
           }
-
-          if (!selectedBundle?.signal) {
-            setData(buildDemoDashboardData(view, symbols));
-            setError("Live backend unavailable; showing demo market data.");
-            return;
-          }
-
-          setData(createSelectedBundleData(view, selectedBundle));
         }
+
         const dashboardBatches = await loadDashboardBatches({ activePage, view, filters, auto, symbols, signal: controller.signal });
 
         if (cancelled) {
@@ -418,8 +430,11 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       ),
     [symbols, data.signalsBySymbol, liveMarket]
   );
+  const selectedSourceSignal = matchesSelectedSignal(data.selected.signal, view)
+    ? data.selected.signal
+    : signalsBySymbol[view.symbol] || null;
   const selectedSignal = withLiveMarketPrice(
-    data.selected.signal || signalsBySymbol[view.symbol] || null,
+    selectedSourceSignal,
     liveMarket[view.symbol]
   );
   const selectedDiagnostics = data.selected.diagnostics || null;
@@ -428,6 +443,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const selectedSmc = data.selected.smc?.records || [];
   const selectedRisk = data.selected.risk || null;
   const selectedAI = data.selected.aiScores || null;
+  const selectedDerivatives = data.selected.derivatives || null;
   const selectedPipeline = data.pipeline || null;
   const watchlist = data.watchlist;
   const performance = data.performance || {};
@@ -449,6 +465,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       smc: selectedSmc,
       risk: selectedRisk,
       aiScores: selectedAI,
+      derivatives: selectedDerivatives,
       multiTimeframe: data.selected.multiTimeframe,
       tradeSetup: data.selected.tradeSetup,
       entryTrigger: data.selected.entryTrigger,
@@ -463,6 +480,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     selectedSmc,
     selectedRisk,
     selectedAI,
+    selectedDerivatives,
     data.selected.multiTimeframe,
     data.selected.tradeSetup,
     data.selected.entryTrigger,
@@ -589,4 +607,13 @@ function pageNeedsSelectedBundle(activePage) {
     "auto-trading",
     "backtest",
   ]).has(activePage);
+}
+
+function matchesSelectedSignal(signal, view) {
+  if (!signal) return false;
+
+  return (
+    String(signal.symbol || "").toUpperCase() === String(view.symbol || "").toUpperCase() &&
+    String(signal.timeframe || "").toLowerCase() === String(view.timeframe || "").toLowerCase()
+  );
 }

@@ -29,60 +29,67 @@ export default function AdvancedTradingViewPanel({
     let settled = false;
     let pollId = null;
     let timeoutId = null;
+    let initId = null;
     setStatus("loading");
     container.replaceChildren();
 
-    const widgetHost = document.createElement("div");
-    widgetHost.className = "tradingview-widget-container__widget h-full w-full";
+    initId = window.setTimeout(() => {
+      if (!mounted || settled || !container.isConnected) return;
 
-    const script = document.createElement("script");
-    script.type = "text/javascript";
-    script.src = WIDGET_URL;
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      autosize: true,
-      symbol: tradingViewSymbol,
-      interval,
-      timezone: "Asia/Kolkata",
-      theme: "dark",
-      style: "1",
-      locale: "en",
-      backgroundColor: "rgba(2, 6, 23, 1)",
-      gridColor: "rgba(30, 41, 59, 0.55)",
-      hide_top_toolbar: false,
-      hide_legend: false,
-      hide_side_toolbar: false,
-      allow_symbol_change: false,
-      save_image: false,
-      calendar: false,
-      withdateranges: true,
-      support_host: "https://www.tradingview.com",
-    });
-    script.onerror = () => {
-      if (mounted && !settled) setStatus("error");
-    };
-    script.onload = () => {
-      pollId = window.setInterval(() => {
-        if (!mounted || settled) return;
-        if (container.querySelector("iframe")) {
-          settled = true;
+      const widgetHost = document.createElement("div");
+      widgetHost.className = "tradingview-widget-container__widget h-full w-full";
+
+      const script = document.createElement("script");
+      script.type = "text/javascript";
+      script.src = WIDGET_URL;
+      script.async = true;
+      script.innerHTML = JSON.stringify({
+        autosize: true,
+        symbol: tradingViewSymbol,
+        interval,
+        timezone: "Asia/Kolkata",
+        theme: "dark",
+        style: "1",
+        locale: "en",
+        backgroundColor: "rgba(2, 6, 23, 1)",
+        gridColor: "rgba(30, 41, 59, 0.55)",
+        hide_top_toolbar: false,
+        hide_legend: false,
+        hide_side_toolbar: false,
+        allow_symbol_change: false,
+        save_image: false,
+        calendar: false,
+        withdateranges: true,
+        support_host: "https://www.tradingview.com",
+      });
+      script.onerror = () => {
+        if (mounted && !settled) setStatus("error");
+      };
+      script.onload = () => {
+        pollId = window.setInterval(() => {
+          if (!mounted || settled) return;
+          if (container.querySelector("iframe")) {
+            settled = true;
+            window.clearInterval(pollId);
+            window.clearTimeout(timeoutId);
+            setStatus("ready");
+          }
+        }, 120);
+
+        timeoutId = window.setTimeout(() => {
+          if (!mounted || settled) return;
           window.clearInterval(pollId);
-          window.clearTimeout(timeoutId);
-          setStatus("ready");
-        }
-      }, 120);
+          setStatus("error");
+        }, 12000);
+      };
 
-      timeoutId = window.setTimeout(() => {
-        if (!mounted || settled) return;
-        window.clearInterval(pollId);
-        setStatus("error");
-      }, 12000);
-    };
-    container.append(widgetHost, script);
+      container.append(widgetHost, script);
+    }, 0);
 
     return () => {
       mounted = false;
       settled = true;
+      if (initId) window.clearTimeout(initId);
       if (pollId) window.clearInterval(pollId);
       if (timeoutId) window.clearTimeout(timeoutId);
       container.replaceChildren();

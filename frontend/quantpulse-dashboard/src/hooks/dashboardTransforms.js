@@ -4,11 +4,18 @@ export function buildSignalRow(symbol, signal, watchlist) {
   const tradePlan = side === "WAIT" ? {} : signal?.trade_plan || {};
   const watchRow = (watchlist?.records || []).find((item) => item.symbol === symbol);
   const invalidation = signalInvalidationReason(signal);
+  const directional = directionalSplit(signal, displayDirection(signal, side));
 
   return {
     symbol,
     type: side,
     confidence: effectiveConfidence(signal),
+    signalBias: signal?.bias || signal?.signal || "WAIT",
+    signalScore: safeNumber(signal?.score, 0),
+    longPct: directional.longPct,
+    shortPct: directional.shortPct,
+    longSidePct: directional.longPct,
+    shortSidePct: directional.shortPct,
     entry: actionable ? tradePlan.entry ?? watchRow?.entry ?? null : null,
     stopLoss: actionable ? tradePlan.stop_loss ?? watchRow?.stop_loss ?? null : null,
     targets: actionable ? [tradePlan.target1, tradePlan.target2].filter((value) => value !== null && value !== undefined) : [],
@@ -31,6 +38,7 @@ export function buildSelectedDetail({
   smc,
   risk,
   aiScores,
+  derivatives,
   multiTimeframe,
   tradeSetup,
   entryTrigger,
@@ -38,6 +46,7 @@ export function buildSelectedDetail({
   const currentPrice = safeNumber(signal?.current_price, candles?.[0]?.close_price || candles?.[0]?.close || 0);
   const signalBias = signalType(signal);
   const rawTradePlan = signal?.trade_plan || {};
+  const directional = directionalSplit(signal, displayDirection(signal, signalBias));
   const tradePlan =
     signalBias === "WAIT"
       ? {
@@ -67,20 +76,20 @@ export function buildSelectedDetail({
     s2: Math.min(recentLow - atr * 0.4, currentPrice - atr * 1.5),
     s3: Math.min(recentLow - atr * 1.2, currentPrice - atr * 2.5),
   };
-  const probability = diagnostics?.probability?.probabilities || {};
-  const longSidePct = safeNumber(probability.LONG, 50);
-  const shortSidePct = safeNumber(probability.SHORT, 50);
   const freshness = diagnostics?.freshness?.candle || signal?.freshness || {};
   const whaleBuyCount = safeNumber(getValue(selectedOrderflow, "whale_buy_count", "whaleBuyCount", "BuyerStrength"), 0);
   const whaleSellCount = safeNumber(getValue(selectedOrderflow, "whale_sell_count", "whaleSellCount", "SellerStrength"), 0);
-  const whaleBuyVolume = safeNumber(getValue(selectedOrderflow, "whale_buy_volume", "whaleBuyVolume"), 0);
-  const whaleSellVolume = safeNumber(getValue(selectedOrderflow, "whale_sell_volume", "whaleSellVolume"), 0);
+  const whaleBuyVolume = safeNumber(getValue(selectedOrderflow, "whale_buy_volume", "whaleBuyVolume", "BuyVolume", "buy_volume"), 0);
+  const whaleSellVolume = safeNumber(getValue(selectedOrderflow, "whale_sell_volume", "whaleSellVolume", "SellVolume", "sell_volume"), 0);
   const whaleMaxVolume = Math.max(whaleBuyVolume, whaleSellVolume, 1);
   const orderflowTone = orderflowToneFromRecord(selectedOrderflow);
+  const orderflowBadge = formatValue(
+    getValue(selectedOrderflow, "aggressive_side", "aggressiveSide", "FlowSignal", "flow_signal")
+  );
   const whaleTone = whaleBuyCount >= whaleSellCount ? "emerald" : "rose";
   const orderflowLines = selectedOrderflow
     ? [
-        { label: "Aggressive side", value: formatValue(getValue(selectedOrderflow, "aggressive_side", "aggressiveSide")) },
+        { label: "Aggressive side", value: orderflowBadge },
         { label: "Delta", value: formatNumber(getValue(selectedOrderflow, "delta", "Delta", "cumulative_delta", "CVD"), 2) },
         { label: "Absorption", value: formatValue(getValue(selectedOrderflow, "absorption_type", "Absorption")) },
         { label: "Exhaustion", value: formatValue(getValue(selectedOrderflow, "exhaustion_type", "Exhaustion")) },
@@ -98,7 +107,7 @@ export function buildSelectedDetail({
     timeframe,
     currentPrice,
     liveMarket: signal?.live_market || null,
-    confidence: effectiveConfidence(signal),
+    confidence: effectiveConfidence(signal, diagnostics?.confidence),
     signalType: signalBias,
     signalBias: signal?.bias || "WAIT",
     invalidationReason: invalidation,
@@ -110,9 +119,10 @@ export function buildSelectedDetail({
     priceChangePct: priceChangePct(candles),
     resistanceLevels,
     supportLevels,
-    longSidePct,
-    shortSidePct,
+    longSidePct: directional.longPct,
+    shortSidePct: directional.shortPct,
     orderflowTone,
+    orderflowBadge,
     orderflowLines,
     whaleTone,
     whaleBuyCount,
@@ -126,6 +136,7 @@ export function buildSelectedDetail({
     entryTrigger,
     multiTimeframe,
     aiScores,
+    derivatives,
     risk,
     selectedOrderflow,
     selectedSmc,
@@ -174,7 +185,7 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
 }
 
 export function normalizeCandles(response) {
-  const records = response?.records || [];
+  const records = Array.isArray(response) ? response : response?.records || [];
   return [...records]
     .map((item, index) => {
       const rawTime = item.candle_time || item.time || item.created_at;
@@ -278,7 +289,7 @@ export function dateValue(value) {
 
 function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores) {
   const componentScores = diagnostics?.component_scores || {};
-  const signalConfidence = effectiveConfidence(signal);
+  const signalConfidence = effectiveConfidence(signal, diagnostics?.confidence);
   const aiScore = safeNumber(
     aiScores?.computed?.final_score ?? aiScores?.latest?.final_score ?? aiScores?.final_score,
     signalConfidence
@@ -364,6 +375,97 @@ function signalType(signal) {
   return "WAIT";
 }
 
+function directionalSplit(signal, fallbackSide = "WAIT") {
+  const { longProbability, shortProbability } = extractProbabilityPair(signal);
+
+  if ((longProbability !== null || shortProbability !== null) && (longProbability > 0 || shortProbability > 0)) {
+    const longBase = longProbability ?? 0;
+    const shortBase = shortProbability ?? 0;
+    const total = longBase + shortBase;
+
+    if (total > 0) {
+      return {
+        longPct: Number(((longBase / total) * 100).toFixed(2)),
+        shortPct: Number(((shortBase / total) * 100).toFixed(2)),
+      };
+    }
+  }
+
+  const confidence = effectiveConfidence(signal);
+  const direction = fallbackSide === "BUY" || fallbackSide === "SELL" ? fallbackSide : "WAIT";
+
+  if (direction === "BUY") {
+    const strength = Math.max(0, Math.min(100, confidence));
+    const longPct = Number((50 + strength / 2).toFixed(2));
+    return {
+      longPct,
+      shortPct: Number((100 - longPct).toFixed(2)),
+    };
+  }
+
+  if (direction === "SELL") {
+    const strength = Math.max(0, Math.min(100, confidence));
+    const longPct = Number((50 - strength / 2).toFixed(2));
+    return {
+      longPct,
+      shortPct: Number((100 - longPct).toFixed(2)),
+    };
+  }
+
+  return {
+    longPct: 50,
+    shortPct: 50,
+  };
+}
+
+function displayDirection(signal, fallbackSide = "WAIT") {
+  if (fallbackSide === "BUY" || fallbackSide === "SELL") {
+    return fallbackSide;
+  }
+
+  const bias = String(signal?.bias || "").toUpperCase();
+  if (bias.includes("LONG")) return "BUY";
+  if (bias.includes("SHORT")) return "SELL";
+
+  const probabilityDecision = String(signal?.probability?.decision || "").toUpperCase();
+  if (probabilityDecision === "LONG") return "BUY";
+  if (probabilityDecision === "SHORT") return "SELL";
+
+  return "WAIT";
+}
+
+function extractProbabilityPair(signal) {
+  const probability = signal?.probability || {};
+  const candidates = [
+    [probability.probabilities?.LONG, probability.probabilities?.SHORT],
+    [probability.probabilities?.long, probability.probabilities?.short],
+    [probability.probabilities?.long_probability, probability.probabilities?.short_probability],
+    [probability.LONG, probability.SHORT],
+    [probability.long, probability.short],
+    [probability.long_probability, probability.short_probability],
+    [signal?.long_probability, signal?.short_probability],
+    [signal?.probabilities?.LONG, signal?.probabilities?.SHORT],
+    [signal?.probabilities?.long, signal?.probabilities?.short],
+    [signal?.probabilities?.long_probability, signal?.probabilities?.short_probability],
+  ];
+
+  for (const [longValue, shortValue] of candidates) {
+    const longProbability = normalizedProbability(longValue);
+    const shortProbability = normalizedProbability(shortValue);
+    if (longProbability !== null || shortProbability !== null) {
+      return {
+        longProbability,
+        shortProbability,
+      };
+    }
+  }
+
+  return {
+    longProbability: null,
+    shortProbability: null,
+  };
+}
+
 function signalInvalidationReason(signal) {
   if (!signal) return "";
 
@@ -382,12 +484,22 @@ function signalInvalidationReason(signal) {
   return "";
 }
 
-function effectiveConfidence(signal) {
-  if (!signal) return 0;
-  if (signalInvalidationReason(signal)) {
-    return safeNumber(signal?.probability?.confidence, 0);
+function effectiveConfidence(signal, fallback = 0) {
+  if (!signal) return safeNumber(fallback, 0);
+  if (String(signal?.status || "").toUpperCase() === "FAILED") {
+    return safeNumber(fallback, 0);
   }
-  return safeNumber(signal?.confidence, 0);
+  if (signalInvalidationReason(signal)) {
+    return safeNumber(signal?.probability?.confidence, fallback);
+  }
+  return safeNumber(signal?.confidence, fallback);
+}
+
+function normalizedProbability(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return number <= 1 ? number * 100 : number;
 }
 
 function formatReason(reasons, fallback) {
@@ -400,7 +512,7 @@ function formatReason(reasons, fallback) {
 
 function orderflowToneFromRecord(record) {
   if (!record) return "slate";
-  const delta = safeNumber(getValue(record, "delta", "cumulative_delta"), 0);
+  const delta = safeNumber(getValue(record, "delta", "Delta", "cumulative_delta", "CVD"), 0);
   if (delta > 0) return "emerald";
   if (delta < 0) return "rose";
   return "amber";

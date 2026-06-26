@@ -14,6 +14,8 @@ class AISignal(Base):
 
     symbol = Column(String(20), index=True)
 
+    timeframe = Column(String(10), index=True, nullable=True)
+
     direction = Column(String(20))
 
     entry_price = Column(Float)

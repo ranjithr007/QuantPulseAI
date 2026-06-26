@@ -327,7 +327,7 @@ function MicrostructurePanel({ selectedDetail, funding }) {
                     <div className="text-sm font-semibold text-white">Orderflow, whale, funding</div>
                     <div className="text-xs text-slate-500">Microstructure context</div>
                 </div>
-                <Pill tone={selectedDetail.orderflowTone}>{selectedDetail.selectedOrderflow?.aggressive_side || "FLOW"}</Pill>
+                <Pill tone={selectedDetail.orderflowTone}>{selectedDetail.orderflowBadge || "FLOW"}</Pill>
             </div>
 
             <div className="mt-3.5 grid gap-3">
@@ -417,9 +417,18 @@ function rotationSignal(watchlist, marketSummary) {
 }
 
 function fundingSnapshot(selectedDetail, activeTradePlan) {
+    const fundingRate = Number(selectedDetail?.derivatives?.latest_funding_rate);
+    const openInterestChange = Number(selectedDetail?.derivatives?.latest_open_interest_change_pct);
     const rr = Number(activeTradePlan?.risk_reward ?? selectedDetail.tradePlan?.risk_reward ?? 0);
     const longPct = normalizeProbability(selectedDetail.longSidePct);
     const shortPct = normalizeProbability(selectedDetail.shortSidePct);
+
+    if (Number.isFinite(fundingRate) || Number.isFinite(openInterestChange)) {
+        if (fundingRate > 0 && openInterestChange > 0) return { label: "Longs paying, OI rising", tone: "rose" };
+        if (fundingRate < 0 && openInterestChange > 0) return { label: "Shorts paying, OI rising", tone: "emerald" };
+        if (fundingRate > 0) return { label: "Positive funding", tone: "amber" };
+        if (fundingRate < 0) return { label: "Negative funding", tone: "cyan" };
+    }
 
     if (longPct > shortPct + 15 && rr >= 1.5) return { label: "Long supportive", tone: "emerald" };
     if (shortPct > longPct + 15 && rr >= 1.5) return { label: "Short supportive", tone: "rose" };

@@ -6,6 +6,7 @@ from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.measurement import MeasurementGates
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
+from app.paper_trading.validation_policy import build_architecture_paper_gate
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
@@ -90,11 +91,11 @@ def get_paper_trade_performance(symbol: str | None = Query(default=None)):
 def get_paper_trade_measurement(
     symbol: str | None = Query(default=None),
     min_closed_trades: int = Query(default=100, ge=1, le=100000),
-    min_observation_days: int = Query(default=56, ge=1, le=3650),
-    min_profit_factor: float = Query(default=1.25, gt=0, le=100),
+    min_observation_days: int = Query(default=90, ge=1, le=3650),
+    min_profit_factor: float = Query(default=1.3, gt=0, le=100),
     min_expectancy_percent: float = Query(default=0.0, ge=-100, le=100),
     min_total_return_percent: float = Query(default=0.0, ge=-100, le=100000),
-    max_drawdown_percent: float = Query(default=15.0, gt=0, le=100),
+    max_drawdown_percent: float = Query(default=20.0, gt=0, le=100),
     min_cohort_closed_trades: int = Query(default=20, ge=1, le=100000),
 ):
     db = SessionLocal()
@@ -102,21 +103,23 @@ def get_paper_trade_measurement(
     try:
         normalized_symbol = symbol.upper() if symbol else None
         trades = PaperTradeRepository().all_trades(db, symbol=normalized_symbol)
+        report = build_measurement_report(
+            trades,
+            gates=MeasurementGates(
+                min_closed_trades=min_closed_trades,
+                min_observation_days=min_observation_days,
+                min_profit_factor=min_profit_factor,
+                min_expectancy_percent=min_expectancy_percent,
+                min_total_return_percent=min_total_return_percent,
+                max_drawdown_percent=max_drawdown_percent,
+                min_cohort_closed_trades=min_cohort_closed_trades,
+            ),
+        )
         return {
             "source": "extended_paper_trade_measurement",
             "symbol_filter": normalized_symbol,
-            "report": build_measurement_report(
-                trades,
-                gates=MeasurementGates(
-                    min_closed_trades=min_closed_trades,
-                    min_observation_days=min_observation_days,
-                    min_profit_factor=min_profit_factor,
-                    min_expectancy_percent=min_expectancy_percent,
-                    min_total_return_percent=min_total_return_percent,
-                    max_drawdown_percent=max_drawdown_percent,
-                    min_cohort_closed_trades=min_cohort_closed_trades,
-                ),
-            ),
+            "report": report,
+            "architecture_gate": build_architecture_paper_gate(report),
         }
     except SQLAlchemyError:
         return _paper_trade_unavailable_payload(
@@ -367,6 +370,7 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "id": paper_trade.id,
         "trade_plan_id": paper_trade.trade_plan_id,
         "risk_decision_id": paper_trade.risk_decision_id,
+        "thesis_id": getattr(paper_trade, "thesis_id", None),
         "symbol": paper_trade.symbol,
         "side": paper_trade.side,
         "entry_price": paper_trade.entry_price,
@@ -434,6 +438,7 @@ def _paper_trade_candidate(trade, risk, stale_after_seconds):
 def _trade_plan_payload(trade):
     return {
         "id": trade.id,
+        "thesis_id": getattr(trade, "thesis_id", None),
         "status": trade.status,
         "entry_price": trade.entry_price,
         "stop_loss": trade.stop_loss,

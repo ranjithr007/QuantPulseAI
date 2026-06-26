@@ -48,6 +48,10 @@ def get_features(
             "records": items,
         }
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
 
         db.close()
@@ -88,6 +92,10 @@ def get_feature_quality(
             "latest_feature": with_freshness(latest, "CreatedAt", stale_after_seconds),
             "profile": profile,
         }
+
+    except Exception:
+        db.rollback()
+        raise
 
     finally:
         db.close()

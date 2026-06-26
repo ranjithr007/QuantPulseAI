@@ -50,6 +50,7 @@
     <Folder Include="backend\app\ml\registry\" />
     <Folder Include="backend\app\ml\training\" />
     <Folder Include="backend\app\models\" />
+    <Folder Include="backend\app\debug\" />
     <Folder Include="backend\app\paper_trading\" />
     <Folder Include="backend\app\paper_trading\__pycache__\" />
     <Folder Include="backend\app\storage\" />
@@ -160,6 +161,7 @@
     <Compile Include="backend\app\database\models\__init__.py" />
     <Compile Include="backend\app\database\sqlserver.py" />
     <Compile Include="backend\app\database\__init__.py" />
+    <Compile Include="backend\app\debug\run_engines_one_by_one.py" />
     <Compile Include="backend\app\dependencies.py" />
     <Compile Include="backend\app\engines\atr_engine.py" />
     <Compile Include="backend\app\engines\backtest_engine.py" />

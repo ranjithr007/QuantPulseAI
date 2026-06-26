@@ -1,6 +1,9 @@
 from datetime import datetime
 
 from app.database.models.paper_trade import PaperTrade
+from app.repositories._db_utils import commit_or_rollback
+from app.repositories._db_utils import flush_or_rollback
+from app.repositories.trade_thesis_repository import TradeThesisRepository
 
 
 class PaperTradeRepository:
@@ -59,6 +62,7 @@ class PaperTradeRepository:
         paper_trade = PaperTrade(
             trade_plan_id=trade_plan["id"],
             risk_decision_id=risk["id"],
+            thesis_id=trade_plan.get("thesis_id"),
             symbol=candidate["symbol"],
             side=candidate["side"],
             entry_price=entry_price,
@@ -78,7 +82,17 @@ class PaperTradeRepository:
         )
 
         db.add(paper_trade)
-        db.commit()
+        flush_or_rollback(db)
+
+        if paper_trade.thesis_id:
+            TradeThesisRepository().attach_paper_trade(
+                db,
+                paper_trade.thesis_id,
+                paper_trade.id,
+                commit=False,
+            )
+
+        commit_or_rollback(db)
         db.refresh(paper_trade)
 
         return paper_trade
@@ -100,7 +114,16 @@ class PaperTradeRepository:
         trade.pnl_percent = round(gross_pnl - fees_percent, 4)
         trade.closed_at = datetime.utcnow()
 
-        db.commit()
+        if getattr(trade, "thesis_id", None):
+            TradeThesisRepository().set_lifecycle_state(
+                db,
+                trade.thesis_id,
+                "COMPLETED" if result == "WIN" else "INVALIDATED",
+                reason=f"Paper trade closed with result {result}",
+                commit=False,
+            )
+
+        commit_or_rollback(db)
         db.refresh(trade)
 
         return trade

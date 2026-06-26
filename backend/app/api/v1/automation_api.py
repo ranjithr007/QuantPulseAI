@@ -7,6 +7,7 @@ from app.repositories.automation_settings_repository import get_automation_setti
 from app.repositories.automation_settings_repository import list_automation_audit
 from app.repositories.automation_settings_repository import set_emergency_stop
 from app.repositories.automation_settings_repository import update_automation_settings
+from app.utils.network_resilience import summarize_network_error
 
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
@@ -30,6 +31,15 @@ class EmergencyStopUpdate(BaseModel):
     active: bool
 
 
+def _automation_error_payload(operation: str, exc: Exception):
+    return {
+        "source": "automation_settings",
+        "operation": operation,
+        "status": "FAILED",
+        "error": summarize_network_error(exc),
+    }
+
+
 @router.get("/settings")
 def read_automation_settings():
     db = SessionLocal()
@@ -38,6 +48,9 @@ def read_automation_settings():
             "source": "automation_settings",
             "settings": automation_settings_payload(get_automation_settings(db)),
         }
+    except Exception as exc:
+        db.rollback()
+        return _automation_error_payload("read_settings", exc)
     finally:
         db.close()
 
@@ -51,6 +64,13 @@ def write_automation_settings(
     try:
         settings, changed = update_automation_settings(db, payload.model_dump(), actor=actor)
         return {"source": "automation_settings", "changed": changed, "settings": settings}
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_automation_error_payload("write_settings", exc),
+            "changed": False,
+            "settings": None,
+        }
     finally:
         db.close()
 
@@ -64,6 +84,13 @@ def write_emergency_stop(
     try:
         settings, changed = set_emergency_stop(db, payload.active, actor=actor)
         return {"source": "automation_settings", "changed": changed, "settings": settings}
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_automation_error_payload("write_emergency_stop", exc),
+            "changed": False,
+            "settings": None,
+        }
     finally:
         db.close()
 
@@ -74,5 +101,15 @@ def read_automation_audit(limit: int = Query(default=50, ge=1, le=200)):
     try:
         records = list_automation_audit(db, limit=limit)
         return {"source": "automation_settings_audit", "count": len(records), "records": records}
+    except Exception as exc:
+        db.rollback()
+        return {
+            "source": "automation_settings_audit",
+            "operation": "read_audit",
+            "count": 0,
+            "records": [],
+            "status": "FAILED",
+            "error": summarize_network_error(exc),
+        }
     finally:
         db.close()

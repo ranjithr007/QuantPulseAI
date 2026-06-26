@@ -1,4 +1,5 @@
 from app.database.models.ai_signals import AISignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class AISignalRepository:
@@ -7,13 +8,13 @@ class AISignalRepository:
 
         db.add(AISignal(**data))
 
-        db.commit()
+        commit_or_rollback(db)
 
-    def latest(self, db, symbol):
+    def latest(self, db, symbol, timeframe=None):
 
-        return (
-            db.query(AISignal)
-            .filter(AISignal.symbol == symbol)
-            .order_by(AISignal.created_at.desc())
-            .first()
-        )
+        query = db.query(AISignal).filter(AISignal.symbol == symbol)
+
+        if timeframe:
+            query = query.filter(AISignal.timeframe == timeframe)
+
+        return query.order_by(AISignal.created_at.desc()).first()

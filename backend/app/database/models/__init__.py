@@ -26,6 +26,10 @@ from .backtest_results import BacktestResult
 from .market_features import MarketFeature
 
 from .market_regimes import MarketRegime
+from .point_in_time_snapshots import FeatureSnapshot, DecisionSnapshot
+from .thesis_snapshots import ThesisSnapshot
+from .data_quality_events import DataQualityEvent
+from .trade_thesis import TradeThesis
 
 from .market_order_flow import MarketOrderFlow
 from .market_smc import MarketSMCSignal

@@ -1,4 +1,5 @@
 from app.database.models.market_features import MarketFeature
+from app.repositories._db_utils import commit_or_rollback
 
 
 def save_market_feature(db, feature):
@@ -18,18 +19,18 @@ def save_market_feature(db, feature):
 
     db.add(record)
 
-    db.commit()
+    commit_or_rollback(db)
 
     db.refresh(record)
 
     return record
 
 
-def get_latest_feature(db, symbol):
+def get_latest_feature(db, symbol, timeframe=None):
 
-    return (
-        db.query(MarketFeature)
-        .filter(MarketFeature.Symbol == symbol)
-        .order_by(MarketFeature.CreatedAt.desc())
-        .first()
-    )
+    query = db.query(MarketFeature).filter(MarketFeature.Symbol == symbol)
+
+    if timeframe:
+        query = query.filter(MarketFeature.Timeframe == timeframe)
+
+    return query.order_by(MarketFeature.CreatedAt.desc()).first()

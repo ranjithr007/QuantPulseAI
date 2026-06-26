@@ -31,6 +31,10 @@ def train_model(symbol: str):
 
         return {"symbol": symbol, "dataset": dataset, "result": result}
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
 
         db.close()

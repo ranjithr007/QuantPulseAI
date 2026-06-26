@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from traceback import format_exc
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +9,7 @@ from starlette.requests import Request
 from app.api.v1 import backtest_api
 from app.api.v1 import automation_api
 from app.api.v1 import dataset_api
+from app.api.v1 import derivatives_api
 from app.api.v1 import features_api
 from app.api.v1 import health_api
 from app.api.v1 import ai_scores_api
@@ -28,6 +30,7 @@ from app.api.v1 import scheduler_api
 from app.api.v1 import signals_api
 from app.api.v1 import smc_api
 from app.api.v1 import symbols_api
+from app.api.v1 import thesis_api
 from app.api.v1 import trade_plan_api
 from app.api.v2 import fusion_ai_api
 from app.api.v2 import master_ai_v2_api
@@ -36,6 +39,7 @@ from app.database.bootstrap import bootstrap_sqlite_demo_data
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.database.sqlserver import engine as db_engine
 from app.repositories.automation_settings_repository import ensure_automation_settings_schema
+from app.repositories.trade_thesis_repository import ensure_trade_thesis_lineage_schema
 
 
 @asynccontextmanager
@@ -48,6 +52,8 @@ async def lifespan(app: FastAPI):
 
     if settings.environment == "development":
         ensure_automation_settings_schema(db_engine)
+
+    ensure_trade_thesis_lineage_schema(db_engine)
 
     if USING_SQLITE_FALLBACK:
         bootstrap_sqlite_demo_data(db_engine)
@@ -110,6 +116,7 @@ async def ensure_cors_headers(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception:
+        print(format_exc())
         response = JSONResponse({"detail": "Internal Server Error"}, status_code=500)
 
     if origin in ALLOWED_ORIGINS:
@@ -121,6 +128,7 @@ async def ensure_cors_headers(request: Request, call_next):
 
 app.include_router(health_api.router)
 app.include_router(automation_api.router)
+app.include_router(derivatives_api.router)
 app.include_router(market_api.router)
 app.include_router(features_api.router)
 app.include_router(regime_api.router)
@@ -142,6 +150,7 @@ app.include_router(risk_api.router)
 app.include_router(scheduler_api.router)
 app.include_router(signals_api.router)
 app.include_router(symbols_api.router)
+app.include_router(thesis_api.router)
 app.include_router(trade_plan_api.router)
 app.include_router(paper_trade_api.router)
 app.include_router(pipeline_api.router)

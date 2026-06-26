@@ -12,6 +12,8 @@ from app.api.v1.signals_api import _persist_ready_watchlist_payload
 from app.database.models.paper_trade import PaperTrade
 from app.paper_trading.measurement import MeasurementGates
 from app.paper_trading.measurement import build_measurement_report
+from app.paper_trading.validation_policy import PaperValidationPolicy
+from app.paper_trading.validation_policy import build_architecture_paper_gate
 
 
 AS_OF = datetime(2026, 6, 23, 12, 0, 0)
@@ -70,7 +72,10 @@ def test_profitable_history_passes_only_with_sufficient_evidence():
     assert report["overall"]["profit_factor"] == 2.5
     assert report["overall"]["expectancy_percent"] == 0.75
     assert report["overall"]["simulated_fees_percent"] == 0.32
-    assert report["policy"]["win_rate_gate"] == "NOT_USED"
+    assert report["policy"]["win_rate_gate"] == "EVALUATED"
+    assert report["policy"]["roadmap_targets"]["min_observation_days"] == 30
+    assert report["policy"]["roadmap_targets"]["min_profit_factor"] == 1.25
+    assert report["policy"]["roadmap_targets"]["min_reward_risk"] == 1.5
     assert report["cohorts"]["symbol"][0]["value"] == "BTCUSDT"
     assert report["cohorts"]["confidence_band"][0]["value"] == "80_PLUS"
 
@@ -134,6 +139,23 @@ def test_measurement_gates_reject_invalid_configuration():
         MeasurementGates(max_drawdown_percent=0)
 
 
+def test_measurement_gates_defaults_are_roadmap_aligned():
+    gates = MeasurementGates()
+
+    assert gates.min_observation_days == 90
+    assert gates.min_profit_factor == 1.3
+    assert gates.min_reward_risk == 1.5
+    assert gates.min_win_rate_percent == 45.0
+    assert gates.max_drawdown_percent == 20.0
+
+
+def test_architecture_policy_rejects_invalid_configuration():
+    with pytest.raises(ValueError):
+        PaperValidationPolicy(min_observation_days=0)
+    with pytest.raises(ValueError):
+        PaperValidationPolicy(min_reward_risk=0)
+
+
 def test_measurement_api_exposes_configurable_gate_report():
     engine = create_engine(
         "sqlite://",
@@ -176,7 +198,42 @@ def test_measurement_api_exposes_configurable_gate_report():
     assert response["symbol_filter"] == "BTCUSDT"
     assert response["report"]["overall"]["closed_trades"] == 1
     assert response["report"]["gates"]["min_closed_trades"] == 1
+    assert response["architecture_gate"]["policy"]["min_observation_days"] == 90
     engine.dispose()
+
+
+def test_architecture_paper_gate_passes_roadmap_thresholds():
+    trades = [trade(2, opened_days_ago=90) for _ in range(80)] + [trade(-1, opened_days_ago=90) for _ in range(20)]
+    report = build_measurement_report(
+        trades,
+        gates=gates(min_closed_trades=100, min_observation_days=90),
+        as_of=AS_OF,
+    )
+
+    gate = build_architecture_paper_gate(report)
+
+    assert gate["status"] == "PASS"
+    assert gate["policy"]["min_observation_days"] == 90
+    assert gate["policy"]["min_profit_factor"] == 1.3
+    assert gate["policy"]["min_reward_risk"] == 1.5
+    assert gate["policy"]["min_win_rate_percent"] == 45.0
+    assert gate["policy"]["max_drawdown_percent"] == 20.0
+    assert all(item["passed"] for item in gate["evaluation"]["checks"])
+
+
+def test_architecture_paper_gate_rejects_short_history_and_weak_edge():
+    trades = [trade(1, opened_days_ago=90) for _ in range(50)] + [trade(-1, opened_days_ago=90) for _ in range(50)]
+    report = build_measurement_report(
+        trades,
+        gates=gates(min_closed_trades=100, min_observation_days=90),
+        as_of=AS_OF,
+    )
+
+    gate = build_architecture_paper_gate(report)
+
+    assert gate["status"] == "FAIL"
+    assert any(not item["passed"] for item in gate["evaluation"]["checks"])
+    assert gate["evaluation"]["performance_passed"] is False
 
 
 def test_ready_trade_plan_snapshots_measurement_context():

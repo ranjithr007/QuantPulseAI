@@ -9,6 +9,7 @@ from app.database.sqlserver import SessionLocal
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
 from app.repositories.automation_settings_repository import get_automation_settings
+from app.utils.network_resilience import summarize_network_error
 from app.utils.freshness import freshness_status
 from app.utils.signal_validation import validate_trade_plan_direction
 
@@ -18,12 +19,27 @@ router = APIRouter(prefix="/risk", tags=["Risk"])
 repo = RiskRepository()
 
 
+def _risk_error_payload(operation, symbol, exc, stale_after_seconds=900):
+    return {
+        "symbol": symbol,
+        "source": operation,
+        "status": "FAILED",
+        "decision": "NO_RISK_DECISION",
+        "freshness": freshness_status(None, stale_after_seconds),
+        "message": "Risk data unavailable",
+        "error": summarize_network_error(exc),
+    }
+
+
 @router.get("/{symbol}")
 def get_risk(symbol: str, stale_after_seconds: int = Query(default=900, ge=1)):
     db = SessionLocal()
 
     try:
         return build_risk_payload(db, symbol, stale_after_seconds)
+    except Exception as exc:
+        db.rollback()
+        return _risk_error_payload("risk_decisions", symbol, exc, stale_after_seconds)
     finally:
         db.close()
 
@@ -51,6 +67,7 @@ def build_risk_payload(db, symbol, stale_after_seconds=900):
 
     return {
         "symbol": risk.symbol,
+        "thesis_id": getattr(risk, "thesis_id", None),
         "source": "risk_decisions",
         "status": _risk_status(freshness, validation),
         "signal": risk.signal,
@@ -63,6 +80,7 @@ def build_risk_payload(db, symbol, stale_after_seconds=900):
         "position_size": risk.position_size,
         "risk_percent": risk.risk_percent,
         "confidence": risk.confidence,
+        "thesis_id": getattr(risk, "thesis_id", None),
         "created_at": risk.created_at,
         "freshness": freshness,
         "is_valid_trade_plan": validation["is_valid"],
@@ -125,6 +143,29 @@ def get_risk_bundle(
             },
             "auto": auto,
             "autoDecision": auto_decision,
+        }
+
+    except Exception as exc:
+        db.rollback()
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "mode": mode,
+            "stale_after_seconds": stale_after_seconds,
+            "source": "risk_bundle",
+            "status": "FAILED",
+            "error": summarize_network_error(exc),
+            "risk": None,
+            "signal": None,
+            "multiTimeframe": None,
+            "paperTrades": {
+                "performance": None,
+                "openTrades": {},
+                "closedTrades": {},
+                "summary": None,
+            },
+            "auto": None,
+            "autoDecision": None,
         }
 
     finally:

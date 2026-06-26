@@ -13,4 +13,10 @@ router = APIRouter(prefix="/labels", tags=["ML Labels"])
 @router.post("/{symbol}")
 def create_labels(symbol: str):
     db = SessionLocal()
-    return LabelGenerator(db).generate(symbol)
+    try:
+        return LabelGenerator(db).generate(symbol)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()

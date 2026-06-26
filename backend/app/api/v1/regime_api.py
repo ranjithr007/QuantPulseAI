@@ -2,20 +2,39 @@ from fastapi import APIRouter, Query
 
 from app.database.models.market_regimes import MarketRegime
 from app.database.sqlserver import SessionLocal
+from app.regimes.regime_engine import build_regime_contract
 from app.regimes.regime_engine import parse_regime_audit
 from app.regimes.regime_engine import regime_catalog
+from app.utils.network_resilience import summarize_network_error
 from app.utils.freshness import with_freshness
 
 
 router = APIRouter(prefix="/regime", tags=["Regime"])
 
 
+def _regime_error_payload(operation, symbol=None, timeframe=None, exc=None):
+    base = {
+        "source": f"v3_regime_{operation}",
+        "status": "FAILED",
+        "error": summarize_network_error(exc) if exc is not None else "Unknown regime error",
+    }
+    if symbol is not None:
+        base["symbol"] = symbol
+    if timeframe is not None:
+        base["timeframe"] = timeframe
+    return base
+
+
 @router.get("/catalog")
 def get_regime_catalog():
-    return {
-        "source": "v3_regime_catalog",
-        **regime_catalog(),
-    }
+    try:
+        return {
+            "source": "v3_regime_catalog",
+            **regime_catalog(),
+            "regime_contract": build_regime_contract(),
+        }
+    except Exception as exc:
+        return _regime_error_payload("catalog", exc=exc)
 
 
 @router.get("/{symbol}/summary")
@@ -41,6 +60,18 @@ def get_regime_summary(
             "regime_counts": _count_values(items, "Regime"),
             "transition_counts": _count_transition_values(items),
             "recent_transitions": _recent_transitions(items),
+            "regime_contract": build_regime_contract(),
+        }
+
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_regime_error_payload("summary", symbol=symbol, timeframe=timeframe, exc=exc),
+            "count": 0,
+            "latest": None,
+            "regime_counts": {},
+            "transition_counts": {},
+            "recent_transitions": [],
         }
 
     finally:
@@ -69,6 +100,15 @@ def get_regime_diagnostics(
             "records": items,
         }
 
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_regime_error_payload("diagnostics", symbol=symbol, timeframe=timeframe, exc=exc),
+            "count": 0,
+            "latest": None,
+            "records": [],
+        }
+
     finally:
         db.close()
 
@@ -95,6 +135,15 @@ def get_regimes(
             "records": items,
         }
 
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_regime_error_payload("records", symbol=symbol, timeframe=timeframe, exc=exc),
+            "count": 0,
+            "latest": None,
+            "records": [],
+        }
+
     finally:
         db.close()
 
@@ -119,6 +168,15 @@ def get_regime_transitions(
             "count": len(items),
             "latest": items[0] if items else None,
             "transitions": _build_transition_history(items),
+        }
+
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_regime_error_payload("transitions", symbol=symbol, timeframe=timeframe, exc=exc),
+            "count": 0,
+            "latest": None,
+            "transitions": [],
         }
 
     finally:

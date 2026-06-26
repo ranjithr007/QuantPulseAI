@@ -1,5 +1,14 @@
 import clsx from "clsx";
 import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   Brain,
   Layers3,
   RadioTower,
@@ -19,6 +28,7 @@ import {
   formatSigned,
   formatTargets,
   safeNumber,
+  tooltipStyle,
 } from "../utils/formatters";
 import { getLiveMarketState } from "../utils/liveMarket";
 
@@ -309,7 +319,7 @@ function OrderflowPanel({ selectedDetail }) {
     <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-white">Orderflow</h3>
-        <Pill tone={selectedDetail.orderflowTone}>{selectedDetail.selectedOrderflow?.aggressive_side || "FLOW"}</Pill>
+        <Pill tone={selectedDetail.orderflowTone}>{selectedDetail.orderflowBadge || "FLOW"}</Pill>
       </div>
       <div className="space-y-2">
         {(selectedDetail.orderflowLines || []).map((item) => (
@@ -357,6 +367,9 @@ function LiquidationPanel({ selectedDetail, chartPrice }) {
 }
 
 function FundingOiPanel({ fundingOi }) {
+  const fundingHistory = fundingOi.fundingHistory || [];
+  const openInterestHistory = fundingOi.openInterestHistory || [];
+
   return (
     <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2">
       <div className="mb-2 flex items-center justify-between">
@@ -367,6 +380,74 @@ function FundingOiPanel({ fundingOi }) {
         <InfoLine label="Funding" value={fundingOi.funding} />
         <InfoLine label="Open interest" value={fundingOi.openInterest} />
         <InfoLine label="Interpretation" value={fundingOi.note} />
+      </div>
+      <div className="mt-3 grid gap-2 xl:grid-cols-2">
+        <DerivativeMiniChart
+          title="Funding rate"
+          data={fundingHistory}
+          dataKey="value"
+          color="#38bdf8"
+          valueFormatter={(value) => formatPercent(value, 4, "-")}
+        />
+        <DerivativeMiniChart
+          title="Open interest"
+          data={openInterestHistory}
+          dataKey="value"
+          color="#34d399"
+          valueFormatter={(value) => formatOpenInterest(value)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DerivativeMiniChart({ title, data, dataKey, color, valueFormatter }) {
+  if (!Array.isArray(data) || data.length < 2) {
+    return (
+      <div className="rounded-lg border border-white/10 bg-slate-950/65 p-2.5">
+        <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">{title}</div>
+        <div className="mt-2 text-xs text-slate-400">Not enough history yet</div>
+      </div>
+    );
+  }
+
+  const chartId = `gradient-${String(title).toLowerCase().replace(/\s+/g, "-")}`;
+
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-950/65 p-2.5">
+      <div className="mb-2 text-[11px] uppercase tracking-[0.16em] text-slate-500">{title}</div>
+      <div className="h-28 w-full min-w-0">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+          <AreaChart data={data}>
+            <defs>
+              <linearGradient id={chartId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={color} stopOpacity={0.35} />
+                <stop offset="95%" stopColor={color} stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
+            <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 10 }} />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: "#64748b", fontSize: 10 }}
+              tickFormatter={(value) => compactDerivativeTick(value)}
+              width={56}
+            />
+            <Tooltip
+              contentStyle={tooltipStyle()}
+              formatter={(value) => valueFormatter(value)}
+            />
+            <Area
+              type="monotone"
+              dataKey={dataKey}
+              stroke={color}
+              fillOpacity={1}
+              fill={`url(#${chartId})`}
+              strokeWidth={2}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );
@@ -420,28 +501,81 @@ function riskMessages(selectedRisk, selectedDetail) {
 
 function fundingOiSnapshot(selectedDetail) {
   const source = selectedDetail.selectedOrderflow || {};
-  const fundingRate = source.funding_rate ?? source.fundingRate ?? source.FundingRate;
-  const openInterest = source.open_interest ?? source.openInterest ?? source.OpenInterest;
+  const derivatives = selectedDetail.derivatives || {};
+  const latestFunding = derivatives?.funding?.latest || null;
+  const latestOpenInterest = derivatives?.openInterest?.latest || null;
+  const fundingRate =
+    latestFunding?.rate ??
+    source.funding_rate ??
+    source.fundingRate ??
+    source.FundingRate;
+  const openInterest =
+    latestOpenInterest?.value ??
+    source.open_interest ??
+    source.openInterest ??
+    source.OpenInterest;
+  const openInterestChangePct = derivatives?.latest_open_interest_change_pct;
   const longPct = normalizeProbability(selectedDetail.longSidePct);
   const shortPct = normalizeProbability(selectedDetail.shortSidePct);
 
+  const fundingHistory = (derivatives?.funding?.history || []).map((item) => ({
+    label: formatChartLabel(item.funding_time || item.created_at),
+    value: Number(item.rate ?? 0) * 100,
+  }));
+  const openInterestHistory = (derivatives?.openInterest?.history || []).map((item) => ({
+    label: formatChartLabel(item.timestamp || item.created_at),
+    value: Number(item.value ?? 0),
+  }));
+
   if (fundingRate !== undefined || openInterest !== undefined) {
+    const bias = fundingRate > 0 ? "LONG" : fundingRate < 0 ? "SHORT" : longPct >= shortPct ? "LONG" : "SHORT";
     return {
-      bias: longPct >= shortPct ? "LONG" : "SHORT",
+      bias,
       funding: formatFunding(fundingRate),
       openInterest: formatOpenInterest(openInterest),
-      note: "Derivative feed available",
-      tone: longPct >= shortPct ? "emerald" : "rose",
+      note:
+        openInterestChangePct === null || openInterestChangePct === undefined
+          ? "Derivative feed available"
+          : `Open interest change ${formatPercent(openInterestChangePct, 2, "-")}`,
+      tone: bias === "LONG" ? "emerald" : bias === "SHORT" ? "rose" : "slate",
+      fundingHistory,
+      openInterestHistory,
     };
   }
 
   if (longPct > shortPct + 15) {
-    return { bias: "LONG", funding: "Unavailable", openInterest: "Unavailable", note: "Probability favors long exposure", tone: "emerald" };
+    return { bias: "LONG", funding: "Unavailable", openInterest: "Unavailable", note: "Probability favors long exposure", tone: "emerald", fundingHistory, openInterestHistory };
   }
   if (shortPct > longPct + 15) {
-    return { bias: "SHORT", funding: "Unavailable", openInterest: "Unavailable", note: "Probability favors short exposure", tone: "rose" };
+    return { bias: "SHORT", funding: "Unavailable", openInterest: "Unavailable", note: "Probability favors short exposure", tone: "rose", fundingHistory, openInterestHistory };
   }
-    return { bias: `NEUTRAL funding Rate ${openInterest}`, funding: "Unavailable", openInterest: "Unavailable", note: "No derivative feed in current payload", tone: "slate" };
+
+  return {
+    bias: "NEUTRAL",
+    funding: "Unavailable",
+    openInterest: "Unavailable",
+    note: "No derivative feed in current payload",
+    tone: "slate",
+    fundingHistory,
+    openInterestHistory,
+  };
+}
+
+function compactDerivativeTick(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  const absolute = Math.abs(number);
+  if (absolute >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(1)}B`;
+  if (absolute >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`;
+  if (absolute >= 1_000) return `${(number / 1_000).toFixed(1)}K`;
+  return absolute >= 1 ? number.toFixed(2) : number.toFixed(4);
+}
+
+function formatChartLabel(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function normalizeProbability(value) {

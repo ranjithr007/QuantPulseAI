@@ -5,6 +5,10 @@ from datetime import timezone
 
 import websockets
 
+from app.utils.network_resilience import classify_network_error
+from app.utils.network_resilience import is_transient_network_error
+from app.utils.network_resilience import summarize_network_error
+
 
 BINANCE_STREAM_URL = "wss://stream.binance.com:9443/stream"
 DEFAULT_LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
@@ -126,10 +130,15 @@ class LiveMarketService:
                 raise
             except Exception as exc:
                 self._connected = False
-                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._last_error = summarize_network_error(exc)
                 self._reconnect_count += 1
-                print(f"Live market websocket error: {exc}")
-                await asyncio.sleep(5)
+                delay = _reconnect_delay_seconds(self._reconnect_count)
+                if not is_transient_network_error(exc):
+                    print(
+                        f"Live market websocket error: {self._last_error} "
+                        f"(retrying in {delay}s)"
+                    )
+                await asyncio.sleep(delay)
 
     def _broadcast(self, record):
         for queue in list(self._subscribers):
@@ -237,6 +246,10 @@ def _from_ms(value):
         return None
 
     return datetime.fromtimestamp(int(value) / 1000, timezone.utc).isoformat()
+
+
+def _reconnect_delay_seconds(reconnect_count):
+    return min(60, 5 * (2 ** min(max(reconnect_count - 1, 0), 4)))
 
 
 live_market_service = LiveMarketService()

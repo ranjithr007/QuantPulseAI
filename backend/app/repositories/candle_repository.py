@@ -67,6 +67,27 @@ def get_latest_candle(db, symbol, timeframe):
     return candles[0] if candles else None
 
 
+def get_candles_as_of(db, symbol, timeframe, as_of_timestamp, limit=200):
+    as_of = normalize_timestamp_to_utc(as_of_timestamp)
+    if as_of is None:
+        return []
+
+    if as_of.tzinfo is not None:
+        as_of = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+
+    candidates = (
+        db.query(MarketCandle)
+        .filter(MarketCandle.symbol == symbol)
+        .filter(MarketCandle.timeframe == timeframe)
+        .filter(MarketCandle.candle_time <= as_of)
+        .order_by(MarketCandle.candle_time.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return list(reversed(candidates))
+
+
 def _session_cache(db, key):
     info = getattr(db, "info", None)
     if not isinstance(info, dict):

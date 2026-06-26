@@ -3,6 +3,7 @@ from importlib import import_module
 
 DEFAULT_JOB_IDS = [
     "market",
+    "derivative",
     "feature",
     "regime",
     "orderflow",
@@ -72,6 +73,14 @@ JOB_DEFINITIONS = {
         function="run_market_job",
         trigger="interval",
         seconds=30,
+    ),
+    "derivative": SchedulerJobDefinition(
+        id="derivative",
+        name="Derivative collector",
+        module="app.jobs.derivative_job",
+        function="run_derivative_job",
+        trigger="interval",
+        minutes=1,
     ),
     "feature": SchedulerJobDefinition(
         id="feature",

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.database.models.market_candles import MarketCandle
 from app.database.sqlserver import SessionLocal
 from app.intelligence.contradiction_engine import build_contradiction_report
+from app.intelligence.data_quality_ledger import build_data_quality_observability
 from app.intelligence.probability_engine import build_probability_profile
 from app.intelligence.master_ai_engine import generate_master_signal
 from app.intelligence.master_ai_engine import score_master_signal_components
@@ -16,11 +17,17 @@ from app.intelligence.trade_setup_engine import build_entry_trigger_decision
 from app.intelligence.trade_setup_engine import build_trade_setup_decision
 from app.repositories.ai_signal_repository import AISignalRepository
 from app.repositories.candle_repository import get_latest_candle
+from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.intelligence_repository import get_ai_inputs
 from app.repositories.master_signal_repository import MasterSignalRepository
+from app.repositories._db_utils import safe_rollback
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
+from app.features.point_in_time_feature_service import build_decision_snapshot
+from app.features.point_in_time_feature_service import persist_decision_snapshot
 from app.trading.trade_plan_engine import build_trade_plan
+from app.observability.performance_budget import LatencyBudget
+from app.observability.performance_budget import build_stage_latency_report
 from app.utils.freshness import freshness_status
 from app.utils.signal_validation import validate_trade_plan_direction
 
@@ -44,6 +51,7 @@ WATCHLIST_PERMISSION_PRIORITY = {
     "WAIT": 3,
 }
 WATCHLIST_CACHE_TTL_SECONDS = 15.0
+WATCHLIST_LATENCY_BUDGET = LatencyBudget(p50_ms=250.0, p95_ms=750.0, p99_ms=1500.0)
 _watchlist_payload_cache = {}
 _watchlist_cache_key_locks = {}
 _watchlist_cache_guard = threading.Lock()
@@ -128,6 +136,28 @@ def build_trade_setup_payload(
             trade_plan["target1"],
         )
 
+        decision_snapshot = persist_decision_snapshot(
+            db,
+            build_decision_snapshot(
+                symbol,
+                stack[0],
+                decision=setup["status"],
+                source_timestamp=candle.candle_time,
+                effective_timestamp=candle.candle_time,
+                confidence=confirmation.get("confidence"),
+                regime=confirmation.get("overall_bias"),
+                signal=setup,
+                trade_plan=trade_plan,
+                context={
+                    "mode": mode,
+                    "timeframes_used": stack,
+                    "confirmation": confirmation,
+                    "scenario": scenario,
+                    "trade_plan_validation": validation,
+                },
+            ),
+        )
+
     return {
         "symbol": symbol,
         "source": "multi_timeframe_trade_setup",
@@ -137,6 +167,11 @@ def build_trade_setup_payload(
         "confirmation": confirmation,
         "scenario": scenario,
         "trade_plan": trade_plan,
+        "decision_snapshot": None if trade_plan is None else {
+            "id": getattr(decision_snapshot, "id", None),
+            "decision_version": getattr(decision_snapshot, "decision_version", None),
+            "effective_timestamp": getattr(decision_snapshot, "effective_timestamp", None),
+        },
         "trade_plan_validation": validation,
         "timeframes": timeframes,
     }
@@ -181,6 +216,27 @@ def build_entry_trigger_payload(
             trade_plan["target1"],
         )
 
+        decision_snapshot = persist_decision_snapshot(
+            db,
+            build_decision_snapshot(
+                symbol,
+                lower_timeframe,
+                decision=trigger["status"],
+                source_timestamp=candle.candle_time,
+                effective_timestamp=candle.candle_time,
+                confidence=confirmation.get("confidence"),
+                regime=confirmation.get("overall_bias"),
+                signal=trigger,
+                trade_plan=trade_plan,
+                context={
+                    "mode": mode or _mode_from_stack(stack),
+                    "timeframes_used": stack,
+                    "confirmation": confirmation,
+                    "trade_plan_validation": validation,
+                },
+            ),
+        )
+
     return {
         "symbol": symbol,
         "source": "multi_timeframe_entry_trigger",
@@ -189,6 +245,11 @@ def build_entry_trigger_payload(
         "trigger": trigger,
         "confirmation": confirmation,
         "trade_plan": trade_plan,
+        "decision_snapshot": None if trade_plan is None else {
+            "id": getattr(decision_snapshot, "id", None),
+            "decision_version": getattr(decision_snapshot, "decision_version", None),
+            "effective_timestamp": getattr(decision_snapshot, "effective_timestamp", None),
+        },
         "trade_plan_validation": validation,
         "timeframes": timeframes,
     }
@@ -295,6 +356,46 @@ def _clear_watchlist_cache():
         _watchlist_cache_key_locks.clear()
 
 
+def build_signal_watchlist_payload(
+    db,
+    mode=None,
+    lower=None,
+    middle=None,
+    higher=None,
+    status=None,
+    side=None,
+    failed_max=None,
+    stale_after_seconds=900,
+):
+    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
+    payloads, cache = _get_cached_watchlist_payloads(
+        db,
+        stack,
+        stale_after_seconds,
+    )
+    records = [_watchlist_row(payload) for payload in payloads]
+    filtered_records, filters = _filter_watchlist(
+        records,
+        status,
+        side,
+        failed_max,
+    )
+    sorted_records = _sort_watchlist(filtered_records)
+
+    return {
+        "source": "signal_watchlist",
+        "mode": mode,
+        "timeframes": stack,
+        "filters": filters,
+        "sort": "priority",
+        "count": len(sorted_records),
+        "total_count": len(records),
+        "summary": _summarize_watchlist(sorted_records),
+        "records": sorted_records,
+        "cache": cache,
+    }
+
+
 @router.get("/watchlist")
 def get_signal_watchlist(
     mode: str | None = Query(default=None),
@@ -309,37 +410,59 @@ def get_signal_watchlist(
     db = SessionLocal()
 
     try:
-        stack = _resolve_timeframe_stack(mode, lower, middle, higher)
-        payloads, cache = _get_cached_watchlist_payloads(
+        return build_signal_watchlist_payload(
             db,
-            stack,
-            stale_after_seconds,
+            mode=mode,
+            lower=lower,
+            middle=middle,
+            higher=higher,
+            status=status,
+            side=side,
+            failed_max=failed_max,
+            stale_after_seconds=stale_after_seconds,
         )
-        records = [
-            _watchlist_row(payload)
-            for payload in payloads
-        ]
-        filtered_records, filters = _filter_watchlist(
-            records,
-            status,
-            side,
-            failed_max,
-        )
-        sorted_records = _sort_watchlist(filtered_records)
 
+    finally:
+        db.close()
+
+
+@router.get("/watchlist/performance")
+def get_watchlist_latency_baseline(
+    mode: str | None = Query(default=None),
+    lower: str | None = Query(default=None),
+    middle: str | None = Query(default=None),
+    higher: str | None = Query(default=None),
+    stale_after_seconds: int = Query(default=900, ge=1),
+    sample_size: int = Query(default=5, ge=1, le=20),
+):
+    db = SessionLocal()
+
+    try:
+        def _watchlist():
+            return build_signal_watchlist_payload(
+                db,
+                mode=mode,
+                lower=lower,
+                middle=middle,
+                higher=higher,
+                status=None,
+                side=None,
+                failed_max=None,
+                stale_after_seconds=stale_after_seconds,
+            )
+
+        report = build_stage_latency_report(
+            {"watchlist": _watchlist},
+            sample_size=sample_size,
+            budgets={"watchlist": WATCHLIST_LATENCY_BUDGET},
+        )
         return {
-            "source": "signal_watchlist",
+            "source": "watchlist_latency_baseline",
             "mode": mode,
-            "timeframes": stack,
-            "filters": filters,
-            "sort": "priority",
-            "count": len(sorted_records),
-            "total_count": len(records),
-            "summary": _summarize_watchlist(sorted_records),
-            "records": sorted_records,
-            "cache": cache,
+            "timeframes": _resolve_timeframe_stack(mode, lower, middle, higher),
+            "sample_size": report["sample_size"],
+            "stage": report["stages"]["watchlist"],
         }
-
     finally:
         db.close()
 
@@ -567,6 +690,66 @@ def get_probability(
         db.close()
 
 
+@router.get("/{symbol}/data-quality")
+def get_data_quality(
+    symbol: str,
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    stale_after_seconds: int = Query(default=900, ge=1),
+    limit: int = Query(default=20, ge=2, le=100),
+    persist: bool = Query(default=True),
+):
+    db = SessionLocal()
+
+    try:
+        return build_data_quality_observability(
+            db,
+            symbol.upper(),
+            timeframe=timeframe,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+            persist=persist,
+        )
+
+    finally:
+        db.close()
+
+
+@router.get("/{symbol}/data-quality/ledger")
+def get_data_quality_ledger(
+    symbol: str,
+    timeframe: str | None = Query(default=None, enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    db = SessionLocal()
+
+    try:
+        records = DataQualityEventRepository().list_events(
+            db,
+            symbol=symbol.upper(),
+            timeframe=timeframe,
+            limit=limit,
+        )
+        blocked = [item for item in records if item["blocked"]]
+        by_category = {}
+        for item in records:
+            by_category[item["category"]] = by_category.get(item["category"], 0) + 1
+
+        return {
+            "source": "data_quality_ledger_history",
+            "symbol_filter": symbol.upper(),
+            "timeframe_filter": timeframe,
+            "count": len(records),
+            "blocked_count": len(blocked),
+            "summary": {
+                "by_category": dict(sorted(by_category.items())),
+            },
+            "records": records,
+        }
+
+    finally:
+        db.close()
+
+
 @router.get("/{symbol}/entry-trigger")
 def get_entry_trigger(
     symbol: str,
@@ -644,8 +827,46 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
     current_price = float(candle.close_price)
     atr = _latest_atr(data["feature"], current_price)
     trade_plan = build_trade_plan(signal["signal"], current_price, atr)
+    decision_snapshot = persist_decision_snapshot(
+        db,
+        build_decision_snapshot(
+            symbol,
+            timeframe,
+            decision=signal["signal"],
+            source_timestamp=candle.candle_time,
+            effective_timestamp=candle.candle_time,
+            confidence=signal["confidence"],
+            regime=getattr(data["regime"], "Regime", None) or getattr(data["regime"], "regime", None),
+            signal={
+                "signal": signal["signal"],
+                "bias": signal["bias"],
+                "confidence": signal["confidence"],
+                "score": signal["score"],
+                "reasons": signal["reasons"],
+            },
+            trade_plan=trade_plan,
+            context={
+                "feature": getattr(data["feature"], "Id", None) or getattr(data["feature"], "id", None),
+                "regime": getattr(data["regime"], "Id", None) or getattr(data["regime"], "id", None),
+                "orderflow": getattr(data["orderflow"], "Id", None) or getattr(data["orderflow"], "id", None),
+                "smc": getattr(data["smc"], "id", None),
+            },
+        ),
+    )
 
-    persisted_signal = _latest_persisted_signal(db, symbol, stale_after_seconds)
+    try:
+        persisted_signal = _latest_persisted_signal(
+            db,
+            symbol,
+            timeframe,
+            stale_after_seconds,
+        )
+    except Exception:
+        safe_rollback(db)
+        persisted_signal = {
+            "latest_usable": None,
+            "latest_ignored": None,
+        }
 
     return {
         "symbol": symbol,
@@ -659,6 +880,11 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
         "candle_time": candle.candle_time,
         "freshness": freshness_status(candle.candle_time, stale_after_seconds),
         "trade_plan": trade_plan,
+        "decision_snapshot": {
+            "id": getattr(decision_snapshot, "id", None),
+            "decision_version": getattr(decision_snapshot, "decision_version", None),
+            "effective_timestamp": getattr(decision_snapshot, "effective_timestamp", None),
+        },
         "reasons": signal["reasons"],
         "contradiction": build_contradiction_report(
             db,
@@ -1141,9 +1367,9 @@ def _latest_atr(feature, current_price):
     return current_price * 0.01
 
 
-def _latest_persisted_signal(db, symbol, stale_after_seconds=900):
+def _latest_persisted_signal(db, symbol, timeframe=None, stale_after_seconds=900):
     candidates = []
-    master_signal = MasterSignalRepository().latest(db, symbol)
+    master_signal = MasterSignalRepository().latest(db, symbol, timeframe)
 
     if master_signal:
         candidates.append(
@@ -1158,7 +1384,7 @@ def _latest_persisted_signal(db, symbol, stale_after_seconds=900):
             )
         )
 
-    ai_signal = AISignalRepository().latest(db, symbol)
+    ai_signal = AISignalRepository().latest(db, symbol, timeframe)
 
     if ai_signal:
         candidates.append(

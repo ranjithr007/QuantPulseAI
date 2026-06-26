@@ -14,8 +14,13 @@ from app.services.market_price_service import MarketPriceService
 
 
 from app.trading.planner.trade_planner import TradePlanner
+from app.repositories._db_utils import safe_rollback
+from app.utils.network_resilience import is_transient_network_error
+from app.utils.network_resilience import summarize_network_error
 
 fusion_repo = FusionSignalRepository()
+
+TRADE_PLAN_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
 trade_repo = TradePlanRepository()
 
@@ -32,37 +37,48 @@ def run_trade_plan_job():
 
     try:
 
-        signals = fusion_repo.get_latest_tradeable_signals(db)
+        for timeframe in TRADE_PLAN_TIMEFRAMES:
+            signals = fusion_repo.get_latest_tradeable_signals(db, timeframe)
 
-        for signal in signals:
+            for signal in signals:
+                try:
+                    signal_timeframe = getattr(signal, "timeframe", None) or timeframe
+                    price = price_service.get_latest_price(signal.symbol)
 
-            price = price_service.get_latest_price(signal.symbol)
+                    if price is None:
+                        continue
 
-            if price is None:
-                continue
+                    feature = get_latest_feature(db, signal.symbol, signal_timeframe)
 
-            feature = get_latest_feature(db, signal.symbol)
+                    if feature is None:
+                        continue
 
-            if feature is None:
-                continue
+                    ai_signal = {
+                        "symbol": signal.symbol,
+                        "decision": signal.decision,
+                        "confidence": signal.confidence,
+                        "timeframe": signal_timeframe,
+                    }
 
-            ai_signal = {
-                "symbol": signal.symbol,
-                "decision": signal.decision,
-                "confidence": signal.confidence,
-            }
+                    plan = planner.create_plan(ai_signal, price, feature.ATR)
 
-            plan = planner.create_plan(ai_signal, price, feature.ATR)
+                    if trade_repo.has_open_trade(db, plan["symbol"], plan["side"]):
 
-            if trade_repo.has_open_trade(db, plan["symbol"], plan["side"]):
+                        print("Trade already exists", plan["symbol"], signal_timeframe)
 
-                print("Trade already exists", plan["symbol"])
+                        continue
 
-                continue
+                    trade_repo.save_trade_plan(db, plan)
 
-            trade_repo.save_trade_plan(db, plan)
-
-            print("New Trade Created", plan)
+                    print("New Trade Created", signal_timeframe, plan)
+                except Exception as ex:
+                    if not is_transient_network_error(ex):
+                        print(f"Trade plan job error {signal.symbol} {getattr(signal, 'timeframe', None) or timeframe}: {summarize_network_error(ex)}")
+                    continue
+    except Exception as ex:
+        safe_rollback(db)
+        if not is_transient_network_error(ex):
+            print("Trade plan job error:", summarize_network_error(ex))
 
     finally:
 

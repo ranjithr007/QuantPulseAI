@@ -3,18 +3,20 @@ import time
 
 from datetime import datetime
 
+from app.utils.network_resilience import classify_network_error
+from app.utils.network_resilience import is_transient_network_error
+
 
 class WhaleCollector:
 
     URL = "https://fapi.binance.com/fapi/v1/aggTrades"
-
-   
 
     def get_order_flow(self, symbol):
 
         params = {"symbol": symbol, "limit": 1000}
 
         data = None
+        last_error = None
 
         for attempt in range(3):
 
@@ -24,17 +26,26 @@ class WhaleCollector:
 
                 response.raise_for_status()
 
-                data = response.json()
+                payload = response.json()
+                data = (
+                    payload.get("result", {}).get("list")
+                    if isinstance(payload, dict)
+                    else payload
+                )
 
                 break
 
             except Exception as ex:
-
-                print(f"Binance error {symbol}: {ex}")
-
-                time.sleep(3)
+                last_error = ex
+                time.sleep(_retry_delay_seconds(attempt + 1))
 
         if data is None:
+            if last_error is not None:
+                if not is_transient_network_error(last_error):
+                    print(f"Binance error {symbol}: {classify_network_error(last_error)}")
+            return None
+
+        if not isinstance(data, list) or not data:
             return None
 
         buy_volume = 0
@@ -50,9 +61,11 @@ class WhaleCollector:
 
         largest_trade_value = 0
 
-        start_price = float(data[0]["p"])
+        first_trade = data[0]
+        last_trade = data[-1]
+        start_price = float(first_trade["p"])
 
-        end_price = float(data[-1]["p"])
+        end_price = float(last_trade["p"])
 
         for x in data:
 
@@ -101,7 +114,7 @@ class WhaleCollector:
                         "price": price,
                         "quantity": qty,
                         "value_usd": value,
-                        "trade_time": datetime.fromtimestamp(x["T"] / 1000),
+                        "trade_time": datetime.fromtimestamp(int(x["T"]) / 1000),
                     }
                 )
 
@@ -202,3 +215,7 @@ class WhaleCollector:
             "whales": whales,
             "created_at": datetime.utcnow(),
         }
+
+
+def _retry_delay_seconds(attempt_number):
+    return min(30, 3 * (2 ** min(max(attempt_number - 1, 0), 4)))

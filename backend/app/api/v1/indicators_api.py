@@ -44,5 +44,9 @@ def get_indicators(
             "volatility": VolatilityEngine().analyze(candles),
         }
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
         db.close()

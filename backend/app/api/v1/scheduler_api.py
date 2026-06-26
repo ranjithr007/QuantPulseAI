@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.config import get_settings
 from app.scheduler.registry import all_job_definitions
 from app.scheduler.registry import get_job_definition
+from app.utils.network_resilience import summarize_network_error
 
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
@@ -14,11 +15,15 @@ router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
 @router.get("/jobs")
 def list_jobs():
-    return {
-        "scheduler_enabled": get_settings().start_scheduler,
-        "configured_jobs": get_settings().scheduler_job_ids,
-        "jobs": [definition.as_dict() for definition in all_job_definitions()],
-    }
+    try:
+        settings = get_settings()
+        return {
+            "scheduler_enabled": settings.start_scheduler,
+            "configured_jobs": settings.scheduler_job_ids,
+            "jobs": [definition.as_dict() for definition in all_job_definitions()],
+        }
+    except Exception as exc:
+        return _scheduler_error_payload("jobs", exc)
 
 
 @router.get("/status")
@@ -33,27 +38,30 @@ def scheduler_status():
             "jobs": [],
         }
 
-    scheduler = get_scheduler()
+    try:
+        scheduler = get_scheduler()
 
-    if scheduler is None:
+        if scheduler is None:
+            return {
+                "available": True,
+                "running": False,
+                "jobs": [],
+            }
+
         return {
             "available": True,
-            "running": False,
-            "jobs": [],
+            "running": scheduler.running,
+            "jobs": [
+                {
+                    "id": job.id,
+                    "name": job.name,
+                    "next_run_time": job.next_run_time,
+                }
+                for job in scheduler.get_jobs()
+            ],
         }
-
-    return {
-        "available": True,
-        "running": scheduler.running,
-        "jobs": [
-            {
-                "id": job.id,
-                "name": job.name,
-                "next_run_time": job.next_run_time,
-            }
-            for job in scheduler.get_jobs()
-        ],
-    }
+    except Exception as exc:
+        return _scheduler_error_payload("status", exc)
 
 
 @router.post("/start")
@@ -77,15 +85,18 @@ def start_scheduler_endpoint(
             "jobs": [],
         }
 
-    started = start_scheduler(job_ids)
-    scheduler = get_scheduler()
+    try:
+        started = start_scheduler(job_ids)
+        scheduler = get_scheduler()
 
-    return {
-        "available": True,
-        "started": started,
-        "running": bool(scheduler and scheduler.running),
-        "jobs": _scheduler_jobs(scheduler),
-    }
+        return {
+            "available": True,
+            "started": started,
+            "running": bool(scheduler and scheduler.running),
+            "jobs": _scheduler_jobs(scheduler),
+        }
+    except Exception as exc:
+        return _scheduler_error_payload("start", exc)
 
 
 @router.post("/jobs/{job_id}/dry-run")
@@ -110,7 +121,7 @@ def dry_run_job(
             "job": definition.as_dict(),
             "execute": execute,
             "status": "IMPORT_FAILED",
-            "error": str(exc),
+            "error": summarize_network_error(exc),
             "traceback": format_exc(),
             "started_at": started_at,
             "finished_at": datetime.now(timezone.utc),
@@ -133,7 +144,7 @@ def dry_run_job(
             "job": definition.as_dict(),
             "execute": True,
             "status": "EXECUTION_FAILED",
-            "error": str(exc),
+            "error": summarize_network_error(exc),
             "traceback": format_exc(),
             "started_at": started_at,
             "finished_at": datetime.now(timezone.utc),
@@ -168,3 +179,13 @@ def _scheduler_jobs(scheduler):
         }
         for job in scheduler.get_jobs()
     ]
+
+
+def _scheduler_error_payload(operation, exc):
+    return {
+        "available": False,
+        "operation": operation,
+        "status": "FAILED",
+        "error": summarize_network_error(exc),
+        "jobs": [],
+    }

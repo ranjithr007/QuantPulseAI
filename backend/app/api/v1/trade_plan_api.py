@@ -2,11 +2,26 @@ from fastapi import APIRouter, Query
 
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
+from app.repositories._db_utils import safe_rollback
+from app.utils.network_resilience import summarize_network_error
 from app.utils.freshness import freshness_status
 from app.utils.signal_validation import validate_trade_plan_direction
 
 
 router = APIRouter(prefix="/trade-plan", tags=["Trade Plan"])
+
+
+def _trade_plan_error_payload(symbol, status, exc):
+    return {
+        "symbol": symbol,
+        "source": "trade_plans",
+        "status_filter": status.upper() if status else None,
+        "count": 0,
+        "latest": None,
+        "records": [],
+        "status": "FAILED",
+        "error": summarize_network_error(exc),
+    }
 
 
 def serialize_trade_plan(trade, stale_after_seconds):
@@ -18,6 +33,7 @@ def serialize_trade_plan(trade, stale_after_seconds):
 
     return {
         "id": trade.id,
+        "thesis_id": getattr(trade, "thesis_id", None),
         "symbol": trade.symbol,
         "side": trade.side,
         "entry_price": trade.entry_price,
@@ -76,6 +92,10 @@ def get_trade_plan(
             "latest": records[0] if records else None,
             "records": records,
         }
+
+    except Exception as exc:
+        safe_rollback(db)
+        return _trade_plan_error_payload(symbol, status, exc)
 
     finally:
 

@@ -26,6 +26,7 @@ def generate_master_signal(feature, regime, orderflow, smc):
         "confidence": abs(score),
         "score": score,
         "reasons": reasons,
+        "scoring_profile": build_scoring_profile(components, score=score, signal=signal, bias=bias),
     }
 
 
@@ -126,6 +127,48 @@ def score_master_signal_components(feature, regime, orderflow, smc):
             components["smc"]["reason"] = "SMC bearish"
 
     return components
+
+
+def build_scoring_profile(components, *, score, signal, bias):
+    base_weights = {
+        "feature": 20,
+        "regime": 25,
+        "orderflow": 25,
+        "smc": 30,
+    }
+    component_entries = []
+    absolute_total = sum(abs(component.get("score", 0) or 0) for component in components.values())
+
+    for name, component in components.items():
+        component_score = float(component.get("score", 0) or 0)
+        normalized_weight = round(
+            abs(component_score) / absolute_total,
+            4,
+        ) if absolute_total else 0.0
+        component_entries.append(
+            {
+                "name": name,
+                "value": component.get("value"),
+                "reason": component.get("reason"),
+                "score": component_score,
+                "base_weight": base_weights.get(name, 0),
+                "normalized_weight": normalized_weight,
+                "direction": "positive" if component_score > 0 else "negative" if component_score < 0 else "neutral",
+            }
+        )
+
+    return {
+        "source": "governed_master_ai_scoring",
+        "score_range": {"min": -100, "max": 100},
+        "signal_threshold": 40,
+        "bias_threshold": 15,
+        "base_weights": base_weights,
+        "active_total_weight": absolute_total,
+        "score": score,
+        "signal": signal,
+        "bias": bias,
+        "components": component_entries,
+    }
 
 
 def _signal_from_score(score):

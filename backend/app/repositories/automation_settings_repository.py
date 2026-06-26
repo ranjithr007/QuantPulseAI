@@ -3,6 +3,8 @@ from datetime import datetime
 
 from app.database.models.automation_settings import AutomationSetting
 from app.database.models.automation_settings import AutomationSettingsAudit
+from app.repositories._db_utils import commit_or_rollback
+from app.repositories._db_utils import flush_or_rollback
 
 
 DEFAULT_AUTOMATION_SETTINGS = {
@@ -38,7 +40,7 @@ def get_automation_settings(db):
     row.version = 1
     row.updated_at = datetime.utcnow()
     db.add(row)
-    db.flush()
+    flush_or_rollback(db)
     db.add(
         AutomationSettingsAudit(
             setting_id=row.id,
@@ -49,7 +51,7 @@ def get_automation_settings(db):
             new_values=json.dumps(defaults, sort_keys=True, default=str),
         )
     )
-    db.commit()
+    commit_or_rollback(db)
     db.refresh(row)
     return row
 
@@ -81,7 +83,7 @@ def update_automation_settings(db, updates, actor="local_ui", action="SETTINGS_U
             new_values=json.dumps(current, sort_keys=True, default=str),
         )
     )
-    db.commit()
+    commit_or_rollback(db)
     db.refresh(row)
     return automation_settings_payload(row), True
 

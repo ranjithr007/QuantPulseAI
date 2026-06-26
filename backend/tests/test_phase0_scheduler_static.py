@@ -15,6 +15,7 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
             resolve_job_ids([]),
             [
                 "market",
+                "derivative",
                 "feature",
                 "regime",
                 "orderflow",

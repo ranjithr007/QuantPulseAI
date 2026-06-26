@@ -4,32 +4,68 @@ import websockets
 
 from datetime import datetime
 
+from app.utils.network_resilience import classify_network_error
+from app.utils.network_resilience import is_transient_network_error
+
 
 class LiquidationCollector:
 
     URL = "wss://fstream.binance.com" "/ws/!forceOrder@arr"
 
     async def listen(self, callback):
+        reconnect_count = 0
 
-        async with websockets.connect(self.URL) as websocket:
+        while True:
+            try:
+                async with websockets.connect(self.URL) as websocket:
+                    reconnect_count = 0
+                    print("Liquidation stream connected")
 
-            print("Liquidation stream connected")
+                    while True:
+                        message = await websocket.recv()
 
-            while True:
+                        liquidation = _parse_liquidation_message(message)
+                        if liquidation is None:
+                            continue
 
-                message = await websocket.recv()
+                        result = callback(liquidation)
+                        if asyncio.iscoroutine(result):
+                            await result
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                reconnect_count += 1
+                delay = _reconnect_delay_seconds(reconnect_count)
+                if not is_transient_network_error(exc):
+                    print(
+                        f"Liquidation stream error: {classify_network_error(exc)} "
+                        f"(retrying in {delay}s)"
+                    )
+                await asyncio.sleep(delay)
 
-                data = json.loads(message)
 
-                order = data["o"]
+def _parse_liquidation_message(message):
+    try:
+        data = json.loads(message)
+        order = data["o"]
+        event_time = data.get("E")
+        if event_time is None:
+            return None
 
-                liquidation = {
-                    "symbol": order["s"],
-                    "side": order["S"],
-                    "price": float(order["p"]),
-                    "quantity": float(order["q"]),
-                    "value_usd": float(order["p"]) * float(order["q"]),
-                    "event_time": datetime.fromtimestamp(data["E"] / 1000),
-                }
+        price = float(order["p"])
+        quantity = float(order["q"])
 
-                callback(liquidation)
+        return {
+            "symbol": order["s"],
+            "side": order["S"],
+            "price": price,
+            "quantity": quantity,
+            "value_usd": price * quantity,
+            "event_time": datetime.fromtimestamp(int(event_time) / 1000),
+        }
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _reconnect_delay_seconds(reconnect_count):
+    return min(60, 5 * (2 ** min(max(reconnect_count - 1, 0), 4)))

@@ -16,12 +16,17 @@ def analyze_orderflow(candles):
     absorption = detect_absorption(delta, price_change)
 
     buyer_strength = 50
+    seller_strength = 50
 
     if delta > 0:
 
         buyer_strength = 75
+        seller_strength = 25
 
-    seller_strength = 100 - buyer_strength
+    elif delta < 0:
+
+        buyer_strength = 25
+        seller_strength = 75
 
     signal = "NEUTRAL"
 

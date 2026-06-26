@@ -14,7 +14,7 @@ class Phase1PipelineStatusStaticTests(unittest.TestCase):
         self.assertIn('APIRouter(prefix="/pipeline"', source)
         self.assertIn('@router.get("/status")', source)
         self.assertIn('"source": "pipeline_status"', source)
-        self.assertIn("get_signal_watchlist", source)
+        self.assertIn("build_signal_watchlist_payload", source)
         self.assertIn("lower=None", source)
         self.assertIn("middle=None", source)
         self.assertIn("higher=None", source)

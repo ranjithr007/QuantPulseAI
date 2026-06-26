@@ -2,8 +2,10 @@ from app.database.sqlserver import SessionLocal
 
 from app.database.models.market_features import MarketFeature
 from app.database.models.market_regimes import MarketRegime
+from app.repositories._db_utils import commit_or_rollback
 
 from app.regimes.regime_engine import analyze_market
+from app.utils.network_resilience import summarize_network_error
 
 
 def run_regime_analysis():
@@ -49,7 +51,7 @@ def run_regime_analysis():
             db.add(regime)
             saved += 1
 
-        db.commit()
+        commit_or_rollback(db)
 
         print("Regime Analysis Completed")
         return {
@@ -61,12 +63,12 @@ def run_regime_analysis():
 
     except Exception as e:
 
-        print("Regime Error:", e)
+        print("Regime Error:", summarize_network_error(e))
         return {
             "source": "v3_regime_engine",
             "processed": 0,
             "saved": 0,
-            "error": str(e),
+            "error": summarize_network_error(e),
         }
 
     finally:

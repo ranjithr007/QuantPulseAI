@@ -1,3 +1,5 @@
+import copy
+
 from app.intelligence.confidence_engine import ConfidenceEngine
 from app.intelligence.contradiction_engine import build_contradiction_report
 from app.intelligence.master_ai_engine import generate_master_signal
@@ -74,6 +76,9 @@ class ProbabilityEngine:
             actionable = False
 
         confidence = probabilities.get(decision, 0)
+        long_probability = probabilities.get("LONG", 0)
+        short_probability = probabilities.get("SHORT", 0)
+        wait_probability = probabilities.get("WAIT", 0)
         status = contradiction.get("status", "CLEAR")
         if status == "CLEAR" and freshness_factor < 0.7:
             status = "WATCH"
@@ -101,6 +106,9 @@ class ProbabilityEngine:
             "actionable": actionable,
             "status": status,
             "confidence": confidence,
+            "long_probability": long_probability,
+            "short_probability": short_probability,
+            "wait_probability": wait_probability,
             "probabilities": probabilities,
             "prior": prior,
             "likelihood": likelihood,
@@ -203,10 +211,15 @@ class ProbabilityEngine:
 
 
 def build_probability_profile(db, symbol, timeframe="5m", stale_after_seconds=900):
+    cache = _session_cache(db, "quantpulse_probability_profiles")
+    cache_key = (symbol, timeframe, int(stale_after_seconds))
+    if cache is not None and cache_key in cache:
+        return copy.deepcopy(cache[cache_key])
+
     candle = get_latest_candle(db, symbol, timeframe)
 
     if not candle:
-        return {
+        profile = {
             "source": "probability_engine",
             "symbol": symbol,
             "timeframe": timeframe,
@@ -216,6 +229,9 @@ def build_probability_profile(db, symbol, timeframe="5m", stale_after_seconds=90
             "actionable": False,
             "status": "INVALIDATED",
             "confidence": 0,
+            "long_probability": 0,
+            "short_probability": 0,
+            "wait_probability": 100,
             "probabilities": {"LONG": 0, "SHORT": 0, "WAIT": 100},
             "prior": {"LONG": 0, "SHORT": 0, "WAIT": 1},
             "likelihood": {"LONG": 0, "SHORT": 0, "WAIT": 1},
@@ -229,6 +245,9 @@ def build_probability_profile(db, symbol, timeframe="5m", stale_after_seconds=90
             ),
             "reasons": ["No latest candle found for symbol/timeframe"],
         }
+        if cache is not None:
+            cache[cache_key] = copy.deepcopy(profile)
+        return profile
 
     inputs = get_ai_inputs(db, symbol, timeframe)
     signal = generate_master_signal(
@@ -259,7 +278,7 @@ def build_probability_profile(db, symbol, timeframe="5m", stale_after_seconds=90
         ),
     }
 
-    return ProbabilityEngine().analyze(
+    profile = ProbabilityEngine().analyze(
         symbol=symbol,
         timeframe=timeframe,
         signal=signal,
@@ -270,6 +289,9 @@ def build_probability_profile(db, symbol, timeframe="5m", stale_after_seconds=90
         previous_price=previous_price,
         price_change_pct=price_change_pct,
     )
+    if cache is not None:
+        cache[cache_key] = copy.deepcopy(profile)
+    return profile
 
 
 def _previous_candle(db, symbol, timeframe):
@@ -298,3 +320,11 @@ def _bias_from_signal(signal):
         return "SHORT"
 
     return "WAIT"
+
+
+def _session_cache(db, key):
+    info = getattr(db, "info", None)
+    if not isinstance(info, dict):
+        return None
+
+    return info.setdefault(key, {})

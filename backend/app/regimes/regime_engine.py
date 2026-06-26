@@ -58,21 +58,38 @@ def analyze_market(feature, previous_regime=None):
 
 
 def regime_catalog():
+    contract = build_regime_contract()
     return {
-        "count": len(REGIME_DEFINITIONS),
-        "regimes": [
-            {
-                "regime": regime,
-                "strategy": definition["strategy"],
-                "bias": definition["bias"],
-                "risk_mode": definition["risk_mode"],
-            }
-            for regime, definition in REGIME_DEFINITIONS.items()
-        ],
-        "hysteresis": {
-            "margin": HYSTERESIS_MARGIN,
+        "count": contract["count"],
+        "regimes": contract["regimes"],
+        "hysteresis": contract["thresholds"],
+    }
+
+
+def build_regime_contract():
+    regimes = [
+        {
+            "regime": regime,
+            "strategy": definition["strategy"],
+            "bias": definition["bias"],
+            "risk_mode": definition["risk_mode"],
+        }
+        for regime, definition in REGIME_DEFINITIONS.items()
+    ]
+    return {
+        "source": "v3_regime_contract",
+        "version": "v3_regime_13_v1",
+        "count": len(regimes),
+        "regimes": regimes,
+        "thresholds": {
+            "hysteresis_margin": HYSTERESIS_MARGIN,
             "min_transition_confidence": MIN_TRANSITION_CONFIDENCE,
         },
+        "taxonomy": [item["regime"] for item in regimes],
+        "notes": [
+            "13-regime taxonomy is governed here",
+            "Thresholds are shared across the regime API and engine",
+        ],
     }
 
 

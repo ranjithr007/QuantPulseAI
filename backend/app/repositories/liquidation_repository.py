@@ -1,4 +1,5 @@
 from app.database.models.liquidations import Liquidation
+from app.repositories._db_utils import commit_or_rollback
 
 
 class LiquidationRepository:
@@ -16,4 +17,4 @@ class LiquidationRepository:
 
         db.add(entity)
 
-        db.commit()
+        commit_or_rollback(db)

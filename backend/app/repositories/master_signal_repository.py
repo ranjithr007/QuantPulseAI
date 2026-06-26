@@ -1,4 +1,5 @@
 from app.database.models.master_signals import MasterSignal
+from app.repositories._db_utils import commit_or_rollback
 
 
 class MasterSignalRepository:
@@ -7,13 +8,13 @@ class MasterSignalRepository:
 
         db.add(MasterSignal(**data))
 
-        db.commit()
+        commit_or_rollback(db)
 
-    def latest(self, db, symbol):
+    def latest(self, db, symbol, timeframe=None):
 
-        return (
-            db.query(MasterSignal)
-            .filter(MasterSignal.symbol == symbol)
-            .order_by(MasterSignal.created_at.desc())
-            .first()
-        )
+        query = db.query(MasterSignal).filter(MasterSignal.symbol == symbol)
+
+        if timeframe:
+            query = query.filter(MasterSignal.timeframe == timeframe)
+
+        return query.order_by(MasterSignal.created_at.desc()).first()

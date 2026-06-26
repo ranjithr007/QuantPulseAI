@@ -4,10 +4,13 @@ from app.database.models.market_features import MarketFeature
 from app.repositories.candle_repository import get_latest_candle as latest_market_candle
 from app.repositories.fusion_repository import FusionSignalRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
+from app.repositories._db_utils import safe_rollback
 
 from app.risk.risk_engine import RiskEngine
 
 from app.repositories.risk_repository import RiskRepository
+from app.utils.network_resilience import is_transient_network_error
+from app.utils.network_resilience import summarize_network_error
 
 
 DEFAULT_TIMEFRAME = "5m"
@@ -40,7 +43,7 @@ def get_latest_feature(db, symbol, timeframe):
 
 
 def resolve_risk_inputs(db, signal):
-    timeframe = signal.timeframe or DEFAULT_TIMEFRAME
+    timeframe = getattr(signal, "timeframe", None) or DEFAULT_TIMEFRAME
     candle = get_latest_candle(db, signal.symbol, timeframe)
 
     if candle is None or candle.close_price is None:
@@ -73,25 +76,32 @@ def approve_open_trade_plans(db, risk_repo, engine):
 
     for trade in trade_repo.get_open_trades(db):
         summary["processed"] += 1
-        result = engine.analyze_trade_plan(
-            symbol=trade.symbol,
-            side=trade.side,
-            entry=trade.entry_price,
-            stop_loss=trade.stop_loss,
-            target1=trade.target1,
-            target2=trade.target2,
-            confidence=float(trade.confidence or 0),
-            risk_percent=1,
-        )
+        try:
+            result = engine.analyze_trade_plan(
+                symbol=trade.symbol,
+                side=trade.side,
+                entry=trade.entry_price,
+                stop_loss=trade.stop_loss,
+                target1=trade.target1,
+                target2=trade.target2,
+                confidence=float(trade.confidence or 0),
+                risk_percent=1,
+            )
+            result["thesis_id"] = getattr(trade, "thesis_id", None)
 
-        risk_repo.save(result)
+            risk_repo.save(result)
 
-        if result["decision"] == "APPROVE":
-            summary["approved"] += 1
-        else:
+            if result["decision"] == "APPROVE":
+                summary["approved"] += 1
+            else:
+                summary["rejected"] += 1
+                summary["errors"].append(
+                    f"{trade.symbol} {trade.side}: {result.get('reason')}"
+                )
+        except Exception as ex:
             summary["rejected"] += 1
             summary["errors"].append(
-                f"{trade.symbol} {trade.side}: {result.get('reason')}"
+                f"{trade.symbol} {trade.side}: {summarize_network_error(ex)}"
             )
 
     return summary
@@ -99,58 +109,68 @@ def approve_open_trade_plans(db, risk_repo, engine):
 
 def run_risk_job():
     db = SessionLocal()
-    fusion_repo = FusionSignalRepository()
-
-    risk_repo = RiskRepository()
-
-    engine = RiskEngine()
-
-    summary = {
-        "processed": 0,
-        "saved": 0,
-        "rejected": 0,
-        "skipped": 0,
-        "errors": [],
-        "trade_plans": {
-            "processed": 0,
-            "approved": 0,
-            "rejected": 0,
-            "errors": [],
-        },
-    }
-
     try:
+        summary = {
+            "processed": 0,
+            "saved": 0,
+            "rejected": 0,
+            "skipped": 0,
+            "errors": [],
+            "trade_plans": {
+                "processed": 0,
+                "approved": 0,
+                "rejected": 0,
+                "errors": [],
+            },
+        }
+        fusion_repo = FusionSignalRepository()
+        risk_repo = RiskRepository()
+        engine = RiskEngine()
         signals = fusion_repo.get_latest_signals(db)
 
         for s in signals:
             summary["processed"] += 1
-            inputs = resolve_risk_inputs(db, s)
+            try:
+                inputs = resolve_risk_inputs(db, s)
 
-            if inputs is None:
-                summary["skipped"] += 1
-                summary["errors"].append(
-                    f"No latest market candle for {s.symbol} {s.timeframe or DEFAULT_TIMEFRAME}"
+                if inputs is None:
+                    summary["skipped"] += 1
+                    summary["errors"].append(
+                        f"No latest market candle for {s.symbol} {getattr(s, 'timeframe', None) or DEFAULT_TIMEFRAME}"
+                    )
+                    continue
+
+                result = engine.analyze(
+                    symbol=s.symbol,
+                    signal=inputs["signal"],
+                    price=inputs["price"],
+                    atr=inputs["atr"],
+                    confidence=inputs["confidence"],
                 )
-                continue
+                result["thesis_id"] = getattr(s, "thesis_id", None)
 
-            result = engine.analyze(
-                symbol=s.symbol,
-                signal=inputs["signal"],
-                price=inputs["price"],
-                atr=inputs["atr"],
-                confidence=inputs["confidence"],
-            )
+                risk_repo.save(result)
 
-            risk_repo.save(result)
-
-            if result["decision"] == "TAKE_TRADE":
-                summary["saved"] += 1
-            else:
+                if result["decision"] == "TAKE_TRADE":
+                    summary["saved"] += 1
+                else:
+                    summary["rejected"] += 1
+            except Exception as ex:
                 summary["rejected"] += 1
+                summary["errors"].append(
+                    f"{s.symbol} {getattr(s, 'timeframe', None) or DEFAULT_TIMEFRAME}: {summarize_network_error(ex)}"
+                )
 
         summary["trade_plans"] = approve_open_trade_plans(db, risk_repo, engine)
 
         print("Risk Engine Completed", summary)
+        return summary
+
+    except Exception as ex:
+        safe_rollback(db)
+        if not is_transient_network_error(ex):
+            print("Risk job error:", summarize_network_error(ex))
+        summary["errors"].append(summarize_network_error(ex))
         return summary
 
     finally:

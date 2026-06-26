@@ -25,6 +25,10 @@ def generate_orderflow(symbol, timeframe):
 
         return result
 
+    except Exception:
+        db.rollback()
+        raise
+
     finally:
 
         db.close()

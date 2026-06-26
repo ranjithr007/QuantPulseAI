@@ -2,8 +2,15 @@ import unittest
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+import sys
+import types
+
+fake_websockets = types.ModuleType("websockets")
+fake_websockets.connect = lambda *args, **kwargs: None
+sys.modules.setdefault("websockets", fake_websockets)
 
 from app.services.live_market_service import LiveMarketService
+from app.services.live_market_service import _reconnect_delay_seconds
 
 
 class LiveMarketStatusTests(unittest.TestCase):
@@ -34,6 +41,12 @@ class LiveMarketStatusTests(unittest.TestCase):
         self.assertEqual("PARTIAL", status["state"])
         self.assertEqual("LIVE", status["symbol_status"]["BTCUSDT"]["state"])
         self.assertEqual("STALE", status["symbol_status"]["ETHUSDT"]["state"])
+
+    def test_reconnect_delay_backoff_grows_and_caps(self):
+        self.assertEqual(5, _reconnect_delay_seconds(1))
+        self.assertEqual(10, _reconnect_delay_seconds(2))
+        self.assertEqual(20, _reconnect_delay_seconds(3))
+        self.assertEqual(60, _reconnect_delay_seconds(6))
 
 
 class _RunningTask:

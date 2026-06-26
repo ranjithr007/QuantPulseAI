@@ -135,8 +135,8 @@ function DetailAction({ row, onOpenSymbol, getSymbolHref }) {
 export function enrichRow(row, watchlist, liveStatus) {
   const watchRow = (watchlist?.records || []).find((item) => item.symbol === row.symbol) || {};
   const rsScore = numberFrom(watchRow.score_5m, watchRow.rs_score, row.confidence - 50);
-  const longPct = directionalPct(row.type, row.confidence, "LONG");
-  const shortPct = directionalPct(row.type, row.confidence, "SHORT");
+  const longPct = resolveDirectionalPct(row, "LONG");
+  const shortPct = resolveDirectionalPct(row, "SHORT");
   const riskReward = numberFrom(row.riskReward, watchRow.risk_reward, 0);
   const stage = inferStage(row, watchRow);
   const risk = inferRisk(row, watchRow, riskReward);
@@ -171,6 +171,38 @@ function directionalPct(type, confidence, side) {
   if (type === "BUY") return side === "LONG" ? value : 100 - value;
   if (type === "SELL") return side === "SHORT" ? value : 100 - value;
   return 50;
+}
+
+function resolveDirectionalPct(row, side) {
+  const primary = side === "LONG" ? "longPct" : "shortPct";
+  const secondary = side === "LONG" ? "longSidePct" : "shortSidePct";
+  const fallback = directionalPct(row.type, row.confidence, side);
+  const raw = numberFrom(row[primary], row[secondary]);
+
+  if (raw !== 50) {
+    return raw;
+  }
+
+  const bias = String(row.signalBias || row.regime || "").toUpperCase();
+  const score = Number(row.signalScore);
+
+  if (bias.includes("LONG")) {
+    return side === "LONG" ? 60 : 40;
+  }
+
+  if (bias.includes("SHORT")) {
+    return side === "LONG" ? 40 : 60;
+  }
+
+  if (Number.isFinite(score) && score !== 0) {
+    const strength = Math.max(-100, Math.min(100, score));
+    const adjusted = 50 + strength / 2;
+    return side === "LONG"
+      ? Math.max(0, Math.min(100, adjusted))
+      : Math.max(0, Math.min(100, 100 - adjusted));
+  }
+
+  return fallback;
 }
 
 function inferStage(row, watchRow) {

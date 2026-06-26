@@ -4,6 +4,7 @@ from datetime import timezone
 
 from app.database.models.market_candles import MarketCandle
 from app.repositories.candle_repository import get_latest_candle
+from app.repositories._db_utils import commit_or_rollback
 
 
 FUTURE_CANDLE_TOLERANCE_SECONDS = 60
@@ -52,7 +53,7 @@ class MarketRepository:
 
         db.add(entity)
 
-        db.commit()
+        commit_or_rollback(db)
 
     def get_last_candle_time(self, db, symbol: str, timeframe: str):
         candle = get_latest_candle(db, symbol, timeframe)

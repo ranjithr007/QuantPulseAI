@@ -4,9 +4,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
+from app.repositories._db_utils import commit_or_rollback
+from app.repositories._db_utils import flush_or_rollback
 
 
-TIMEFRAMES = ("5m", "15m", "1h", "4h", "1d")
+TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
 
 SYMBOL_PROFILES = {
     "BTCUSDT": {
@@ -93,6 +95,12 @@ def bootstrap_sqlite_demo_data(engine):
     from app.database.models.market_features import MarketFeature
     from app.database.models.market_order_flow import MarketOrderFlow
     from app.database.models.market_regimes import MarketRegime
+    from app.database.models.data_quality_events import DataQualityEvent
+    from app.database.models.point_in_time_snapshots import (
+        DecisionSnapshot,
+        FeatureSnapshot,
+    )
+    from app.database.models.trade_thesis import TradeThesis
     from app.database.models.market_smc import MarketSMCSignal
     from app.database.models.paper_trade import PaperTrade
     from app.database.models.risk_decision import RiskDecision
@@ -119,6 +127,7 @@ def bootstrap_sqlite_demo_data(engine):
         trade_plan_id = 1
         risk_id = 1
         paper_trade_id = 1
+        thesis_id = 1
         master_signal_id = 1
         ai_score_id = 1
 
@@ -135,7 +144,7 @@ def bootstrap_sqlite_demo_data(engine):
             symbol_id += 1
 
             for timeframe in TIMEFRAMES:
-                bias = profile["biases"][timeframe]
+                bias = profile["biases"].get(timeframe, profile["biases"].get("5m", "NEUTRAL"))
                 current_price = profile["price"]
                 candles = _build_candles(symbol, current_price, bias, now, timeframe)
                 for candle in candles:
@@ -177,12 +186,36 @@ def bootstrap_sqlite_demo_data(engine):
                     target3=target3,
                     risk_reward=risk_reward,
                     confidence=78.0 if trade_bias == "LONG" else 69.0,
+                    thesis_id=thesis_id,
                     status="OPEN",
                     created_at=now - timedelta(minutes=8),
                 )
                 db.add(trade_plan)
-                db.flush()
+                flush_or_rollback(db)
                 trade_plan_id += 1
+
+                thesis = TradeThesis(
+                    id=thesis_id,
+                    thesis_key=f"{symbol}:{trade_bias}:{trade_plan.id}",
+                    symbol=symbol,
+                    side=trade_bias,
+                    title=f"{symbol} {trade_bias} thesis",
+                    lifecycle_state="ACTIVE",
+                    source_signal=trade_bias,
+                    confidence=78.0 if trade_bias == "LONG" else 69.0,
+                    mode="intraday",
+                    entry_timeframe="1h",
+                    timeframe_stack="5m,15m,1h",
+                    regime="TRENDING_BULL" if trade_bias == "LONG" else "TRENDING_BEAR",
+                    trade_plan_id=trade_plan.id,
+                    assumptions_json='{"source":"bootstrap"}',
+                    invalidation_json='{"source":"bootstrap"}',
+                    targets_json='{"source":"bootstrap"}',
+                    created_at=now - timedelta(minutes=8),
+                    updated_at=now - timedelta(minutes=8),
+                )
+                thesis_id += 1
+                db.add(thesis)
 
                 risk = RiskDecision(
                     id=risk_id,
@@ -197,6 +230,7 @@ def bootstrap_sqlite_demo_data(engine):
                     position_size=1.25,
                     risk_percent=1.0,
                     confidence=78.0 if trade_bias == "LONG" else 69.0,
+                    thesis_id=trade_plan.thesis_id,
                     created_at=now - timedelta(minutes=7),
                 )
                 risk_id += 1
@@ -241,13 +275,14 @@ def bootstrap_sqlite_demo_data(engine):
                     side=trade_bias,
                     trade_plan_id=trade_plan.id,
                     risk_id=risk.id,
+                    thesis_id=trade_plan.thesis_id,
                     current_price=profile["price"],
                     now=now,
                     paper_trade_id_start=paper_trade_id,
                 )
                 paper_trade_id += 2
 
-        db.commit()
+        commit_or_rollback(db)
 
 
 def _build_candles(symbol, current_price, bias, now, timeframe):
@@ -415,6 +450,7 @@ def _seed_paper_trades(
     side,
     trade_plan_id,
     risk_id,
+    thesis_id,
     current_price,
     now,
     paper_trade_id_start,
@@ -425,6 +461,7 @@ def _seed_paper_trades(
         id=paper_trade_id_start,
         trade_plan_id=trade_plan_id,
         risk_decision_id=risk_id,
+        thesis_id=thesis_id,
         symbol=symbol,
         side=side,
         entry_price=round(current_price, 8),
@@ -445,6 +482,7 @@ def _seed_paper_trades(
         id=paper_trade_id_start + 1,
         trade_plan_id=trade_plan_id,
         risk_decision_id=risk_id,
+        thesis_id=thesis_id,
         symbol=symbol,
         side=side,
         entry_price=round(current_price * (0.99 if side == "LONG" else 1.01), 8),

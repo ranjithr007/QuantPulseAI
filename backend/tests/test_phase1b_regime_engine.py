@@ -3,6 +3,7 @@ import unittest
 
 from app.intelligence.master_ai_engine import score_master_signal_components
 from app.regimes.regime_engine import analyze_market
+from app.regimes.regime_engine import build_regime_contract
 from app.regimes.regime_engine import parse_regime_audit
 from app.regimes.regime_engine import regime_catalog
 from app.regimes.rules import REGIME_DEFINITIONS
@@ -37,6 +38,7 @@ def feature(
 class Phase1BRegimeEngineTests(unittest.TestCase):
     def test_regime_catalog_contains_13_v3_regimes(self):
         catalog = regime_catalog()
+        contract = build_regime_contract()
 
         self.assertEqual(len(REGIME_DEFINITIONS), 13)
         self.assertEqual(catalog["count"], 13)
@@ -44,6 +46,11 @@ class Phase1BRegimeEngineTests(unittest.TestCase):
         self.assertIn("TRENDING_BEAR", REGIME_DEFINITIONS)
         self.assertIn("MANIPULATION_PHASE", REGIME_DEFINITIONS)
         self.assertIn("LOW_VOLATILITY_COMPRESSION", REGIME_DEFINITIONS)
+        self.assertEqual(contract["version"], "v3_regime_13_v1")
+        self.assertEqual(contract["thresholds"]["min_transition_confidence"], 62)
+        self.assertEqual(contract["thresholds"]["hysteresis_margin"], 7)
+        self.assertEqual(contract["count"], 13)
+        self.assertEqual(len(contract["taxonomy"]), 13)
 
     def test_detects_representative_v3_regimes(self):
         cases = [

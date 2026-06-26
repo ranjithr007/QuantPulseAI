@@ -10,11 +10,13 @@ MEASUREMENT_VERSION = "extended_paper_measurement_v1"
 @dataclass(frozen=True)
 class MeasurementGates:
     min_closed_trades: int = 100
-    min_observation_days: int = 56
-    min_profit_factor: float = 1.25
+    min_observation_days: int = 90
+    min_profit_factor: float = 1.3
+    min_reward_risk: float = 1.5
+    min_win_rate_percent: float = 45.0
     min_expectancy_percent: float = 0.0
     min_total_return_percent: float = 0.0
-    max_drawdown_percent: float = 15.0
+    max_drawdown_percent: float = 20.0
     min_cohort_closed_trades: int = 20
 
     def __post_init__(self):
@@ -24,6 +26,10 @@ class MeasurementGates:
             raise ValueError("min_observation_days must be at least 1")
         if self.min_profit_factor <= 0:
             raise ValueError("min_profit_factor must be greater than zero")
+        if self.min_reward_risk <= 0:
+            raise ValueError("min_reward_risk must be greater than zero")
+        if not 0 < self.min_win_rate_percent <= 100:
+            raise ValueError("min_win_rate_percent must be between 0 and 100")
         if self.max_drawdown_percent <= 0:
             raise ValueError("max_drawdown_percent must be greater than zero")
         if self.min_cohort_closed_trades < 1:
@@ -67,6 +73,20 @@ def build_measurement_report(trades, gates=None, as_of=None):
             "greater_than",
         ),
         _check(
+            "win_rate",
+            overall["win_rate"] >= gates.min_win_rate_percent,
+            overall["win_rate"],
+            gates.min_win_rate_percent,
+            "minimum",
+        ),
+        _check(
+            "reward_risk_ratio",
+            _reward_risk_passes(overall, gates.min_reward_risk),
+            overall["payoff_ratio"],
+            gates.min_reward_risk,
+            "minimum",
+        ),
+        _check(
             "profit_factor",
             _profit_factor_passes(overall, gates.min_profit_factor),
             overall["profit_factor"],
@@ -97,8 +117,18 @@ def build_measurement_report(trades, gates=None, as_of=None):
         "status": status,
         "policy": {
             "objective": "Reliable positive expectancy after simulated fees and slippage",
-            "win_rate_gate": "NOT_USED",
-            "reason": "Win count alone does not determine profitability.",
+            "win_rate_gate": "EVALUATED",
+            "reason": "Win rate must be paired with reward/risk, expectancy, drawdown, and profit factor.",
+            "roadmap_targets": {
+                "min_closed_trades": gates.min_closed_trades,
+                "min_observation_days": gates.min_observation_days,
+                "min_profit_factor": gates.min_profit_factor,
+                "min_reward_risk": gates.min_reward_risk,
+                "min_win_rate_percent": gates.min_win_rate_percent,
+                "min_expectancy_percent": gates.min_expectancy_percent,
+                "min_total_return_percent": gates.min_total_return_percent,
+                "max_drawdown_percent": gates.max_drawdown_percent,
+            },
         },
         "gates": asdict(gates),
         "evaluation": {
@@ -280,6 +310,15 @@ def _profit_factor_passes(scorecard, threshold):
     if scorecard["gross_loss_percent"] == 0:
         return scorecard["gross_profit_percent"] > 0
     return scorecard["profit_factor"] >= threshold
+
+
+def _reward_risk_passes(scorecard, threshold):
+    payoff_ratio = scorecard.get("payoff_ratio")
+    if payoff_ratio is None:
+        gross_loss = float(scorecard.get("gross_loss_percent") or 0)
+        gross_profit = float(scorecard.get("gross_profit_percent") or 0)
+        return gross_loss == 0 and gross_profit > 0
+    return float(payoff_ratio) >= threshold
 
 
 def _check(name, passed, actual, threshold, comparison):

@@ -1,3 +1,5 @@
+import copy
+
 from app.database.models.funding_rates import FundingRate
 from app.database.models.liquidation_heatmaps import LiquidationHeatmap
 from app.database.models.open_interest import OpenInterest
@@ -17,10 +19,15 @@ CRITICAL_INPUTS = {"candle", "feature", "regime", "orderflow", "smc"}
 
 
 def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=900):
+    cache = _session_cache(db, "quantpulse_contradiction_reports")
+    cache_key = (symbol, timeframe, int(stale_after_seconds))
+    if cache is not None and cache_key in cache:
+        return copy.deepcopy(cache[cache_key])
+
     candle = get_latest_candle(db, symbol, timeframe)
 
     if candle is None:
-        return {
+        report = {
             "source": "contradiction_engine",
             "symbol": symbol,
             "timeframe": timeframe,
@@ -44,6 +51,9 @@ def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=9
                 "candle": freshness_status(None, stale_after_seconds),
             },
         }
+        if cache is not None:
+            cache[cache_key] = copy.deepcopy(report)
+        return report
 
     inputs = get_ai_inputs(db, symbol, timeframe)
     feature = inputs["feature"]
@@ -147,6 +157,8 @@ def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=9
         "heatmap": freshness["heatmap"],
     }
 
+    if cache is not None:
+        cache[cache_key] = copy.deepcopy(report)
     return report
 
 
@@ -491,6 +503,12 @@ def _direction_from_smc(smc):
     if smc is None:
         return "WAIT"
 
+    raw_bias = str(getattr(smc, "smc_bias", "") or "").upper()
+    if raw_bias == "LONG":
+        return "LONG"
+    if raw_bias == "SHORT":
+        return "SHORT"
+
     if _text_matches(getattr(smc, "smc_bias", None), "BULL"):
         return "LONG"
     if _text_matches(getattr(smc, "smc_bias", None), "BEAR"):
@@ -653,6 +671,14 @@ def _latest_heatmap(db, symbol):
         .order_by(LiquidationHeatmap.created_at.desc(), LiquidationHeatmap.id.desc())
         .first()
     )
+
+
+def _session_cache(db, key):
+    info = getattr(db, "info", None)
+    if not isinstance(info, dict):
+        return None
+
+    return info.setdefault(key, {})
 
 
 def _previous_candle(db, symbol, timeframe):

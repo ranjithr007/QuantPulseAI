@@ -1,4 +1,5 @@
 from app.database.models.backtest_results import BacktestResult
+from app.repositories._db_utils import commit_or_rollback
 
 
 class BacktestRepository:
@@ -7,4 +8,4 @@ class BacktestRepository:
 
         db.add(BacktestResult(**data))
 
-        db.commit()
+        commit_or_rollback(db)
