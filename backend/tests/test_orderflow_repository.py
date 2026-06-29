@@ -19,8 +19,10 @@ def test_save_orderflow_handles_engine_payload_and_class_call():
             "delta": 5.0,
             "cumulative_delta": 15.0,
             "buyer_strength": 75,
+            "CVD": 15.0,
             "seller_strength": 25,
             "absorption": "BUY_ABSORPTION",
+            "exhaustion": "NONE",
             "signal": "BUYERS_CONTROL",
             "confidence": 50,
             "created_at": datetime.utcnow(),
@@ -37,6 +39,7 @@ def test_save_orderflow_handles_engine_payload_and_class_call():
         assert saved.BuyerStrength == 75
         assert saved.SellerStrength == 25
         assert saved.Absorption == "BUY_ABSORPTION"
+        assert saved.Exhaustion == "NONE"
         assert saved.FlowSignal == "BUYERS_CONTROL"
         assert saved.Confidence == 50
     finally:
@@ -53,7 +56,19 @@ def test_save_orderflow_falls_back_to_delta_and_neutral_defaults():
             db,
             "ETHUSDT",
             "15m",
-            {"buy_volume": 1.0, "sell_volume": 2.0, "delta": -1.0},
+            {
+                "buy_volume": 1.0,
+                "sell_volume": 2.0,
+                "delta": -1.0,
+                "cumulative_delta":-1.0,
+                "buyer_strength": 50,
+                "CVD": -1.0,
+                "seller_strength": 50,
+                "absorption": "NONE",
+                "exhaustion": "NONE",
+                "signal": "NEUTRAL",
+                "confidence": 0,
+            },
         )
 
         saved = db.query(MarketOrderFlow).first()

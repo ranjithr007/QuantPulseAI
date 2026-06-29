@@ -71,27 +71,19 @@ class OrderFlowRepository:
 
     @staticmethod
     def save_orderflow(db, symbol, timeframe, data):
-
-        cvd = data.get("cumulative_delta", data.get("cvd", data.get("delta", 0)))
-        buyer_strength = data.get("buyer_strength", data.get("buyerStrength", 50))
-        seller_strength = data.get("seller_strength", data.get("sellerStrength", 50))
-        absorption = data.get("absorption", data.get("absorption_type", "NONE"))
-        signal = data.get("signal", data.get("flow_signal", "NEUTRAL"))
-        confidence = data.get("confidence", 0)
-
         record = MarketOrderFlow(
             Symbol=symbol,
-            Timeframe=timeframe,
-            BuyVolume=data.get("buy_volume", 0),
-            SellVolume=data.get("sell_volume", 0),
-            Delta=data.get("delta", 0),
-            CVD=cvd,
-            BuyerStrength=buyer_strength,
-            SellerStrength=seller_strength,
-            Absorption=absorption,
-            Exhaustion="NONE",
-            FlowSignal=signal,
-            Confidence=confidence,
+            Timeframe=timeframe,            
+            BuyVolume=data["buy_volume"],
+            SellVolume=data["sell_volume"],
+            Delta=data["delta"],
+            CVD=data["cumulative_delta"],
+            BuyerStrength=data["buyer_strength"],
+            SellerStrength=data["seller_strength"],
+            Absorption=data["absorption"],
+            Exhaustion=data["exhaustion"],
+            FlowSignal=data["signal"],
+            Confidence=data["confidence"],
         )
 
         db.add(record)
@@ -100,7 +92,7 @@ class OrderFlowRepository:
 
         return record
 
-    def get_last_cvd(self, db, symbol):
+    def get_last_cvd( db, symbol):
 
         last = (
             db.query(OrderFlowSignal)

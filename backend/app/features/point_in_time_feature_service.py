@@ -8,7 +8,6 @@ from app.repositories.point_in_time_snapshot_repository import save_decision_sna
 from app.repositories.point_in_time_snapshot_repository import save_feature_snapshot
 from app.utils.freshness import normalize_timestamp_to_utc
 
-
 FEATURE_VERSION = "feature_factory_v1"
 DECISION_VERSION = "decision_contract_v1"
 
@@ -31,7 +30,8 @@ def _to_naive_utc(timestamp):
 
 def _ensure_point_in_time_candles(candles, effective_timestamp, symbol, timeframe):
     normalized_effective = _to_naive_utc(
-        effective_timestamp or (candles[-1].candle_time if candles else datetime.utcnow())
+        effective_timestamp
+        or (candles[-1].candle_time if candles else datetime.utcnow())
     )
 
     if normalized_effective is None:
@@ -52,7 +52,9 @@ def _ensure_point_in_time_candles(candles, effective_timestamp, symbol, timefram
     return normalized_effective
 
 
-def build_feature_snapshot(symbol, timeframe, candles, *, source_timestamp=None, effective_timestamp=None):
+def build_feature_snapshot(
+    symbol, timeframe, candles, *, source_timestamp=None, effective_timestamp=None
+):
     ordered_candles = order_candles_for_features(candles)
     candle_timestamp = ordered_candles[-1].candle_time if ordered_candles else None
     effective_ts = _ensure_point_in_time_candles(
@@ -91,7 +93,9 @@ def build_decision_snapshot(
     trade_plan=None,
     context=None,
 ):
-    effective_ts = _to_naive_utc(effective_timestamp or source_timestamp or datetime.utcnow())
+    effective_ts = _to_naive_utc(
+        effective_timestamp or source_timestamp or datetime.utcnow()
+    )
     source_ts = _to_naive_utc(source_timestamp or effective_ts)
 
     snapshot = {
@@ -149,10 +153,14 @@ def build_point_in_time_leakage_diagnostics(
                 "lag_seconds": None,
             }
 
-        effective_timestamp = _to_naive_utc(getattr(snapshot, "effective_timestamp", None))
+        effective_timestamp = _to_naive_utc(
+            getattr(snapshot, "effective_timestamp", None)
+        )
         source_timestamp = _to_naive_utc(getattr(snapshot, "source_timestamp", None))
         version = getattr(snapshot, version_field, None)
-        within_as_of = as_of is None or effective_timestamp is None or effective_timestamp <= as_of
+        within_as_of = (
+            as_of is None or effective_timestamp is None or effective_timestamp <= as_of
+        )
         lag_seconds = None
         if as_of is not None and effective_timestamp is not None:
             lag_seconds = round((as_of - effective_timestamp).total_seconds(), 3)

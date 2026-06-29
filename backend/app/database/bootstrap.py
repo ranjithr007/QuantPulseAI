@@ -108,7 +108,7 @@ def bootstrap_sqlite_demo_data(engine):
     from app.database.models.trade_plan import TradePlan
     from app.database.sqlserver import Base
 
-    Base.metadata.create_all(bind=engine)
+    # Base.metadata.create_all(bind=engine)
 
     Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 

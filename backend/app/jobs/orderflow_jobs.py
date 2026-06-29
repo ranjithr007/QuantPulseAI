@@ -18,7 +18,7 @@ def run_orderflow_job():
     try:
 
         symbols = SymbolRepository().get_active_symbols(db)
-
+        results=[]
         for item in symbols:
 
             symbol = item.symbol
@@ -26,7 +26,7 @@ def run_orderflow_job():
             for tf in TIMEFRAMES:
                 try:
                     result = generate_orderflow(symbol, tf)
-
+                    results.append(result)
                     # print(symbol, tf, result)
                 except Exception as ex:
                     if not is_transient_network_error(ex):
@@ -34,6 +34,7 @@ def run_orderflow_job():
                             f"Orderflow job error {symbol} {tf}: {summarize_network_error(ex)}"
                         )
                     continue
+        return results
     except Exception as ex:
         safe_rollback(db)
         if not is_transient_network_error(ex):

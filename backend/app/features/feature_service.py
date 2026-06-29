@@ -9,14 +9,10 @@ from app.repositories.feature_repository import save_market_feature
 def generate_features(symbol, timeframe):
 
     db = SessionLocal()
-
     try:
-
         candles = get_latest_candles(db, symbol, timeframe)
-
         snapshot = build_feature_snapshot(symbol, timeframe, candles)
         features = snapshot["feature"]
-
         save_market_feature(db, features)
         persist_feature_snapshot(db, snapshot)
 

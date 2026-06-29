@@ -15,7 +15,7 @@ def run_regime_analysis():
     try:
 
         print("Starting Regime Analysis...")
-
+        results=[]
         features = (
             db.query(MarketFeature)
             .order_by(MarketFeature.CreatedAt.desc())
@@ -49,17 +49,13 @@ def run_regime_analysis():
             )
 
             db.add(regime)
+            results.append(result)
             saved += 1
 
         commit_or_rollback(db)
 
         print("Regime Analysis Completed")
-        return {
-            "source": "v3_regime_engine",
-            "processed": len(features),
-            "saved": saved,
-            "engine_version": "v3_regime_13_v1",
-        }
+        return results
 
     except Exception as e:
 

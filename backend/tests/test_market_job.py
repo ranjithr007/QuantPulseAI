@@ -11,7 +11,7 @@ from app.jobs.market_job import run_market_job
 
 
 def test_market_job_continues_after_one_timeframe_failure():
-    fake_db = SimpleNamespace(close=Mock())
+    fake_db = make_fake_db()
     symbol = SimpleNamespace(symbol="BTCUSDT")
     candle = {
         "symbol": "BTCUSDT",
@@ -43,7 +43,7 @@ def test_market_job_continues_after_one_timeframe_failure():
 
 
 def test_market_job_uses_bybit_fallback_when_binance_returns_no_candles():
-    fake_db = SimpleNamespace(close=Mock())
+    fake_db = make_fake_db()
     symbol = SimpleNamespace(symbol="BTCUSDT")
     candle = {
         "symbol": "BTCUSDT",
@@ -80,7 +80,7 @@ def test_market_job_uses_bybit_fallback_when_binance_returns_no_candles():
 
 
 def test_market_job_suppresses_transient_connection_errors():
-    fake_db = SimpleNamespace(close=Mock())
+    fake_db = make_fake_db()
     symbol = SimpleNamespace(symbol="BTCUSDT")
 
     with patch("app.jobs.market_job.SessionLocal", return_value=fake_db), patch(
@@ -111,3 +111,10 @@ def test_market_job_suppresses_transient_connection_errors():
         for call in print_mock.call_args_list
     ]
     assert not any("Market job error" in message for message in error_messages)
+
+def make_fake_db():
+    return SimpleNamespace(
+        commit=Mock(),
+        rollback=Mock(),
+        close=Mock(),
+    )

@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
-
+from unittest.mock import patch,Mock
 from sqlalchemy import create_engine
 from sqlalchemy import inspect
 from sqlalchemy import text
@@ -60,7 +59,7 @@ def test_latest_for_symbols_handles_empty_input_without_querying():
 
 
 def test_save_persists_point_in_time_decision_snapshot():
-    fake_db = SimpleNamespace()
+    fake_db = make_fake_db()
     fake_db.add = lambda *args, **kwargs: None
     fake_db.flush = lambda: None
     fake_db.close = lambda: None
@@ -203,3 +202,11 @@ def test_ensure_trade_thesis_lineage_schema_adds_missing_thesis_id_column():
             assert index_name in indexes
     finally:
         session.close()
+
+def make_fake_db():
+    return SimpleNamespace(
+        commit=Mock(),
+        rollback=Mock(),
+        close=Mock(),
+    )
+

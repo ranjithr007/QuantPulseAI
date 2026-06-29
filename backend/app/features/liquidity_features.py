@@ -1,22 +1,23 @@
-def calculate_liquidity(candles):
+from typing import Any
+from app.features.feature_market_metrics import calculate_liquidity_metrics
 
-    if len(candles) < 20:
-        return 0
+def calculate_liquidity(
+    symbol: str,
+    timeframe: str,
+    candles,
+) -> tuple[float, dict[str, Any]]:
+    """Return candle-liquidity score and the complete metrics response."""
+    data = calculate_liquidity_metrics(
+        candles=candles,
+        symbol=symbol,
+        timeframe=timeframe,
+    )
 
-    latest_volume = candles[-1].volume
-    avg_volume = sum(c.volume for c in candles[-20:]) / 20
-    ratio = latest_volume / avg_volume if avg_volume > 0 else 0
+    # Insufficient/invalid candle data should remain neutral.
+    liquidity_score = (
+        float(data.get("liquidity_score", 50.0))
+        if data.get("is_usable", False)
+        else 50.0
+    )
 
-    if ratio >= 2:
-
-        score = 90
-
-    elif ratio >= 1:
-
-        score = 60
-
-    else:
-
-        score = 30
-
-    return score
+    return liquidity_score, data

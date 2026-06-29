@@ -17,7 +17,10 @@ def test_run_intelligence_job_continues_after_symbol_error():
         return_value=symbols,
     ), patch(
         "app.jobs.intelligence_job.MarketFeatureBuilder.build",
-        side_effect=[RuntimeError("boom"), {"funding": 1, "oi_change": 2, "price_change": 3}],
+        side_effect=[
+            RuntimeError("boom"),
+            {"funding": 1, "oi_change": 2, "price_change": 3},
+        ],
     ), patch(
         "app.jobs.intelligence_job.LiquidityEngine.analyze",
         return_value={"symbol": "ETHUSDT"},
@@ -49,9 +52,7 @@ def test_run_signal_quality_job_continues_after_signal_error():
     with patch("app.jobs.signal_quality_job.SessionLocal", return_value=fake_db), patch(
         "app.jobs.signal_quality_job.SignalQualityEngine.analyze",
         side_effect=[RuntimeError("boom"), {"symbol": "ETHUSDT"}],
-    ), patch(
-        "app.jobs.signal_quality_job.SignalQualityRepository.save"
-    ) as save:
+    ), patch("app.jobs.signal_quality_job.SignalQualityRepository.save") as save:
         run_signal_quality_job()
 
     assert save.called
@@ -62,7 +63,9 @@ def test_run_whale_intelligence_job_continues_after_symbol_error():
     fake_db = SimpleNamespace(close=Mock())
     symbols = [SimpleNamespace(symbol="BTCUSDT"), SimpleNamespace(symbol="ETHUSDT")]
 
-    with patch("app.jobs.whale_intelligence_job.SessionLocal", return_value=fake_db), patch(
+    with patch(
+        "app.jobs.whale_intelligence_job.SessionLocal", return_value=fake_db
+    ), patch(
         "app.jobs.whale_intelligence_job.SymbolRepository.get_active_symbols",
         return_value=symbols,
     ), patch(
@@ -80,7 +83,7 @@ def test_run_whale_intelligence_job_continues_after_symbol_error():
 def test_run_smc_job_continues_after_timeframe_error():
     fake_db = SimpleNamespace(close=Mock(), query=Mock())
     symbols = [SimpleNamespace(symbol="BTCUSDT")]
-    candles = [SimpleNamespace(close_price=100.0) for _ in range(20)]
+    candles = [SimpleNamespace(id=_ + 1, close_price=100.0) for _ in range(20)]
 
     class FakeQuery:
         def filter(self, *args, **kwargs):

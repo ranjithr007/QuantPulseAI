@@ -1,33 +1,27 @@
-def calculate_volatility(candles):
+from typing import Any
+from app.features.feature_market_metrics import calculate_volatility_metrics
 
-    if len(candles) < 14:
-        return 0, 0
+def calculate_volatility(
+    symbol: str,
+    timeframe: str,
+    candles,
+) -> tuple[float, float, dict[str, Any]]:
+    """Return volatility score, ATR and the complete metrics response."""
+    data = calculate_volatility_metrics(
+        candles=candles,
+        symbol=symbol,
+        timeframe=timeframe,
+    )
 
-    trs = []
+    # Insufficient/invalid candle data should remain neutral, not bullish/bearish.
+    volatility_score = (
+        float(data.get("volatility_score", 50.0))
+        if data.get("is_usable", False)
+        else 50.0
+    )
 
-    for i in range(1, len(candles)):
+    atr_value = data.get("atr")
+    atr = float(atr_value) if atr_value is not None else 0.0
 
-        high = candles[i].high_price
-        low = candles[i].low_price
-        prev_close = candles[i - 1].close_price
+    return volatility_score, atr, data
 
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-
-        trs.append(tr)
-
-    atr = sum(trs[-14:]) / 14
-
-    current_price = candles[-1].close_price     
-
-    atr_percent = (atr / current_price) * 100
-
-    if atr_percent > 3:
-        score = 90
-
-    elif atr_percent > 1:
-        score = 60
-
-    else:
-        score = 30
-
-    return score, atr

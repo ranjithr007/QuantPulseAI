@@ -18,11 +18,8 @@ class FusionService:
     def generate(self, db, symbol, timeframe: str = "5m", stale_after_seconds: int = 900):
 
         feature = self.repo.get_latest_feature(db, symbol, timeframe)
-
         regime = self.repo.get_latest_regime(db, symbol, timeframe)
-
         orderflow = self.repo.get_latest_orderflow(db, symbol, timeframe)
-
         smc = self.repo.get_latest_smc(db, symbol, timeframe)
 
         # print("REGIME confidence:", regime.Confidence)

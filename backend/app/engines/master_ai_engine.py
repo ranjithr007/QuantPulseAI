@@ -182,9 +182,10 @@ class MasterAIEngine:
         else:
 
             risk = "HIGH"
-        trade_risk = self.risk_engine.calculate(
-            signal=signal, price=current_price, atr=atr
+        trade_risk = self.risk_engine.analyze(
+           symbol=symbol, signal=signal, price=current_price, atr=atr,confidence=confidence
         )
+        reasons.extend(trade_risk.get("reason"))
         return {
             "symbol": symbol,
             "signal": signal,
@@ -198,6 +199,6 @@ class MasterAIEngine:
             "target_price": trade_risk.get("target_price"),
             "risk_reward": trade_risk.get("risk_reward"),
             "position_size": trade_risk.get("position_size"),
-            "trade_allowed": trade_risk.get("trade_allowed"),
+            "trade_allowed": trade_risk.get("decision"),
             "reasons": ",".join(reasons),
         }

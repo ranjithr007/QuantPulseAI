@@ -8,17 +8,19 @@ from app.repositories.smc_repository import SMCRepository
 
 
 class Candle:
-    def __init__(self, open_price, close_price, volume):
+    def __init__(self, open_price, close_price, high_price, low_price, volume):
         self.open_price = open_price
         self.close_price = close_price
+        self.high_price = high_price
+        self.low_price = low_price
         self.volume = volume
 
 
 def test_orderflow_engine_marks_negative_delta_as_sellers_control():
     candles = [
-        Candle(10, 9, 100),
-        Candle(9, 8, 120),
-        Candle(8, 8.5, 30),
+        Candle(10, 9, 11, 8, 100),
+        Candle(9, 8, 9, 7, 120),
+        Candle(8, 8.5, 10, 8, 30),
     ]
 
     result = analyze_orderflow(candles)

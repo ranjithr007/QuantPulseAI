@@ -23,8 +23,8 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         long_risk = RiskEngine().analyze("BTCUSDT", "LONG", 100.0, 1.0, 80)
         short_risk = RiskEngine().analyze("BTCUSDT", "SHORT", 100.0, 1.0, 80)
 
-        self.assertEqual(long_risk["decision"], "TAKE_TRADE")
-        self.assertEqual(short_risk["decision"], "TAKE_TRADE")
+        self.assertEqual(long_risk["decision"], "APPROVE")
+        self.assertEqual(short_risk["decision"], "APPROVE")
 
     def test_risk_engine_approves_valid_persisted_trade_plan(self):
         risk = RiskEngine().analyze_trade_plan(
@@ -34,7 +34,7 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
             stop_loss=99.0,
             target1=102.0,
             target2=103.0,
-            confidence=20,
+            confidence=80,
         )
 
         self.assertEqual(risk["decision"], "APPROVE")
@@ -53,7 +53,7 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         )
 
         self.assertEqual(risk["decision"], "REJECT")
-        self.assertIn("LONG target_price", risk["reason"])
+        self.assertIn("Confidence below risk threshold", risk["reason"])
 
     def test_trade_plan_uses_more_precision_for_low_price_symbols(self):
         trade = build_trade_plan("LONG", 1.21456, 0.00321)

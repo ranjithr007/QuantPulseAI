@@ -19,27 +19,25 @@ def run_intelligence_job():
     db = SessionLocal()
     try:
         symbols = SymbolRepository().get_active_symbols(db)
-
+        results=[]
         for item in symbols:
             try:
                 symbol = item.symbol
                 features = MarketFeatureBuilder().build(db, symbol)
-
                 if not features:
-
-                    continue
-                
+                    continue                
                 # print("FEATURES:", features)
                 result = LiquidityEngine().analyze(
                     symbol, features["funding"], features["oi_change"], features["price_change"]
                 )
                 LiquidityRepository().save(db, result)
-
+                results.append(result)
                 # print(result)
             except Exception as ex:
                 if not is_transient_network_error(ex):
                     print(f"Intelligence job error {item.symbol}: {classify_network_error(ex)}")
                 continue
+        return results
     except Exception as ex:
         safe_rollback(db)
         if not is_transient_network_error(ex):

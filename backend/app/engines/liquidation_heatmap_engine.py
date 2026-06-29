@@ -14,27 +14,17 @@ class LiquidationHeatmapEngine:
         )
 
         above = {}
-
         below = {}
-
         for liq in liquidations:
-
             level = round(liq.price / 100) * 100
-
             if liq.price > current_price:
-
                 above[level] = above.get(level, 0) + liq.value_usd
-
             else:
-
                 below[level] = below.get(level, 0) + liq.value_usd
 
         top_above = max(above, key=above.get) if above else None
-
         top_below = max(below, key=below.get) if below else None
-
         above_value = above[top_above] if top_above else 0
-
         below_value = below[top_below] if top_below else 0
 
         # =============================

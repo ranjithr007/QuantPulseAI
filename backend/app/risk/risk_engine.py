@@ -1,86 +1,118 @@
+from math import isfinite
+
 from app.risk.stop_loss_engine import StopLossEngine
 from app.risk.target_engine import TargetEngine
 from app.risk.position_sizing import PositionSizer
-from app.utils.signal_validation import validate_trade_plan_direction
 
 
 class RiskEngine:
+    MIN_CONFIDENCE = 65.0
+    MIN_RISK_REWARD = 2.0
+
+    SIGNAL_TO_SIDE = {
+        "BUY": "LONG",
+        "LONG": "LONG",
+        "STRONG_LONG": "LONG",
+        "SELL": "SHORT",
+        "SHORT": "SHORT",
+        "STRONG_SHORT": "SHORT",
+    }
+
+    NON_ACTIONABLE_SIGNALS = {
+        "",
+        "WAIT",
+        "HOLD",
+        "NEUTRAL",
+        "NO_TRADE",
+    }
 
     def __init__(self):
-
         self.stop_engine = StopLossEngine()
-
         self.target_engine = TargetEngine()
-
         self.sizer = PositionSizer()
 
-    def analyze(self, symbol, signal, price, atr, confidence):
+    def analyze(
+        self,
+        symbol,
+        signal,
+        price,
+        atr,
+        confidence,
+        capital=10000,
+        risk_percent=1,
+    ):
+        raw_signal = str(signal).strip().upper() if signal is not None else ""
 
-        if signal in {"WAIT", "HOLD", None}:
+        if raw_signal in self.NON_ACTIONABLE_SIGNALS:
+            return self._basic_rejection(
+                symbol=symbol,
+                signal=raw_signal or None,
+                reason="No actionable trade signal",
+                confidence=confidence,
+            )
 
-            return {
-                "symbol": symbol,
-                "signal": signal,
-                "decision": "REJECT",
-                "reason": "No actionable trade signal",
-                "confidence": confidence,
-            }
+        side = self.SIGNAL_TO_SIDE.get(raw_signal)
 
-        if confidence < 70:
+        if side is None:
+            return self._basic_rejection(
+                symbol=symbol,
+                signal=raw_signal,
+                reason=f"Unsupported signal: {raw_signal}",
+                confidence=confidence,
+            )
 
-            return {
-                "symbol": symbol,
-                "signal": signal,
-                "decision": "REJECT",
-                "reason": "Confidence below risk threshold",
-                "confidence": confidence,
-            }
+        try:
+            price = self._to_finite_float("price", price)
+            atr = self._to_finite_float("atr", atr)
+            confidence = self._to_finite_float("confidence", confidence)
+            capital = self._to_finite_float("capital", capital)
+            risk_percent = self._to_finite_float("risk_percent", risk_percent)
+        except ValueError as exc:
+            return self._basic_rejection(
+                symbol=symbol,
+                signal=side,
+                reason=str(exc),
+                confidence=confidence,
+            )
 
-        stop = self.stop_engine.calculate(signal, price, atr)
+        if price <= 0:
+            return self._basic_rejection(
+                symbol, side, "Price must be greater than zero", confidence
+            )
 
-        if stop is None:
+        if atr <= 0:
+            return self._basic_rejection(
+                symbol, side, "ATR must be greater than zero", confidence
+            )
 
-            return {
-                "symbol": symbol,
-                "signal": signal,
-                "decision": "REJECT",
-                "reason": f"Unsupported signal: {signal}",
-                "confidence": confidence,
-            }
-
-        targets = self.target_engine.calculate(signal, price, stop)
-
-        if not targets:
-
-            return {
-                "symbol": symbol,
-                "signal": signal,
-                "decision": "REJECT",
-                "reason": f"Could not calculate targets for signal: {signal}",
-                "confidence": confidence,
-            }
-
-        risk = abs(price - stop)
-
-        reward = abs(targets["t1"] - price)
-
-        rr = reward / risk
-
-        qty = self.sizer.calculate(
-            capital=10000, risk_percent=1, entry=price, stop=stop
+        stop_loss = self.stop_engine.calculate(
+            side,
+            price,
+            atr,
         )
 
-        return {
-            "symbol": symbol,
-            "signal": signal,
-            "decision": "TAKE_TRADE",
-            "entry": price,
-            "stop_loss": stop,
-            "targets": targets,
-            "risk_reward": rr,
-            "position_size": qty,
-            "confidence": confidence,
-        }
+        targets = self.target_engine.calculate(
+            side,
+            price,
+            stop_loss,
+        )
+
+        result = self.analyze_trade_plan(
+            symbol=symbol,
+            side=side,
+            entry=price,
+            stop_loss=stop_loss,
+            target1=targets["t1"],
+            target2=targets["t2"],
+            confidence=confidence,
+            risk_percent=risk_percent,
+            capital=capital,
+        )
+
+        if result["decision"] == "APPROVE":
+            result["reason"] = "Generated trade plan passed risk checks"
+
+        return result
 
     def analyze_trade_plan(
         self,
@@ -94,121 +126,284 @@ class RiskEngine:
         risk_percent=1,
         capital=10000,
     ):
-        validation = validate_trade_plan_direction(side, entry, target1)
-
-        if not validation["is_valid"]:
-            return self._reject_trade_plan(
-                symbol,
-                side,
-                entry,
-                stop_loss,
-                target1,
-                target2,
-                confidence,
-                risk_percent,
-                "; ".join(validation["errors"]),
-            )
-
+        # Required values must be checked before comparisons.
         if entry is None or stop_loss is None or target1 is None:
             return self._reject_trade_plan(
-                symbol,
-                side,
-                entry,
-                stop_loss,
-                target1,
-                target2,
-                confidence,
-                risk_percent,
-                "entry, stop_loss, and target1 are required",
+                symbol=symbol,
+                side=side,
+                entry=entry,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                confidence=confidence,
+                risk_percent=risk_percent,
+                reason="entry, stop_loss, and target1 are required",
             )
 
-        if side == "LONG" and stop_loss >= entry:
+        raw_side = str(side).strip().upper() if side is not None else ""
+
+        canonical_side = self.SIGNAL_TO_SIDE.get(raw_side)
+
+        if canonical_side is None:
+            return self._reject_trade_plan(
+                symbol=symbol,
+                side=raw_side,
+                entry=entry,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                confidence=confidence,
+                risk_percent=risk_percent,
+                reason=f"Unsupported trade side: {raw_side}",
+            )
+
+        try:
+            entry = self._to_finite_float("entry", entry)
+            stop_loss = self._to_finite_float("stop_loss", stop_loss)
+            target1 = self._to_finite_float("target1", target1)
+            confidence = self._to_finite_float("confidence", confidence)
+            risk_percent = self._to_finite_float("risk_percent", risk_percent)
+            capital = self._to_finite_float("capital", capital)
+
+            if target2 is not None:
+                target2 = self._to_finite_float("target2", target2)
+
+        except ValueError as exc:
+            return self._reject_trade_plan(
+                symbol=symbol,
+                side=canonical_side,
+                entry=entry,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                confidence=confidence,
+                risk_percent=risk_percent,
+                reason=str(exc),
+            )
+
+        if min(entry, stop_loss, target1) <= 0:
             return self._reject_trade_plan(
                 symbol,
-                side,
+                canonical_side,
                 entry,
                 stop_loss,
                 target1,
                 target2,
                 confidence,
                 risk_percent,
-                "LONG stop_loss must be less than entry",
+                "Entry, stop loss, and target prices must be positive",
             )
 
-        if side == "SHORT" and stop_loss <= entry:
+        if target2 is not None and target2 <= 0:
             return self._reject_trade_plan(
                 symbol,
-                side,
+                canonical_side,
                 entry,
                 stop_loss,
                 target1,
                 target2,
                 confidence,
                 risk_percent,
-                "SHORT stop_loss must be greater than entry",
+                "Target 2 must be positive",
             )
 
-        risk = abs(entry - stop_loss)
-
-        if risk <= 0:
+        if not 0 <= confidence <= 100:
             return self._reject_trade_plan(
                 symbol,
-                side,
+                canonical_side,
                 entry,
                 stop_loss,
                 target1,
                 target2,
                 confidence,
                 risk_percent,
-                "Risk distance must be greater than zero",
+                "Confidence must be between 0 and 100",
             )
 
-        reward = abs(target1 - entry)
-        rr = round(reward / risk, 2)
-        position_size = self.sizer.calculate(
-            capital=capital,
-            risk_percent=risk_percent,
-            entry=entry,
-            stop=stop_loss,
-        )
+        if confidence < self.MIN_CONFIDENCE:
+            return self._reject_trade_plan(
+                symbol,
+                canonical_side,
+                entry,
+                stop_loss,
+                target1,
+                target2,
+                confidence,
+                risk_percent,
+                "Confidence below risk threshold",
+            )
 
-        if rr < 2:
-            return {
-                "symbol": symbol,
-                "signal": side,
-                "decision": "REJECT",
-                "reason": "Risk reward below minimum threshold",
-                "entry": entry,
-                "stop_loss": stop_loss,
-                "targets": {
-                    "t1": target1,
-                    "t2": target2,
-                },
-                "risk_reward": rr,
-                "position_size": position_size,
-                "risk_percent": risk_percent,
-                "confidence": confidence,
-            }
+        if capital <= 0:
+            return self._reject_trade_plan(
+                symbol,
+                canonical_side,
+                entry,
+                stop_loss,
+                target1,
+                target2,
+                confidence,
+                risk_percent,
+                "Capital must be greater than zero",
+            )
+
+        if not 0 < risk_percent <= 100:
+            return self._reject_trade_plan(
+                symbol,
+                canonical_side,
+                entry,
+                stop_loss,
+                target1,
+                target2,
+                confidence,
+                risk_percent,
+                "Risk percentage must be greater than 0 and at most 100",
+            )
+
+        if canonical_side == "LONG":
+            if not stop_loss < entry < target1:
+                return self._reject_trade_plan(
+                    symbol,
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    target2,
+                    confidence,
+                    risk_percent,
+                    "LONG requires stop_loss < entry < target1",
+                )
+
+            if target2 is not None and target2 <= target1:
+                return self._reject_trade_plan(
+                    symbol,
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    target2,
+                    confidence,
+                    risk_percent,
+                    "LONG target2 must be greater than target1",
+                )
+
+            risk_distance = entry - stop_loss
+            reward_distance = target1 - entry
+
+        else:
+            if not stop_loss > entry > target1:
+                return self._reject_trade_plan(
+                    symbol,
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    target2,
+                    confidence,
+                    risk_percent,
+                    "SHORT requires stop_loss > entry > target1",
+                )
+
+            if target2 is not None and target2 >= target1:
+                return self._reject_trade_plan(
+                    symbol,
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    target2,
+                    confidence,
+                    risk_percent,
+                    "SHORT target2 must be less than target1",
+                )
+
+            risk_distance = stop_loss - entry
+            reward_distance = entry - target1
+
+        raw_rr = reward_distance / risk_distance
+
+        # Compare before rounding.
+        if raw_rr < self.MIN_RISK_REWARD:
+            return self._reject_trade_plan(
+                symbol=symbol,
+                side=canonical_side,
+                entry=entry,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                confidence=confidence,
+                risk_percent=risk_percent,
+                reason="Risk reward below minimum threshold",
+                risk_reward=round(raw_rr, 2),
+            )
+
+        try:
+            position_size = self.sizer.calculate(
+                capital=capital,
+                risk_percent=risk_percent,
+                entry=entry,
+                stop=stop_loss,
+            )
+        except ValueError as exc:
+            return self._reject_trade_plan(
+                symbol,
+                canonical_side,
+                entry,
+                stop_loss,
+                target1,
+                target2,
+                confidence,
+                risk_percent,
+                str(exc),
+                risk_reward=round(raw_rr, 2),
+            )
 
         return {
             "symbol": symbol,
-            "signal": side,
+            "signal": canonical_side,
             "decision": "APPROVE",
-            "reason": "Persisted trade plan passed risk checks",
+            "reason": "Trade plan passed risk checks",
             "entry": entry,
             "stop_loss": stop_loss,
             "targets": {
                 "t1": target1,
                 "t2": target2,
             },
-            "risk_reward": rr,
+            "risk_reward": round(raw_rr, 2),
             "position_size": position_size,
             "risk_percent": risk_percent,
+            "risk_amount": capital * risk_percent / 100,
             "confidence": confidence,
         }
 
+    @staticmethod
+    def _to_finite_float(name, value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a valid number") from exc
+
+        if not isfinite(number):
+            raise ValueError(f"{name} must be a finite number")
+
+        return number
+
+    @staticmethod
+    def _basic_rejection(
+        symbol,
+        signal,
+        reason,
+        confidence,
+    ):
+        return {
+            "symbol": symbol,
+            "signal": signal,
+            "decision": "REJECT",
+            "reason": reason,
+            "confidence": confidence,
+        }
+
+    @staticmethod
     def _reject_trade_plan(
-        self,
         symbol,
         side,
         entry,
@@ -218,6 +413,7 @@ class RiskEngine:
         confidence,
         risk_percent,
         reason,
+        risk_reward=None,
     ):
         return {
             "symbol": symbol,
@@ -230,8 +426,33 @@ class RiskEngine:
                 "t1": target1,
                 "t2": target2,
             },
-            "risk_reward": None,
+            "risk_reward": risk_reward,
+            # Rejected plans must not expose executable quantity.
             "position_size": None,
             "risk_percent": risk_percent,
             "confidence": confidence,
         }
+
+    def calculate_risk_reward(
+        signal,
+        entry,
+        stop_loss,
+        target,
+    ):
+        signal = str(signal or "").strip().upper()
+
+        if signal in {"LONG", "BUY"}:
+            risk = entry - stop_loss
+            reward = target - entry
+
+        elif signal in {"SHORT", "SELL"}:
+            risk = stop_loss - entry
+            reward = entry - target
+
+        else:
+            return None
+
+        if risk <= 0 or reward <= 0:
+            return None
+
+        return reward / risk

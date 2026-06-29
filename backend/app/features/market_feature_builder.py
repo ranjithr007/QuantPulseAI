@@ -16,13 +16,9 @@ class MarketFeatureBuilder:
         )
 
         if len(candles) < 2:
-
             return None
-
         latest = candles[0]
-
         previous = candles[1]
-
         price_change = (
             (latest.close_price - previous.close_price) / previous.close_price
         ) * 100

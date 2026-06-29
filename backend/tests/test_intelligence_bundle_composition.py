@@ -18,6 +18,7 @@ def test_multi_timeframe_context_is_reused_across_bundle_builders(monkeypatch):
         "combine_timeframe_signals",
         lambda timeframes: {"overall_bias": "WAIT", "trade_permission": "WAIT"},
     )
+    
     monkeypatch.setattr(
         signals_api,
         "build_trade_setup_decision",
@@ -107,8 +108,12 @@ def test_intelligence_as_of_snapshot_endpoint_uses_point_in_time_tables(monkeypa
             snapshot_json='{"kind":"decision"}',
         )
 
-    monkeypatch.setattr(intelligence_api, "get_feature_snapshot_as_of", feature_snapshot)
-    monkeypatch.setattr(intelligence_api, "get_decision_snapshot_as_of", decision_snapshot)
+    monkeypatch.setattr(
+        intelligence_api, "get_feature_snapshot_as_of", feature_snapshot
+    )
+    monkeypatch.setattr(
+        intelligence_api, "get_decision_snapshot_as_of", decision_snapshot
+    )
 
     class FakeDb:
         def rollback(self):
@@ -141,22 +146,38 @@ def test_trade_setup_payload_persists_ready_decision_snapshot(monkeypatch):
     context = {
         "stack": ["5m", "15m", "1h"],
         "timeframes": [{"timeframe": "5m"}],
-        "confirmation": {"overall_bias": "BULLISH_ALIGNMENT", "trade_permission": "LONG_ALLOWED", "confidence": 81},
+        "confirmation": {
+            "overall_bias": "BULLISH_ALIGNMENT",
+            "trade_permission": "LONG_ALLOWED",
+            "confidence": 81,
+        },
     }
-    candle = SimpleNamespace(candle_time=datetime(2026, 6, 24, 3, 0, 0), close_price=100)
+    candle = SimpleNamespace(
+        candle_time=datetime(2026, 6, 24, 3, 0, 0), close_price=100
+    )
     feature = SimpleNamespace(ATR=1.5)
-    snapshot_record = SimpleNamespace(id=99, decision_version="decision_contract_v1", effective_timestamp=candle.candle_time)
+    snapshot_record = SimpleNamespace(
+        id=99,
+        decision_version="decision_contract_v1",
+        effective_timestamp=candle.candle_time,
+    )
 
     def persist_snapshot(db_arg, snapshot):
         calls["snapshot"] = snapshot
         return snapshot_record
 
     monkeypatch.setattr(signals_api, "_latest_candle", lambda *args, **kwargs: candle)
-    monkeypatch.setattr(signals_api, "get_ai_inputs", lambda *args, **kwargs: {"feature": feature})
+    monkeypatch.setattr(
+        signals_api, "get_ai_inputs", lambda *args, **kwargs: {"feature": feature}
+    )
     monkeypatch.setattr(
         signals_api,
         "build_trade_setup_decision",
-        lambda confirmation, timeframes: {"status": "READY", "side": "LONG", "reason": "ready"},
+        lambda confirmation, timeframes: {
+            "status": "READY",
+            "side": "LONG",
+            "reason": "ready",
+        },
     )
     monkeypatch.setattr(
         signals_api,
@@ -166,7 +187,11 @@ def test_trade_setup_payload_persists_ready_decision_snapshot(monkeypatch):
     monkeypatch.setattr(
         signals_api,
         "build_trade_plan",
-        lambda side, current_price, atr: {"entry": current_price, "target1": current_price + 2, "target2": current_price + 3},
+        lambda side, current_price, atr: {
+            "entry": current_price,
+            "target1": current_price + 2,
+            "target2": current_price + 3,
+        },
     )
     monkeypatch.setattr(
         signals_api,
@@ -175,7 +200,9 @@ def test_trade_setup_payload_persists_ready_decision_snapshot(monkeypatch):
     )
     monkeypatch.setattr(signals_api, "persist_decision_snapshot", persist_snapshot)
 
-    payload = signals_api.build_trade_setup_payload(db, "BTCUSDT", mode="intraday", context=context)
+    payload = signals_api.build_trade_setup_payload(
+        db, "BTCUSDT", mode="intraday", context=context
+    )
 
     assert calls["snapshot"]["decision"] == "READY"
     assert calls["snapshot"]["trade_plan"]["entry"] == 100
@@ -183,7 +210,9 @@ def test_trade_setup_payload_persists_ready_decision_snapshot(monkeypatch):
     assert payload["trade_plan"]["entry"] == 100
 
 
-def test_intelligence_bundle_returns_partial_payload_when_one_section_fails(monkeypatch):
+def test_intelligence_bundle_returns_partial_payload_when_one_section_fails(
+    monkeypatch,
+):
     calls = []
 
     class FakeDb:
@@ -231,8 +260,20 @@ def test_intelligence_bundle_returns_partial_payload_when_one_section_fails(monk
     )
     monkeypatch.setattr(
         intelligence_api,
+        "build_derivatives_payload",
+        lambda *args, **kwargs: {
+            "source": "derivatives",
+            "status": "OK",
+        },
+    )
+    monkeypatch.setattr(
+        intelligence_api,
         "build_multi_timeframe_context",
-        lambda *args, **kwargs: {"stack": ["5m", "15m", "1h"], "timeframes": [], "confirmation": {}},
+        lambda *args, **kwargs: {
+            "stack": ["5m", "15m", "1h"],
+            "timeframes": [],
+            "confirmation": {},
+        },
     )
     monkeypatch.setattr(
         intelligence_api,
@@ -272,27 +313,48 @@ def test_entry_trigger_payload_persists_ready_decision_snapshot(monkeypatch):
     context = {
         "stack": ["5m", "15m", "1h"],
         "timeframes": [{"timeframe": "5m"}],
-        "confirmation": {"overall_bias": "BULLISH_ALIGNMENT", "trade_permission": "LONG_ALLOWED", "confidence": 82},
+        "confirmation": {
+            "overall_bias": "BULLISH_ALIGNMENT",
+            "trade_permission": "LONG_ALLOWED",
+            "confidence": 82,
+        },
     }
-    candle = SimpleNamespace(candle_time=datetime(2026, 6, 24, 3, 0, 0), close_price=100)
+    candle = SimpleNamespace(
+        candle_time=datetime(2026, 6, 24, 3, 0, 0), close_price=100
+    )
     feature = SimpleNamespace(ATR=1.5)
-    snapshot_record = SimpleNamespace(id=100, decision_version="decision_contract_v1", effective_timestamp=candle.candle_time)
+    snapshot_record = SimpleNamespace(
+        id=100,
+        decision_version="decision_contract_v1",
+        effective_timestamp=candle.candle_time,
+    )
 
     def persist_snapshot(db_arg, snapshot):
         calls["snapshot"] = snapshot
         return snapshot_record
 
     monkeypatch.setattr(signals_api, "_latest_candle", lambda *args, **kwargs: candle)
-    monkeypatch.setattr(signals_api, "get_ai_inputs", lambda *args, **kwargs: {"feature": feature})
+    monkeypatch.setattr(
+        signals_api, "get_ai_inputs", lambda *args, **kwargs: {"feature": feature}
+    )
     monkeypatch.setattr(
         signals_api,
         "build_entry_trigger_decision",
-        lambda confirmation, timeframes: {"status": "READY", "side": "LONG", "reason": "ready", "conditions": []},
+        lambda confirmation, timeframes: {
+            "status": "READY",
+            "side": "LONG",
+            "reason": "ready",
+            "conditions": [],
+        },
     )
     monkeypatch.setattr(
         signals_api,
         "build_trade_plan",
-        lambda side, current_price, atr: {"entry": current_price, "target1": current_price + 2, "target2": current_price + 3},
+        lambda side, current_price, atr: {
+            "entry": current_price,
+            "target1": current_price + 2,
+            "target2": current_price + 3,
+        },
     )
     monkeypatch.setattr(
         signals_api,
@@ -301,7 +363,9 @@ def test_entry_trigger_payload_persists_ready_decision_snapshot(monkeypatch):
     )
     monkeypatch.setattr(signals_api, "persist_decision_snapshot", persist_snapshot)
 
-    payload = signals_api.build_entry_trigger_payload(db, "BTCUSDT", mode="intraday", context=context)
+    payload = signals_api.build_entry_trigger_payload(
+        db, "BTCUSDT", mode="intraday", context=context
+    )
 
     assert calls["snapshot"]["decision"] == "READY"
     assert calls["snapshot"]["trade_plan"]["entry"] == 100

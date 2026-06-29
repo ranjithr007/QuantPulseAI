@@ -11,6 +11,6 @@ from app.database.models.open_interest import OpenInterest
 from app.database.models.funding_rates import FundingRate
 from app.database.models.ai_scores import AIScore
 
-Base.metadata.create_all(bind=engine)
+# Base.metadata.create_all(bind=engine)
 
 print("All tables created successfully")

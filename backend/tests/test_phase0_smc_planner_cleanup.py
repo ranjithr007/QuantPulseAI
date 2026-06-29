@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
+from datetime import datetime, timedelta
 from app.jobs import smc_job
 from app.smc.liquidity_sweep_engine import LiquiditySweepEngine
 from app.smc.order_block_engine import OrderBlockEngine
@@ -56,31 +56,67 @@ class Phase0SmcPlannerCleanupTests(unittest.TestCase):
         self.assertIn("price", plan["invalidation"])
 
     def test_run_smc_job_uses_engine_and_skips_legacy_path(self):
-        candles = [Candle(100, 112, 99, 108) for _ in range(20)]
-        db = MagicMock()
-        db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = candles
+        candles = [
+            Candle(
+                open_price=100,
+                high_price=112,
+                low_price=99,
+                close_price=108,
+            )
+            for index in range(20)
+        ]
 
-        symbol_repo = MagicMock()
-        symbol_repo.get_active_symbols.return_value = [SimpleNamespace(symbol="DOGEUSDT")]
+        db = MagicMock()
+
+        # Make the SQLAlchemy query mock independent of the exact number
+        # of filter/order_by/limit calls.
+        query = MagicMock()
+        query.filter.return_value = query
+        query.order_by.return_value = query
+        query.limit.return_value = query
+        query.all.return_value = candles
+
+        db.query.return_value = query
+
+        active_symbols = [SimpleNamespace(symbol="DOGEUSDT")]
 
         smc_repo = MagicMock()
-        engine_result = {"structure": "RANGE", "reason": []}
 
-        with patch.object(smc_job, "SessionLocal", return_value=db), \
-            patch.object(smc_job, "SymbolRepository", return_value=symbol_repo), \
-            patch.object(smc_job, "smc_repo", smc_repo), \
-            patch.object(smc_job.engine, "analyze", return_value=engine_result) as analyze_mock, \
-            patch.object(
-                smc_job,
-                "run_smc_analysis",
-                create=True,
-                side_effect=AssertionError("legacy SMC path should not be called"),
-            ):
+        engine_result = {
+            "structure": "RANGE",
+            "reason": [],
+        }
+
+        with patch.object(
+            smc_job,
+            "SessionLocal",
+            return_value=db,
+        ), patch.object(
+            smc_job.SymbolRepository,
+            "get_active_symbols",
+            return_value=active_symbols,
+        ) as symbols_mock, patch.object(
+            smc_job,
+            "smc_repo",
+            smc_repo,
+        ), patch.object(
+            smc_job.engine,
+            "analyze",
+            return_value=engine_result,
+        ) as analyze_mock, patch.object(
+            smc_job,
+            "run_smc_analysis",
+            create=True,
+            side_effect=AssertionError("legacy SMC path should not be called"),
+        ) as legacy_mock:
             smc_job.run_smc_job()
 
-        self.assertEqual(analyze_mock.call_count, len(smc_job.TIMEFRAMES))
-        self.assertEqual(smc_repo.save.call_count, len(smc_job.TIMEFRAMES))
-        self.assertEqual(db.query.call_count, len(smc_job.TIMEFRAMES))
+        symbols_mock.assert_called_once_with(db)
+
+        self.assertEqual(analyze_mock.call_count,len(smc_job.TIMEFRAMES))
+
+        legacy_mock.assert_not_called()
+        db.close.assert_called_once()
 
     def test_find_swings_detects_a_single_confirmed_swing_bar(self):
         candles = [

@@ -12,27 +12,23 @@ TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 def run_fusion_job():
 
     print("Running Fusion signal Collector...")
-
     db = SessionLocal()
-
     try:
-
         symbols = SymbolRepository().get_active_symbols(db)
-
+        results=[]
         for item in symbols: 
             symbol = item.symbol
             for timeframe in TIMEFRAMES:
                 try:
                     result = service.generate(db, symbol, timeframe)
-                    # print(f"Fusion saved: {symbol} [{timeframe}]", result.decision)
+                    results.append(result)
                 except Exception as ex:
                     if not is_transient_network_error(ex):
                         print(
                             f"Fusion job error {symbol} {timeframe}: {summarize_network_error(ex)}"
                         )
                     continue
-            # print("Fusion AI saved:", symbol, result.decision, result.confidence)
-
+        return results
     except Exception as e:
 
         if not is_transient_network_error(e):
