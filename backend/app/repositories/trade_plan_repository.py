@@ -10,15 +10,39 @@ class TradePlanRepository:
     def get_open_trades(self, db):
         return db.query(TradePlan).filter(TradePlan.status == "OPEN").all()
 
-    def has_open_trade(self, db, symbol, side):
+    def get_open_trade(self, db, symbol, side):
         return (
             db.query(TradePlan)
             .filter(TradePlan.symbol == symbol)
             .filter(TradePlan.side == side)
             .filter(TradePlan.status == "OPEN")
+            .order_by(TradePlan.created_at.desc())
             .first()
-            is not None
         )
+
+    def invalidate_open_trades_below_confidence(self, db, min_confidence):
+        open_trades = self.get_open_trades(db)
+        invalidated = []
+
+        for trade in open_trades:
+            confidence = trade.confidence
+            if confidence is not None and float(confidence) >= float(min_confidence):
+                continue
+
+            invalidated.append(
+                self.invalidate_trade(
+                    db,
+                    trade,
+                    reason=(
+                        f"Trade plan invalidated by confidence gate (<{float(min_confidence):.0f})"
+                    ),
+                )
+            )
+
+        return invalidated
+
+    def has_open_trade(self, db, symbol, side):
+        return self.get_open_trade(db, symbol, side) is not None
 
     def close_trade(self, db, trade, price, result):
         trade.status = "CLOSED"
@@ -39,6 +63,25 @@ class TradePlanRepository:
                 trade.thesis_id,
                 "COMPLETED" if result == "WIN" else "INVALIDATED",
                 reason=f"Trade plan closed with result {result}",
+                commit=False,
+            )
+
+        commit_or_rollback(db)
+        return trade
+
+    def invalidate_trade(self, db, trade, reason):
+        trade.status = "CLOSED"
+        trade.exit_price = trade.entry_price
+        trade.result = "INVALIDATED"
+        trade.pnl_percent = 0.0
+        trade.closed_at = datetime.utcnow()
+
+        if getattr(trade, "thesis_id", None):
+            TradeThesisRepository().set_lifecycle_state(
+                db,
+                trade.thesis_id,
+                "INVALIDATED",
+                reason=reason,
                 commit=False,
             )
 

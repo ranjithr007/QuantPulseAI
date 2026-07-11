@@ -7,11 +7,19 @@ class OrderFlowScoreEngine:
 
         score = 50
 
+        delta = self._value(flow, "delta", "Delta")
+        cumulative_delta = self._value(flow, "cumulative_delta", "CVD")
+        buy_pressure = self._value(flow, "buy_pressure", "BuyerStrength")
+        whale_buy_count = self._value(flow, "whale_buy_count", "BuyerStrength")
+        whale_sell_count = self._value(flow, "whale_sell_count", "SellerStrength")
+        absorption_type = self._value(flow, "absorption_type", "Absorption")
+        exhaustion_type = self._value(flow, "exhaustion_type", "Exhaustion")
+
         # ----------------
         # Delta
         # ----------------
 
-        if flow.delta > 0:
+        if self._number(delta) > 0:
             score += 15
 
         else:
@@ -21,7 +29,7 @@ class OrderFlowScoreEngine:
         # CVD
         # ----------------
 
-        if flow.cumulative_delta > 0:
+        if self._number(cumulative_delta) > 0:
             score += 15
 
         else:
@@ -31,11 +39,11 @@ class OrderFlowScoreEngine:
         # Pressure
         # ----------------
 
-        if flow.buy_pressure > 60:
+        if self._number(buy_pressure) > 60:
 
             score += 15
 
-        elif flow.buy_pressure < 40:
+        elif self._number(buy_pressure) < 40:
 
             score -= 15
 
@@ -43,11 +51,11 @@ class OrderFlowScoreEngine:
         # Whales
         # ----------------
 
-        if flow.whale_buy_count > flow.whale_sell_count:
+        if self._number(whale_buy_count) > self._number(whale_sell_count):
 
             score += 15
 
-        elif flow.whale_sell_count > flow.whale_buy_count:
+        elif self._number(whale_sell_count) > self._number(whale_buy_count):
 
             score -= 15
 
@@ -55,11 +63,11 @@ class OrderFlowScoreEngine:
         # Absorption
         # ----------------
 
-        if flow.absorption_type == "BUY_ABSORPTION":
+        if absorption_type == "BUY_ABSORPTION":
 
             score += 10
 
-        if flow.absorption_type == "SELL_ABSORPTION":
+        if absorption_type == "SELL_ABSORPTION":
 
             score -= 10
 
@@ -67,12 +75,30 @@ class OrderFlowScoreEngine:
         # Exhaustion
         # ----------------
 
-        if flow.exhaustion_type == "BUYER_EXHAUSTION":
+        if exhaustion_type == "BUYER_EXHAUSTION":
 
             score -= 10
 
-        if flow.exhaustion_type == "SELLER_EXHAUSTION":
+        if exhaustion_type == "SELLER_EXHAUSTION":
 
             score += 10
 
         return max(0, min(score, 100))
+
+    def _value(self, item, *names):
+        for name in names:
+            if hasattr(item, name):
+                value = getattr(item, name)
+                if value is not None:
+                    return value
+
+        return None
+
+    def _number(self, value):
+        if value is None:
+            return 0
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0

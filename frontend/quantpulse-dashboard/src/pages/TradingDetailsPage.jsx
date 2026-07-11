@@ -11,6 +11,8 @@ export default function TradingDetailsPage({
   autoDecision,
   selectedDetail,
   openTrades,
+  selectedRisk,
+  selectedPaperTradeCandidate,
   selectedPipeline,
   loading,
   realizedPnl,
@@ -39,6 +41,7 @@ export default function TradingDetailsPage({
         autoDecision={autoDecision}
         selectedDetail={selectedDetail}
         openTrades={openTrades}
+        selectedRisk={selectedRisk}
       />
 
       <PnLSection
@@ -56,6 +59,11 @@ export default function TradingDetailsPage({
         pnlBySymbol={pnlBySymbol}
         pnlBySide={pnlBySide}
         equitySeries={equitySeries}
+        auto={auto}
+        selectedDetail={selectedDetail}
+        autoDecision={autoDecision}
+        selectedRisk={selectedRisk}
+        selectedPaperTradeCandidate={selectedPaperTradeCandidate}
       />
 
       <DashboardFooter selectedPipeline={selectedPipeline} loading={loading} />

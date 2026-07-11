@@ -7,6 +7,7 @@ import {
   loadLiveMarketStatus,
   startLiveMarketListener,
 } from "./dashboardApi";
+import { deriveRowEligibilityState } from "../utils/eligibility";
 import {
   buildEquityCurve,
   buildGroupPnL,
@@ -21,6 +22,8 @@ import {
   sumPnl,
   sumWithinDays,
 } from "./dashboardTransforms";
+
+const LIVE_SNAPSHOT_REFRESH_MS = 10_000;
 
 function createInitialDashboardData() {
   return {
@@ -37,10 +40,14 @@ function createInitialDashboardData() {
       orderflow: null,
       smc: null,
       risk: null,
+      paperTradeCandidates: [],
       autoDecision: null,
       aiScores: null,
       derivatives: null,
       multiTimeframe: null,
+      predictionContext: null,
+      prediction: null,
+      timing: null,
       tradeSetup: null,
       entryTrigger: null,
     },
@@ -65,14 +72,53 @@ function createSelectedBundleData(view, bundle) {
       orderflow: bundle?.orderflow || null,
       smc: bundle?.smc || null,
       risk: bundle?.risk || null,
+      paperTradeCandidates: [],
       autoDecision: bundle?.autoDecision || null,
       aiScores: bundle?.aiScores || null,
       derivatives: bundle?.derivatives || null,
       multiTimeframe: bundle?.multiTimeframe || null,
+      predictionContext: bundle?.predictionContext || bundle?.multiTimeframe || null,
+      prediction: bundle?.prediction || bundle?.tradeSetup || null,
+      timing: bundle?.timing || bundle?.entryTrigger || null,
       tradeSetup: bundle?.tradeSetup || null,
       entryTrigger: bundle?.entryTrigger || null,
     },
     lastRefresh: new Date(),
+  };
+}
+
+function normalizeWatchlistPayload(watchlist) {
+  if (!watchlist || typeof watchlist !== "object") {
+    return watchlist;
+  }
+
+  const records = Array.isArray(watchlist.records) ? watchlist.records : [];
+  const computedSummary = records.reduce(
+    (acc, item) => {
+      const status = String(item?.status || "").toUpperCase();
+      const side = String(item?.side || "").toUpperCase();
+
+      if (status === "READY") acc.ready += 1;
+      if (status === "WAIT") acc.wait += 1;
+      if (side === "LONG") acc.long += 1;
+      if (side === "SHORT") acc.short += 1;
+      if (!side) acc.no_side += 1;
+
+      return acc;
+    },
+    { ready: 0, wait: 0, long: 0, short: 0, no_side: 0, total: records.length }
+  );
+
+  return {
+    ...watchlist,
+    records,
+    count: records.length,
+    total_count: records.length,
+    summary: {
+      ...(watchlist.summary || {}),
+      ...computedSummary,
+      total: records.length,
+    },
   };
 }
 
@@ -90,7 +136,7 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
         return [symbol, current.signalsBySymbol[symbol] || null];
       })
     ),
-    watchlist: overviewByKey.watchlist || current.watchlist,
+    watchlist: normalizeWatchlistPayload(overviewByKey.watchlist || current.watchlist),
     pipeline: overviewByKey.pipeline || current.pipeline,
     performance: paperTradeBundle.performance || current.performance,
     openTrades: paperTradeBundle.openTrades?.records || current.openTrades,
@@ -103,11 +149,38 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
           : matchesSelectedSignal(current.selected.signal, view)
             ? current.selected.signal
             : null,
-      risk: current.selected.risk || overviewByKey.riskBundle?.risk || null,
+      risk:
+        overviewByKey.riskBundle?.computedRisk ||
+        current.selected.risk ||
+        overviewByKey.riskBundle?.risk ||
+        null,
+      paperTradeCandidates:
+        overviewByKey.paperTradeCandidates?.records ||
+        current.selected.paperTradeCandidates ||
+        [],
       autoDecision: current.selected.autoDecision || overviewByKey.riskBundle?.autoDecision || null,
     },
     lastRefresh: new Date(),
   };
+}
+
+function normalizeTradeSide(value) {
+  const side = String(value || "").toUpperCase();
+  if (["BUY", "LONG", "STRONG_LONG"].includes(side)) return "LONG";
+  if (["SELL", "SHORT", "STRONG_SHORT"].includes(side)) return "SHORT";
+  return side || null;
+}
+
+function executorRowState(row, candidates = []) {
+  const side = normalizeTradeSide(row?.type);
+  const candidate = candidates.find(
+    (item) =>
+      String(item?.symbol || "").toUpperCase() === String(row?.symbol || "").toUpperCase() &&
+      normalizeTradeSide(item?.side) === side
+  );
+
+  if (!candidate) return "no_queued_plan";
+  return candidate.eligible ? "executor_ready" : "executor_blocked";
 }
 
 function withLiveMarketPrice(signal, liveRecord) {
@@ -141,25 +214,42 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const [data, setData] = useState(createInitialDashboardData);
   const [liveMarket, setLiveMarket] = useState({});
   const [liveStatus, setLiveStatus] = useState({});
-  const [pageVisible, setPageVisible] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
+  const [resumeTick, setResumeTick] = useState(0);
 
   useEffect(() => {
-    const handleVisibilityChange = () => setPageVisible(document.visibilityState !== "hidden");
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") {
+        setResumeTick((current) => current + 1);
+      }
+    };
+    const handleWindowFocus = () => setResumeTick((current) => current + 1);
+
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("pageshow", handleWindowFocus);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("pageshow", handleWindowFocus);
+    };
   }, []);
 
   useEffect(() => {
-    if (!pageVisible) {
-      return undefined;
-    }
-
     let socket;
     let closed = false;
     let reconnectTimer = null;
     let reconnectAttempts = 0;
 
-    const connect = () => {
+    const connect = async () => {
+      if (closed) return;
+
+      try {
+        await startLiveMarketListener({ symbols });
+      } catch {
+        // Keep going; websocket and snapshot fallbacks can still recover.
+      }
+
       if (closed) return;
 
       try {
@@ -216,10 +306,12 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
 
       const delay = Math.min(15000, 1000 * 2 ** reconnectAttempts);
       reconnectAttempts += 1;
-      reconnectTimer = window.setTimeout(connect, delay);
+      reconnectTimer = window.setTimeout(() => {
+        void connect();
+      }, delay);
     };
 
-    connect();
+    void connect();
 
     return () => {
       closed = true;
@@ -229,14 +321,9 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
         socket.close();
       }
     };
-  }, [symbols, pageVisible]);
+  }, [symbols]);
 
   useEffect(() => {
-    if (!pageVisible) {
-      setLoading(false);
-      return undefined;
-    }
-
     let cancelled = false;
     const controller = new AbortController();
 
@@ -266,20 +353,16 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     }
 
     refreshSnapshot();
-    const id = window.setInterval(refreshSnapshot, autoRefreshMs);
+    const id = window.setInterval(refreshSnapshot, LIVE_SNAPSHOT_REFRESH_MS);
 
     return () => {
       cancelled = true;
       controller.abort();
       window.clearInterval(id);
     };
-  }, [autoRefreshMs, symbols, pageVisible]);
+  }, [autoRefreshMs, symbols, resumeTick]);
 
   useEffect(() => {
-    if (!pageVisible) {
-      return undefined;
-    }
-
     let cancelled = false;
     const controller = new AbortController();
 
@@ -308,13 +391,9 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       cancelled = true;
       controller.abort();
     };
-  }, [symbols, pageVisible]);
+  }, [symbols, resumeTick]);
 
   useEffect(() => {
-    if (!pageVisible) {
-      return undefined;
-    }
-
     let cancelled = false;
     const controller = new AbortController();
 
@@ -328,21 +407,16 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       }
     }
 
-    const id = window.setInterval(pollLiveStatus, 10000);
+    const id = window.setInterval(pollLiveStatus, LIVE_SNAPSHOT_REFRESH_MS);
 
     return () => {
       cancelled = true;
       controller.abort();
       window.clearInterval(id);
     };
-  }, [pageVisible]);
+  }, [resumeTick]);
 
   useEffect(() => {
-    if (!pageVisible) {
-      setLoading(false);
-      return undefined;
-    }
-
     let cancelled = false;
     const controller = new AbortController();
     let refreshTimer = null;
@@ -351,24 +425,22 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       setLoading(true);
       setError("");
 
-      try {
-        if (pageNeedsSelectedBundle(activePage)) {
-          try {
-            const selectedBundle = await loadIntelligenceBundle({ view, signal: controller.signal });
+        try {
+          if (pageNeedsSelectedBundle(activePage)) {
+            try {
+              const selectedBundle = await loadIntelligenceBundle({ view, signal: controller.signal });
 
             if (cancelled) {
               return;
             }
 
-            if (selectedBundle?.signal) {
-              setData(createSelectedBundleData(view, selectedBundle));
-            }
-          } catch {
-            if (!cancelled) {
-              setError("Selected signal bundle unavailable; keeping live batch data.");
+              if (selectedBundle?.signal) {
+                setData(createSelectedBundleData(view, selectedBundle));
+              }
+            } catch {
+              // Non-blocking: selected bundle can fall back to the live batch payload.
             }
           }
-        }
 
         const dashboardBatches = await loadDashboardBatches({ activePage, view, filters, auto, symbols, signal: controller.signal });
 
@@ -417,7 +489,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     filters.failedMax,
     tick,
     symbols,
-    pageVisible,
+    resumeTick,
   ]);
 
   const signalsBySymbol = useMemo(
@@ -441,9 +513,12 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const selectedCandles = data.selected.candles?.records || [];
   const selectedOrderflow = data.selected.orderflow?.records || [];
   const selectedSmc = data.selected.smc?.records || [];
+  const selectedOrderflowPayload = data.selected.orderflow || null;
+  const selectedSmcPayload = data.selected.smc || null;
   const selectedRisk = data.selected.risk || null;
   const selectedAI = data.selected.aiScores || null;
   const selectedDerivatives = data.selected.derivatives || null;
+  const selectedPaperTradeCandidates = data.selected.paperTradeCandidates || [];
   const selectedPipeline = data.pipeline || null;
   const watchlist = data.watchlist;
   const performance = data.performance || {};
@@ -463,10 +538,15 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       candles: selectedCandles,
       orderflow: selectedOrderflow,
       smc: selectedSmc,
+      orderflowPayload: selectedOrderflowPayload,
+      smcPayload: selectedSmcPayload,
       risk: selectedRisk,
       aiScores: selectedAI,
       derivatives: selectedDerivatives,
       multiTimeframe: data.selected.multiTimeframe,
+      predictionContext: data.selected.predictionContext,
+      prediction: data.selected.prediction,
+      timing: data.selected.timing,
       tradeSetup: data.selected.tradeSetup,
       entryTrigger: data.selected.entryTrigger,
     });
@@ -478,20 +558,73 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     selectedCandles,
     selectedOrderflow,
     selectedSmc,
+    selectedOrderflowPayload,
+    selectedSmcPayload,
     selectedRisk,
     selectedAI,
     selectedDerivatives,
     data.selected.multiTimeframe,
+    data.selected.predictionContext,
+    data.selected.prediction,
+    data.selected.timing,
     data.selected.tradeSetup,
     data.selected.entryTrigger,
+  ]);
+  const selectedPaperTradeCandidate = useMemo(() => {
+    if (!selectedPaperTradeCandidates.length) {
+      return null;
+    }
+
+    const symbolCandidates = selectedPaperTradeCandidates.filter(
+      (candidate) => String(candidate?.symbol || "").toUpperCase() === String(view.symbol || "").toUpperCase()
+    );
+    if (!symbolCandidates.length) {
+      return null;
+    }
+
+    const preferredSide = normalizeTradeSide(
+      selectedRisk?.signal ||
+      selectedDetail.signalType ||
+      selectedSignal?.signal ||
+      selectedSignal?.decision
+    );
+
+    return (
+      symbolCandidates.find(
+        (candidate) => normalizeTradeSide(candidate?.side) === preferredSide
+      ) || symbolCandidates[0]
+    );
+  }, [
+    view.symbol,
+    selectedPaperTradeCandidates,
+    selectedRisk?.signal,
+    selectedDetail.signalType,
+    selectedSignal?.signal,
+    selectedSignal?.decision,
   ]);
 
   const marketSummary = useMemo(() => {
     const rows = signalRows.filter(Boolean);
+    const rowStates = rows.map((row) => {
+      const watchRow = (watchlist?.records || []).find((item) => item.symbol === row.symbol) || {};
+      const risk = deriveRowEligibilityState({
+        row,
+        watchRow,
+        minConfidence: auto.minConfidence,
+      });
+      return { row, risk };
+    });
+    const eligibleRows = rowStates.filter(({ risk }) => risk.label === "Eligible" || risk.label === "Ready to execute");
     const buyCount = rows.filter((row) => row.type === "BUY").length;
     const sellCount = rows.filter((row) => row.type === "SELL").length;
     const waitCount = rows.filter((row) => row.type === "WAIT").length;
-    const readyCount = watchlist?.summary?.ready ?? 0;
+    const readyCount = eligibleRows.length;
+    const persistedReadyCount = eligibleRows.filter(({ risk }) => String(risk.note || "").startsWith("Persisted risk:")).length;
+    const computedReadyCount = eligibleRows.filter(({ risk }) => String(risk.note || "").startsWith("Computed risk:")).length;
+    const fallbackReadyCount = eligibleRows.filter(({ risk }) => String(risk.note || "").startsWith("Trigger fallback:")).length;
+    const executorReadyCount = rows.filter((row) => executorRowState(row, selectedPaperTradeCandidates) === "executor_ready").length;
+    const executorBlockedCount = rows.filter((row) => executorRowState(row, selectedPaperTradeCandidates) === "executor_blocked").length;
+    const noQueuedPlanCount = rows.filter((row) => executorRowState(row, selectedPaperTradeCandidates) === "no_queued_plan").length;
     const openCount = openTrades.length;
     const priceChange = selectedDetail.priceChangePct ?? 0;
     const avgConfidence = rows.length
@@ -503,11 +636,17 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       sellCount,
       waitCount,
       readyCount,
+      persistedReadyCount,
+      computedReadyCount,
+      fallbackReadyCount,
+      executorReadyCount,
+      executorBlockedCount,
+      noQueuedPlanCount,
       openCount,
       priceChange,
       avgConfidence,
     };
-  }, [signalRows, watchlist, openTrades.length, selectedDetail.priceChangePct]);
+  }, [signalRows, watchlist, auto.minConfidence, selectedPaperTradeCandidates, openTrades.length, selectedDetail.priceChangePct]);
 
   const activeTradePlan = selectedDetail.tradePlan;
   const computedAutoDecision = useMemo(() => {
@@ -580,6 +719,8 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     candleSeries,
     volumeSeries,
     selectedRisk,
+    selectedPaperTradeCandidate,
+    paperTradeCandidates: selectedPaperTradeCandidates,
     equitySeries,
     pnlBySymbol,
     pnlBySide,
@@ -602,9 +743,11 @@ function pageNeedsSelectedBundle(activePage) {
     "dashboard",
     "market-scan",
     "coin-details",
+    "derivatives",
     "trading-details",
     "risk-controls",
     "auto-trading",
+    "pnl",
     "backtest",
   ]).has(activePage);
 }

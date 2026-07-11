@@ -8,8 +8,8 @@ import { formatPercent, formatSigned, tooltipStyle } from "../utils/formatters";
 
 const COLORS = ["#34d399", "#fb7185", "#94a3b8"];
 
-export default function RotationPage({ signalRows, watchlist, getSymbolHref }) {
-  const rows = signalRows.map((row) => enrichRow(row, watchlist));
+export default function RotationPage({ signalRows, watchlist, auto, getSymbolHref }) {
+  const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 65));
   const longRows = rows.filter((row) => row.type === "BUY");
   const shortRows = rows.filter((row) => row.type === "SELL");
   const waitRows = rows.filter((row) => row.type === "WAIT");
@@ -118,6 +118,10 @@ function RotationCard({ row, href }) {
         <MiniStat label="RS" value={formatSigned(row.rsScore, 0)} />
         <MiniStat label="Confidence" value={formatPercent(row.confidence, 0)} />
       </div>
+      <div className="mt-2.5">
+        <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
+        {row.riskNote ? <div className="mt-1 text-[11px] leading-4 text-slate-500">{row.riskNote}</div> : null}
+      </div>
       <div className="mt-2.5 flex items-center gap-2 text-sm font-medium text-cyan-200">
         View Details
         <ArrowRight className="h-4 w-4" />
@@ -167,6 +171,7 @@ function LeadList({ title, rows, tone, getSymbolHref }) {
             <div className="min-w-0">
               <div className="text-sm font-medium text-white">{row.symbol}</div>
               <div className="text-[11px] text-slate-500">#{index + 1} {row.stage}</div>
+              {row.riskNote ? <div className="mt-1 text-[11px] text-slate-500">{row.riskNote}</div> : null}
             </div>
             <div className="text-right">
               <div className="text-sm font-semibold text-white">{formatSigned(row.rsScore, 0)}</div>

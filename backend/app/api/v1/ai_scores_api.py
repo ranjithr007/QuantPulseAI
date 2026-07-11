@@ -50,17 +50,18 @@ def build_ai_scores_payload(db, symbol, timeframe="5m", limit=20, stale_after_se
         with_freshness(record, "created_at", stale_after_seconds)
         for record in records
     ]
+    computed = _compute_current_score(db, symbol, timeframe, stale_after_seconds)
 
     return {
         "symbol": symbol,
         "timeframe": timeframe,
         "source": "ai_scores" if items else "computed_current",
+        "status": "OK" if items else "COMPUTED_CURRENT",
+        "data_scope": "timeframe",
         "count": len(items),
         "latest": items[0] if items else None,
         "records": items,
-        "computed": None
-        if items
-        else _compute_current_score(db, symbol, timeframe, stale_after_seconds),
+        "computed": computed,
     }
 
 

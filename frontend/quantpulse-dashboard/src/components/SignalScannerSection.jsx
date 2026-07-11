@@ -1,16 +1,23 @@
 import clsx from "clsx";
 import { formatPercent, formatPrice, formatSigned, formatTargets } from "../utils/formatters";
 import MarketSignalTable from "./MarketSignalTable";
+import { enrichRow } from "./MarketSignalTable";
 
 const WATCHLIST_STATUSES = ["ALL", "READY", "WAIT"];
 const WATCHLIST_SIDES = ["ALL", "LONG", "SHORT"];
 const FAILED_MAX_OPTIONS = ["0", "1", "2", "3", "4"];
+const EXECUTOR_STATUS_OPTIONS = ["ALL", "READY", "BLOCKED", "NO_QUEUED_PLAN"];
 
-export default function F({ view, filters, setView, setFilters, signalRows, watchlist, liveStatus, onOpenSignal, getSymbolHref }) {
+export default function F({ view, filters, setView, setFilters, signalRows, watchlist, liveStatus, auto, paperTradeCandidates, onOpenSignal, getSymbolHref }) {
   function selectSignal(symbol) {
     setView((current) => ({ ...current, symbol }));
     onOpenSignal?.(symbol);
   }
+
+  const enrichedRows = signalRows.map((row) =>
+    enrichRow(row, watchlist, liveStatus, auto?.minConfidence ?? 65, paperTradeCandidates)
+  );
+  const filteredRows = enrichedRows.filter((row) => matchesExecutorFilter(row, filters.executorStatus));
 
   return (
     <section className="border-b border-white/5">
@@ -40,11 +47,17 @@ export default function F({ view, filters, setView, setFilters, signalRows, watc
               options={FAILED_MAX_OPTIONS}
               onChange={(value) => setFilters((current) => ({ ...current, failedMax: value }))}
             />
+            <ScannerSelect
+              label="Executor"
+              value={filters.executorStatus}
+              options={EXECUTOR_STATUS_OPTIONS}
+              onChange={(value) => setFilters((current) => ({ ...current, executorStatus: value }))}
+            />
           </div>
         </div>
 
         <div className="mt-3.5 grid gap-3 xl:grid-cols-3">
-          {signalRows.map((row) => (
+          {filteredRows.map((row) => (
             <SignalCard
               key={row.symbol}
               row={row}
@@ -56,14 +69,16 @@ export default function F({ view, filters, setView, setFilters, signalRows, watc
 
         <div className="mt-3.5">
           <MarketSignalTable
-            rows={signalRows}
+            rows={filteredRows}
             watchlist={watchlist}
             liveStatus={liveStatus}
+            paperTradeCandidates={paperTradeCandidates}
+            minConfidence={auto?.minConfidence ?? 65}
             activeSymbol={view.symbol}
             onOpenSymbol={selectSignal}
             getSymbolHref={getSymbolHref}
             title="Signal table"
-            subtitle={`Filtered ${watchlist?.count ?? signalRows.length} symbols with live price and AI signal context`}
+            subtitle={`Filtered ${filteredRows.length} symbols with live price, AI signal, and executor context`}
           />
         </div>
       </div>
@@ -144,4 +159,13 @@ function MiniLine({ label, value }) {
       <div className="mt-1 text-sm font-medium text-white">{value}</div>
     </div>
   );
+}
+
+function matchesExecutorFilter(row, filter) {
+  const value = String(filter || "ALL").toUpperCase();
+  if (value === "ALL") return true;
+  if (value === "READY") return row.executorStatus === "READY";
+  if (value === "BLOCKED") return row.executorStatus === "BLOCKED" || row.executorStatus === "STALE";
+  if (value === "NO_QUEUED_PLAN") return row.executorStatus === "NO_QUEUED_PLAN";
+  return true;
 }

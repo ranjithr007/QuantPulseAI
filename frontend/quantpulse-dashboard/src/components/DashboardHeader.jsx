@@ -18,15 +18,15 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { Link, NavLink } from "react-router-dom";
-import { formatPercent, formatPrice } from "../utils/formatters";
-import { getLiveMarketState } from "../utils/liveMarket";
+import { formatPercent, formatPrice, formatTimeInIst } from "../utils/formatters";
+import { getUnifiedMarketState } from "../utils/liveMarket";
 
 const PAGE_ITEMS = [
   { id: "dashboard", label: "Dashboard", shortLabel: "Home", icon: BarChart3 },
   { id: "market-scan", label: "Market Scan", shortLabel: "Market", icon: Activity },
   { id: "signals", label: "Signals", shortLabel: "Signals", icon: TrendingUp },
   { id: "trading-details", label: "Trading Details", shortLabel: "Trading", icon: ShieldCheck },
-  { id: "coin-details", label: "Coin Details", shortLabel: "Coin", icon: Activity },
+  { id: "coin-details", label: "Futures Details", shortLabel: "Futures", icon: Activity },
   { id: "risk-controls", label: "Risk Controls", shortLabel: "Risk", icon: ShieldCheck },
   { id: "auto-trading", label: "Auto Trading", shortLabel: "Auto", icon: Lock },
   { id: "pnl", label: "PNL", shortLabel: "PNL", icon: LineChart },
@@ -84,8 +84,8 @@ export default function DashboardHeader({
       </aside>
 
       <header className="sticky top-0 z-30 border-b border-white/10 bg-slate-950/95 backdrop-blur-xl lg:ml-72">
-        <div className="px-4 py-1.5 sm:px-6 lg:px-8">
-          <div className="flex flex-wrap items-center justify-between gap-1.5">
+        <div className="px-3 py-2 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div className="min-w-0 shrink">
                 <h1 className="sr-only">Trading intelligence platform</h1>
                 <div className="flex flex-wrap items-center gap-1.5 text-xs uppercase tracking-[0.18em] text-slate-500">
@@ -97,17 +97,17 @@ export default function DashboardHeader({
                 <span className="text-slate-700">/</span>
                 <span>{view.mode}</span>
               </div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-                <Clock3 className="h-3.5 w-3.5" />
-                <span>{lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString()}` : "Syncing market data"}</span>
+                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                  <Clock3 className="h-3.5 w-3.5" />
+                  <span>{lastRefresh ? `Updated ${formatTimeInIst(lastRefresh)}` : "Syncing market data"}</span>
               </div>
             </div>
 
             <SourceStrip selectedDetail={selectedDetail} loading={loading} liveStatus={liveStatus} />
           </div>
 
-          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-1.5">
-            <div className="flex flex-wrap items-center gap-1.5">
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-1.5">
               <SelectField
                 label="Symbol"
                 value={view.symbol}
@@ -120,16 +120,16 @@ export default function DashboardHeader({
                 options={modes}
                 onChange={(mode) => setView((current) => ({ ...current, mode }))}
               />
-              <div>
+              <div className="min-w-0 flex-1 sm:flex-none">
                 <span className="sr-only">Timeframe</span>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap sm:overflow-visible sm:pb-0">
                   {timeframes.map((timeframe) => (
                     <button
                       key={timeframe}
                       type="button"
                       onClick={() => setView((current) => ({ ...current, timeframe }))}
                       className={clsx(
-                        "h-8 rounded-lg border px-2.5 text-sm transition",
+                        "h-8 shrink-0 rounded-lg border px-2.5 text-sm transition",
                         view.timeframe === timeframe
                           ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200"
                           : "border-white/10 bg-slate-900/70 text-slate-300 hover:border-white/20 hover:bg-slate-900"
@@ -144,7 +144,7 @@ export default function DashboardHeader({
             <button
               type="button"
               onClick={() => setTick((value) => value + 1)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/80 px-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-slate-800"
+              className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/80 px-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-slate-800 sm:w-auto"
             >
               <RefreshCw className={clsx("h-4 w-4", loading && "animate-spin")} />
               Refresh
@@ -188,13 +188,13 @@ function ShellLink({ item, href, active }) {
 }
 
 function SourceStrip({ selectedDetail, loading, liveStatus }) {
-  const stale = selectedDetail?.freshness?.is_stale;
-  const liveRecord = selectedDetail?.liveMarket;
-  const liveState = getLiveMarketState({
+  const marketState = getUnifiedMarketState({
     liveStatus,
-    updatedAt: liveRecord?.received_at || liveRecord?.event_time,
-    hasLiveRecord: Boolean(liveRecord),
+    liveRecord: selectedDetail?.liveMarket,
+    freshness: selectedDetail?.freshness,
   });
+  const liveState = marketState.liveState;
+  const candleState = marketState.candleState;
   const liveValue = loading && liveState.state === "FALLBACK"
     ? "Syncing"
     : `${liveState.label}${liveStatus?.cached_count ? ` (${liveStatus.cached_count})` : ""}`;
@@ -203,7 +203,7 @@ function SourceStrip({ selectedDetail, loading, liveStatus }) {
     : "Calculating";
 
   return (
-    <div className="flex flex-wrap gap-1.5 2xl:justify-end">
+    <div className="flex flex-wrap gap-1.5 lg:justify-end">
       <SourceChip
         icon={RadioTower}
         label="B WebSocket"
@@ -213,8 +213,8 @@ function SourceStrip({ selectedDetail, loading, liveStatus }) {
       <SourceChip
         icon={Database}
         label="DB Candle"
-        value={stale ? "Stale candle" : "Synced candle"}
-        tone={stale ? "amber" : "cyan"}
+        value={candleState.label}
+        tone={candleState.tone}
       />
       <SourceChip icon={Brain} label="AI Calculated" value={signalText} tone={selectedDetail?.invalidationReason ? "rose" : "emerald"} />
     </div>
@@ -264,7 +264,7 @@ function MarketTicker({ signalRows = [], view, getPageHref }) {
   return (
     <div className="market-tape mt-1.5 rounded-lg border border-white/10 bg-slate-900/70 p-1.5">
       <div className="flex items-stretch gap-1.5">
-        <div className="flex min-w-[94px] shrink-0 items-center justify-center rounded-md bg-cyan-500/15 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-200">
+        <div className="flex min-w-[82px] shrink-0 items-center justify-center rounded-md bg-cyan-500/15 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-200 sm:min-w-[94px]">
           <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-cyan-300 shadow-[0_0_0_3px_rgba(34,211,238,0.12)]" />
           Live Scan
         </div>
@@ -277,7 +277,7 @@ function MarketTicker({ signalRows = [], view, getPageHref }) {
                     key={`${group}-${row.symbol}`}
                     to={getPageHref("coin-details", { ...view, symbol: row.symbol })}
                     tabIndex={group === 1 ? -1 : undefined}
-                    className="flex h-10 min-w-[124px] shrink-0 flex-col justify-center rounded-lg border border-white/5 bg-slate-950/70 px-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10"
+                    className="flex h-10 min-w-[110px] shrink-0 flex-col justify-center rounded-lg border border-white/5 bg-slate-950/70 px-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-w-[124px]"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-semibold text-white">{row.symbol}</span>
@@ -334,12 +334,12 @@ function MobileNav({ activePage, getPageHref }) {
 
 function SelectField({ label, value, options, onChange }) {
   return (
-    <label>
+    <label className="block w-full sm:w-auto">
       <span className="sr-only">{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-9 rounded-lg border border-white/10 bg-slate-900/80 px-3 text-sm font-medium text-white outline-none transition hover:border-white/20 focus:border-cyan-400/40"
+        className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/80 px-3 text-sm font-medium text-white outline-none transition hover:border-white/20 focus:border-cyan-400/40 sm:min-w-[120px] sm:w-auto"
       >
         {options.map((option) => (
           <option key={option} value={option}>

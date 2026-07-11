@@ -1,3 +1,5 @@
+const IST_TIME_ZONE = "Asia/Kolkata";
+
 export function formatPrice(value, options = {}) {
   const { fallback = "N/A", fixedDigits = null, compactSmall = false } = normalizeOptions(options);
   if (value === null || value === undefined || Number.isNaN(Number(value))) return fallback;
@@ -86,6 +88,18 @@ export function formatDate(value, fallback = "N/A") {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: IST_TIME_ZONE,
+  });
+}
+
+export function formatTimeInIst(value, fallback = "N/A") {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: IST_TIME_ZONE,
   });
 }
 

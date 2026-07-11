@@ -6,9 +6,9 @@ import MetricCard from "../components/ui/MetricCard";
 import Pill from "../components/ui/Pill";
 import { formatPercent, formatPrice, formatSigned, tooltipStyle } from "../utils/formatters";
 
-export default function RsRankingPage({ signalRows, watchlist, activeSymbol, getSymbolHref }) {
+export default function RsRankingPage({ signalRows, watchlist, activeSymbol, auto, getSymbolHref }) {
   const rankedRows = signalRows
-    .map((row) => enrichRow(row, watchlist))
+    .map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 65))
     .sort((a, b) => b.rsScore - a.rsScore);
   const leader = rankedRows[0];
   const laggard = rankedRows[rankedRows.length - 1];
@@ -32,7 +32,7 @@ export default function RsRankingPage({ signalRows, watchlist, activeSymbol, get
           <MetricCard label="RS leader" value={leader?.symbol || "-"} note={formatSigned(leader?.rsScore, 0, "-")} icon={Award} accent="emerald" />
           <MetricCard label="RS laggard" value={laggard?.symbol || "-"} note={formatSigned(laggard?.rsScore, 0, "-")} icon={Gauge} accent="rose" />
           <MetricCard label="Positive RS" value={positiveCount} note={`${rankedRows.length} total`} icon={TrendingUp} accent="cyan" />
-          <MetricCard label="Eligible" value={rankedRows.filter((row) => row.riskLabel === "Eligible").length} note="Risk gate" icon={ShieldCheck} accent="emerald" />
+          <MetricCard label="Eligible" value={rankedRows.filter((row) => row.riskLabel === "Eligible" || row.riskLabel === "Ready to execute").length} note="Risk gate" icon={ShieldCheck} accent="emerald" />
         </div>
 
         <div className="mt-3 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
@@ -105,6 +105,7 @@ export default function RsRankingPage({ signalRows, watchlist, activeSymbol, get
                     <td className="px-3 py-2.5 text-slate-300">{formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}</td>
                     <td className="px-3 py-2.5">
                       <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
+                      {row.riskNote ? <div className="mt-1 max-w-[11rem] text-[11px] leading-4 text-slate-500">{row.riskNote}</div> : null}
                     </td>
                     <td className="px-3 py-2.5">
                       <Link to={getSymbolHref(row.symbol)} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-slate-950/70 px-2.5 py-1.5 text-xs font-medium text-cyan-200 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">

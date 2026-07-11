@@ -70,6 +70,7 @@ def run_master_ai_job():
                     whale,
                     current_price,
                     atr,
+                    timeframe=timeframe,
                 )
                 result["timeframe"] = timeframe
                 trade_plan = build_trade_plan(result["signal"], current_price, atr)

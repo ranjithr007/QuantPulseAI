@@ -1,0 +1,273 @@
+from dataclasses import dataclass
+from datetime import datetime
+
+
+PHASE2_REPORT_VERSION = "phase2_validation_report_v1"
+
+
+@dataclass(frozen=True)
+class Phase2ValidationThresholds:
+    out_of_sample_annualized_sharpe: float = 1.0
+    max_drawdown_percent: float = 20.0
+    win_rate_percent: float = 45.0
+    average_reward_risk: float = 1.5
+    profit_factor: float = 1.3
+    regime_accuracy_percent: float = 65.0
+    primary_scenario_accuracy_percent: float = 55.0
+    positive_regime_group_minimum: int = 5
+    paper_days_minimum: int = 90
+
+
+DEFAULT_PHASE2_THRESHOLDS = Phase2ValidationThresholds()
+
+
+def build_phase2_validation_report(
+    walk_forward_result,
+    *,
+    symbol,
+    timeframe,
+    signal,
+    thresholds=None,
+    as_of=None,
+):
+    thresholds = thresholds or DEFAULT_PHASE2_THRESHOLDS
+    result = dict(walk_forward_result or {})
+    contract = dict(result.get("validation_contract") or {})
+    oos = dict(result.get("out_of_sample") or {})
+    oos_trades = list(oos.get("trades") or [])
+    payoff_ratio = _payoff_ratio(oos_trades)
+    trade_return_sharpe = oos.get("sharpe_ratio")
+
+    gate_checks = [
+        _gate_check(
+            "walk_forward_contract_alignment",
+            "PASS" if contract.get("contract_status") == "PASS" else "INSUFFICIENT_EVIDENCE",
+            contract.get("contract_status"),
+            "PASS",
+            "required",
+            note=_contract_alignment_note(contract),
+        ),
+        _gate_check(
+            "minimum_fold_count",
+            "PASS"
+            if int(result.get("fold_count") or 0) >= int(contract.get("minimum_fold_requirement") or 0)
+            else "INSUFFICIENT_EVIDENCE",
+            int(result.get("fold_count") or 0),
+            int(contract.get("minimum_fold_requirement") or 0),
+            "minimum",
+        ),
+        _metric_gate_check(
+            "out_of_sample_win_rate",
+            oos.get("win_rate"),
+            thresholds.win_rate_percent,
+            "minimum",
+        ),
+        _metric_gate_check(
+            "out_of_sample_average_reward_risk",
+            payoff_ratio,
+            thresholds.average_reward_risk,
+            "minimum",
+        ),
+        _metric_gate_check(
+            "out_of_sample_profit_factor",
+            oos.get("profit_factor"),
+            thresholds.profit_factor,
+            "minimum",
+        ),
+        _metric_gate_check(
+            "out_of_sample_max_drawdown",
+            oos.get("max_drawdown_percent"),
+            thresholds.max_drawdown_percent,
+            "maximum",
+        ),
+        _gate_check(
+            "out_of_sample_annualized_sharpe",
+            "NOT_STARTED",
+            None,
+            thresholds.out_of_sample_annualized_sharpe,
+            "minimum",
+            note="Annualized Sharpe is not yet produced by the current walk-forward runtime. Trade-return Sharpe is available for reference only.",
+        ),
+        _gate_check(
+            "regime_accuracy",
+            "NOT_STARTED",
+            None,
+            thresholds.regime_accuracy_percent,
+            "minimum",
+            note="Regime accuracy reporting is not yet attached to the Phase 2 validation report.",
+        ),
+        _gate_check(
+            "primary_scenario_accuracy",
+            "NOT_STARTED",
+            None,
+            thresholds.primary_scenario_accuracy_percent,
+            "minimum",
+            note="Scenario calibration and accuracy reporting are not yet attached to the Phase 2 validation report.",
+        ),
+        _gate_check(
+            "positive_edge_in_primary_regime_groups",
+            "NOT_STARTED",
+            None,
+            thresholds.positive_regime_group_minimum,
+            "minimum",
+            note="Regime-group attribution is not yet available in the current report artifact.",
+        ),
+        _gate_check(
+            "auditable_paper_days",
+            "INSUFFICIENT_EVIDENCE",
+            None,
+            thresholds.paper_days_minimum,
+            "minimum",
+            note="Paper-trading evidence is not attached to this walk-forward-only report yet.",
+        ),
+    ]
+
+    architecture_gate_status = _architecture_gate_status(gate_checks)
+    overall_status = _overall_report_status(contract, architecture_gate_status)
+    blockers = [check["name"] for check in gate_checks if check["status"] != "PASS"]
+
+    return {
+        "report_version": PHASE2_REPORT_VERSION,
+        "generated_at": _as_of(as_of).isoformat(),
+        "overall_status": overall_status,
+        "scope": {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "signal": signal,
+        },
+        "walk_forward": {
+            "validation_status": result.get("validation_status"),
+            "fold_count": int(result.get("fold_count") or 0),
+            "contract": contract,
+        },
+        "derived_metrics": {
+            "out_of_sample_total_trades": int(oos.get("total_trades") or 0),
+            "out_of_sample_total_return_percent": _round_or_none(oos.get("total_return_percent"), 4),
+            "out_of_sample_profit_factor": _round_or_none(oos.get("profit_factor"), 4),
+            "out_of_sample_win_rate": _round_or_none(oos.get("win_rate"), 4),
+            "out_of_sample_max_drawdown_percent": _round_or_none(oos.get("max_drawdown_percent"), 4),
+            "out_of_sample_payoff_ratio": payoff_ratio,
+            "trade_return_sharpe": _round_or_none(trade_return_sharpe, 4),
+        },
+        "architecture_gate": {
+            "status": architecture_gate_status,
+            "passed_checks": sum(1 for check in gate_checks if check["status"] == "PASS"),
+            "unavailable_checks": sum(1 for check in gate_checks if check["status"] == "NOT_STARTED"),
+            "insufficient_evidence_checks": sum(
+                1 for check in gate_checks if check["status"] == "INSUFFICIENT_EVIDENCE"
+            ),
+            "checks": gate_checks,
+        },
+        "blocked_by": blockers,
+        "next_action": _next_action(overall_status, gate_checks),
+    }
+
+
+def _metric_gate_check(name, actual, threshold, comparison):
+    if actual is None:
+        return _gate_check(
+            name,
+            "INSUFFICIENT_EVIDENCE",
+            None,
+            threshold,
+            comparison,
+            note="Metric is unavailable in the current report payload.",
+        )
+    passed = _compare(actual, threshold, comparison)
+    return _gate_check(
+        name,
+        "PASS" if passed else "FAIL",
+        _round_or_none(actual, 4),
+        threshold,
+        comparison,
+    )
+
+
+def _gate_check(name, status, actual, threshold, comparison, note=None):
+    return {
+        "name": name,
+        "status": status,
+        "actual": actual,
+        "threshold": threshold,
+        "comparison": comparison,
+        "note": note,
+    }
+
+
+def _compare(actual, threshold, comparison):
+    actual_value = float(actual)
+    threshold_value = float(threshold)
+    if comparison == "minimum":
+        return actual_value >= threshold_value
+    if comparison == "maximum":
+        return actual_value <= threshold_value
+    return False
+
+
+def _payoff_ratio(trades):
+    returns = [float(trade.get("pnl_percent", 0) or 0) for trade in list(trades or [])]
+    wins = [value for value in returns if value > 0]
+    losses = [abs(value) for value in returns if value < 0]
+    if not wins or not losses:
+        return None
+    average_win = sum(wins) / len(wins)
+    average_loss = sum(losses) / len(losses)
+    if average_loss == 0:
+        return None
+    return round(average_win / average_loss, 4)
+
+
+def _architecture_gate_status(checks):
+    statuses = [check["status"] for check in checks]
+    if any(status == "NOT_STARTED" for status in statuses):
+        return "INSUFFICIENT_EVIDENCE"
+    if any(status == "INSUFFICIENT_EVIDENCE" for status in statuses):
+        return "INSUFFICIENT_EVIDENCE"
+    if any(status == "FAIL" for status in statuses):
+        return "FAIL"
+    if checks and all(status == "PASS" for status in statuses):
+        return "PASS"
+    return "NOT_STARTED"
+
+
+def _overall_report_status(contract, architecture_gate_status):
+    timeframe_status = contract.get("timeframe_status")
+    contract_status = contract.get("contract_status")
+    if timeframe_status in {"SUPPORTING", "NON_CANONICAL"}:
+        return "PARTIAL"
+    if contract_status != "PASS":
+        return "INSUFFICIENT_EVIDENCE"
+    if architecture_gate_status in {"PASS", "FAIL"}:
+        return architecture_gate_status
+    return "PARTIAL"
+
+
+def _contract_alignment_note(contract):
+    issues = list(contract.get("issues") or [])
+    if not issues:
+        return "Walk-forward configuration matches the current Phase 2 contract."
+    return ", ".join(issues)
+
+
+def _next_action(overall_status, checks):
+    if overall_status == "PASS":
+        return "Validation gates passed for this symbol/timeframe report. Continue accumulating auditable paper evidence."
+    if any(check["name"] == "walk_forward_contract_alignment" and check["status"] != "PASS" for check in checks):
+        return "Align the walk-forward run with the official Phase 2 timeframe and fold contract before interpreting edge results."
+    if any(check["status"] == "NOT_STARTED" for check in checks):
+        return "Expand validation reporting with annualized Sharpe, regime/scenario accuracy, regime-group attribution, and attached paper evidence."
+    if any(check["status"] == "FAIL" for check in checks):
+        return "Current out-of-sample metrics do not meet the architecture gate. Return to feature, calibration, or execution-quality improvement."
+    return "Collect more evidence before making a Phase 2 gate decision."
+
+
+def _round_or_none(value, digits):
+    if value is None:
+        return None
+    return round(float(value), digits)
+
+
+def _as_of(value):
+    if isinstance(value, datetime):
+        return value
+    return datetime.utcnow()

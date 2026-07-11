@@ -21,18 +21,22 @@ from app.repositories.data_quality_event_repository import DataQualityEventRepos
 from app.repositories.intelligence_repository import get_ai_inputs
 from app.repositories.master_signal_repository import MasterSignalRepository
 from app.repositories._db_utils import safe_rollback
+from app.repositories.risk_repository import RiskRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
+from app.risk.risk_engine import RiskEngine
 from app.features.point_in_time_feature_service import build_decision_snapshot
 from app.features.point_in_time_feature_service import persist_decision_snapshot
 from app.trading.trade_plan_engine import build_trade_plan
 from app.observability.performance_budget import LatencyBudget
 from app.observability.performance_budget import build_stage_latency_report
 from app.utils.freshness import freshness_status
+from app.utils.freshness import stale_after_seconds_for_timeframe
 from app.utils.signal_validation import validate_trade_plan_direction
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
+_risk_engine = RiskEngine()
 SUPPORTED_TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h", "1d"}
 DEFAULT_TIMEFRAME_STACK = ["5m", "15m", "1h"]
 TIMEFRAME_MODES = {
@@ -40,6 +44,13 @@ TIMEFRAME_MODES = {
     "intraday": ["5m", "15m", "1h"],
     "swing": ["15m", "1h", "4h"],
     "position": ["1h", "4h", "1d"],
+}
+PREDICTION_TIMEFRAME_STACK = ["1h", "4h", "1d"]
+ENTRY_TIMING_TIMEFRAME_MODES = {
+    "scalp": ["15m", "5m"],
+    "intraday": ["15m", "5m"],
+    "swing": ["15m", "5m"],
+    "position": [],
 }
 WATCHLIST_STATUSES = {"READY", "WAIT"}
 WATCHLIST_SIDES = {"LONG", "SHORT"}
@@ -67,7 +78,7 @@ def build_multi_timeframe_signal_payload(
     stale_after_seconds=900,
     context=None,
 ):
-    context = context or build_multi_timeframe_context(
+    context = context or build_trade_prediction_context(
         db,
         symbol,
         mode,
@@ -76,15 +87,19 @@ def build_multi_timeframe_signal_payload(
         higher,
         stale_after_seconds,
     )
-    stack = context["stack"]
-    timeframes = context["timeframes"]
+    stack = context.get("prediction_stack") or context.get("stack")
+    timeframes = context.get("prediction_timeframes") or context.get("timeframes")
     confirmation = context["confirmation"]
 
     return {
         "symbol": symbol,
         "source": "multi_timeframe_confirmation",
         "mode": mode,
+        "status": "OK",
+        "data_scope": "timeframe_stack",
         "timeframes_used": stack,
+        "prediction_stack": stack,
+        "entry_stack": context.get("entry_stack") or [],
         "timeframes": timeframes,
         "confirmation": confirmation,
     }
@@ -100,7 +115,7 @@ def build_trade_setup_payload(
     stale_after_seconds=900,
     context=None,
 ):
-    context = context or build_multi_timeframe_context(
+    context = context or build_trade_prediction_context(
         db,
         symbol,
         mode,
@@ -109,8 +124,8 @@ def build_trade_setup_payload(
         higher,
         stale_after_seconds,
     )
-    stack = context["stack"]
-    timeframes = context["timeframes"]
+    stack = context.get("prediction_stack") or context.get("stack")
+    timeframes = context.get("prediction_timeframes") or context.get("timeframes")
     confirmation = context["confirmation"]
     setup = build_trade_setup_decision(confirmation, timeframes)
     scenario = build_scenario_plan(confirmation, timeframes)
@@ -136,7 +151,7 @@ def build_trade_setup_payload(
             trade_plan["target1"],
         )
 
-        decision_snapshot = persist_decision_snapshot(
+        decision_snapshot = _persist_decision_snapshot_safe(
             db,
             build_decision_snapshot(
                 symbol,
@@ -162,7 +177,12 @@ def build_trade_setup_payload(
         "symbol": symbol,
         "source": "multi_timeframe_trade_setup",
         "mode": mode,
+        "status": setup["status"],
+        "data_scope": "timeframe_stack",
         "timeframes_used": stack,
+        "prediction_stack": stack,
+        "entry_stack": context.get("entry_stack") or [],
+        "timing_stack": context.get("entry_stack") or [],
         "setup": setup,
         "confirmation": confirmation,
         "scenario": scenario,
@@ -187,7 +207,7 @@ def build_entry_trigger_payload(
     stale_after_seconds=900,
     context=None,
 ):
-    context = context or build_multi_timeframe_context(
+    context = context or build_trade_prediction_context(
         db,
         symbol,
         mode,
@@ -196,9 +216,12 @@ def build_entry_trigger_payload(
         higher,
         stale_after_seconds,
     )
-    stack = context["stack"]
-    timeframes = context["timeframes"]
-    confirmation = context["confirmation"]
+    stack = context.get("prediction_stack") or context.get("stack")
+    timeframes = context.get("prediction_timeframes") or context.get("timeframes")
+    confirmation = dict(context["confirmation"])
+    confirmation.setdefault("prediction_stack", stack)
+    confirmation.setdefault("entry_stack", context.get("entry_stack") or [])
+    confirmation.setdefault("entry_timeframes", context.get("entry_timeframes") or [])
     trigger = build_entry_trigger_decision(confirmation, timeframes)
     trade_plan = None
     validation = None
@@ -216,7 +239,7 @@ def build_entry_trigger_payload(
             trade_plan["target1"],
         )
 
-        decision_snapshot = persist_decision_snapshot(
+        decision_snapshot = _persist_decision_snapshot_safe(
             db,
             build_decision_snapshot(
                 symbol,
@@ -241,7 +264,12 @@ def build_entry_trigger_payload(
         "symbol": symbol,
         "source": "multi_timeframe_entry_trigger",
         "mode": mode or _mode_from_stack(stack),
+        "status": trigger["status"],
+        "data_scope": "timeframe_stack",
         "timeframes_used": stack,
+        "prediction_stack": stack,
+        "entry_stack": context.get("entry_stack") or [],
+        "timing_stack": context.get("entry_stack") or [],
         "trigger": trigger,
         "confirmation": confirmation,
         "trade_plan": trade_plan,
@@ -277,6 +305,46 @@ def build_multi_timeframe_context(
     }
 
 
+def build_trade_prediction_context(
+    db,
+    symbol,
+    mode=None,
+    lower=None,
+    middle=None,
+    higher=None,
+    stale_after_seconds=900,
+):
+    prediction_stack = _resolve_prediction_timeframe_stack(mode, lower, middle, higher)
+    entry_stack = _resolve_entry_timing_stack(mode)
+    prediction_timeframes = [
+        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
+        for timeframe in prediction_stack
+    ]
+    entry_timeframes = [
+        _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
+        for timeframe in entry_stack
+    ]
+    confirmation = combine_timeframe_signals(prediction_timeframes)
+    confirmation = {
+        **confirmation,
+        "prediction_stack": prediction_stack,
+        "entry_stack": entry_stack,
+        "timing_stack": entry_stack,
+        "entry_timeframes": entry_timeframes,
+    }
+
+    return {
+        "stack": prediction_stack,
+        "prediction_stack": prediction_stack,
+        "timeframes": prediction_timeframes,
+        "prediction_timeframes": prediction_timeframes,
+        "entry_stack": entry_stack,
+        "timing_stack": entry_stack,
+        "entry_timeframes": entry_timeframes,
+        "confirmation": confirmation,
+    }
+
+
 def _build_entry_trigger_payload(db, symbol, timeframes_to_use, stale_after_seconds):
     return build_entry_trigger_payload(
         db,
@@ -286,6 +354,41 @@ def _build_entry_trigger_payload(db, symbol, timeframes_to_use, stale_after_seco
         higher=timeframes_to_use[2] if len(timeframes_to_use) > 2 else None,
         stale_after_seconds=stale_after_seconds,
     )
+
+
+def _resolve_prediction_timeframe_stack(mode=None, lower=None, middle=None, higher=None):
+    explicit = [
+        _normalize_timeframe_value(lower),
+        _normalize_timeframe_value(middle),
+        _normalize_timeframe_value(higher),
+    ]
+    if all(explicit):
+        stack = explicit
+    else:
+        stack = list(PREDICTION_TIMEFRAME_STACK)
+
+    for timeframe in stack:
+        if timeframe not in SUPPORTED_TIMEFRAMES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported timeframe: {timeframe}",
+            )
+
+    if len(set(stack)) != 3:
+        raise HTTPException(
+            status_code=400,
+            detail="lower, middle, and higher timeframes must be different",
+        )
+
+    return stack
+
+
+def _resolve_entry_timing_stack(mode=None):
+    normalized_mode = _normalize_timeframe_value(mode)
+    if normalized_mode in ENTRY_TIMING_TIMEFRAME_MODES:
+        return list(ENTRY_TIMING_TIMEFRAME_MODES[normalized_mode])
+
+    return ["15m", "5m"]
 
 
 def _get_cached_watchlist_payloads(db, stack, stale_after_seconds):
@@ -367,13 +470,24 @@ def build_signal_watchlist_payload(
     failed_max=None,
     stale_after_seconds=900,
 ):
-    stack = _resolve_timeframe_stack(mode, lower, middle, higher)
+    stack = _resolve_prediction_timeframe_stack(mode, lower, middle, higher)
     payloads, cache = _get_cached_watchlist_payloads(
         db,
         stack,
         stale_after_seconds,
     )
-    records = [_watchlist_row(payload) for payload in payloads]
+    risk_rows = RiskRepository().latest_for_symbols(
+        db,
+        [payload["symbol"] for payload in payloads],
+    )
+    risk_payloads = {
+        symbol: _watchlist_risk_payload(risk, stale_after_seconds)
+        for symbol, risk in risk_rows.items()
+    }
+    records = [
+        _watchlist_row(payload, risk_payloads.get(payload["symbol"]))
+        for payload in payloads
+    ]
     filtered_records, filters = _filter_watchlist(
         records,
         status,
@@ -669,7 +783,11 @@ def get_contradiction(
     db = SessionLocal()
 
     try:
-        return build_contradiction_report(db, symbol, timeframe, stale_after_seconds)
+        freshness_window = stale_after_seconds_for_timeframe(
+            timeframe,
+            fallback=stale_after_seconds,
+        )
+        return build_contradiction_report(db, symbol, timeframe, freshness_window)
 
     finally:
         db.close()
@@ -684,7 +802,11 @@ def get_probability(
     db = SessionLocal()
 
     try:
-        return build_probability_profile(db, symbol, timeframe, stale_after_seconds)
+        freshness_window = stale_after_seconds_for_timeframe(
+            timeframe,
+            fallback=stale_after_seconds,
+        )
+        return build_probability_profile(db, symbol, timeframe, freshness_window)
 
     finally:
         db.close()
@@ -795,30 +917,65 @@ def build_signal_diagnostics_payload(db, symbol, timeframe="5m", stale_after_sec
     return _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds)
 
 
+def _probability_aliases(probability):
+    if not probability:
+        return {
+            "long_probability": None,
+            "short_probability": None,
+            "wait_probability": None,
+            "probabilities": {"LONG": 0, "SHORT": 0, "WAIT": 100},
+            "probability_decision": "WAIT",
+            "probability_actionable": False,
+            "probability_status": "INVALIDATED",
+        }
+
+    return {
+        "long_probability": probability.get("long_probability"),
+        "short_probability": probability.get("short_probability"),
+        "wait_probability": probability.get("wait_probability"),
+        "probabilities": probability.get("probabilities") or {},
+        "probability_decision": probability.get("decision"),
+        "probability_actionable": probability.get("actionable"),
+        "probability_status": probability.get("status"),
+    }
+
+
+def _persist_decision_snapshot_safe(db, snapshot):
+    try:
+        return persist_decision_snapshot(db, snapshot)
+    except Exception:
+        safe_rollback(db)
+        return None
+
+
 def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
+    freshness_window = stale_after_seconds_for_timeframe(
+        timeframe,
+        fallback=stale_after_seconds,
+    )
     candle = _latest_candle(db, symbol, timeframe)
 
     if not candle:
+        probability = build_probability_profile(
+            db,
+            symbol,
+            timeframe,
+            freshness_window,
+        )
         return {
             "symbol": symbol,
             "timeframe": timeframe,
             "source": "computed_current",
+            "status": "NO_DATA",
+            "data_scope": "timeframe",
             "signal": "NO_DATA",
             "confidence": 0,
-            "freshness": freshness_status(None, stale_after_seconds),
+            "scoring_profile": None,
+            "freshness": freshness_status(None, freshness_window),
             "message": "No latest candle found for symbol/timeframe",
-            "contradiction": build_contradiction_report(
-                db,
-                symbol,
-                timeframe,
-                stale_after_seconds,
-            ),
-            "probability": build_probability_profile(
-                db,
-                symbol,
-                timeframe,
-                stale_after_seconds,
-            ),
+            "contradiction": build_contradiction_report(db, symbol, timeframe, freshness_window),
+            "probability": probability,
+            **_probability_aliases(probability),
         }
 
     data = get_ai_inputs(db, symbol, timeframe)
@@ -827,7 +984,7 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
     current_price = float(candle.close_price)
     atr = _latest_atr(data["feature"], current_price)
     trade_plan = build_trade_plan(signal["signal"], current_price, atr)
-    decision_snapshot = persist_decision_snapshot(
+    decision_snapshot = _persist_decision_snapshot_safe(
         db,
         build_decision_snapshot(
             symbol,
@@ -853,6 +1010,7 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
             },
         ),
     )
+    probability = build_probability_profile(db, symbol, timeframe, freshness_window)
 
     try:
         persisted_signal = _latest_persisted_signal(
@@ -872,13 +1030,16 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
         "symbol": symbol,
         "timeframe": timeframe,
         "source": "computed_current",
+        "status": "OK",
+        "data_scope": "timeframe",
         "signal": signal["signal"],
         "bias": signal["bias"],
         "confidence": signal["confidence"],
         "score": signal["score"],
+        "scoring_profile": signal.get("scoring_profile"),
         "current_price": current_price,
         "candle_time": candle.candle_time,
-        "freshness": freshness_status(candle.candle_time, stale_after_seconds),
+        "freshness": freshness_status(candle.candle_time, freshness_window),
         "trade_plan": trade_plan,
         "decision_snapshot": {
             "id": getattr(decision_snapshot, "id", None),
@@ -886,34 +1047,25 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
             "effective_timestamp": getattr(decision_snapshot, "effective_timestamp", None),
         },
         "reasons": signal["reasons"],
-        "contradiction": build_contradiction_report(
-            db,
-            symbol,
-            timeframe,
-            stale_after_seconds,
-        ),
-        "probability": build_probability_profile(
-            db,
-            symbol,
-            timeframe,
-            stale_after_seconds,
-        ),
+        "contradiction": build_contradiction_report(db, symbol, timeframe, freshness_window),
+        "probability": probability,
+        **_probability_aliases(probability),
         "inputs": {
             "feature": freshness_status(
                 getattr(data["feature"], "CreatedAt", None),
-                stale_after_seconds,
+                freshness_window,
             ),
             "regime": freshness_status(
                 getattr(data["regime"], "CreatedAt", None),
-                stale_after_seconds,
+                freshness_window,
             ),
             "orderflow": freshness_status(
                 getattr(data["orderflow"], "CreatedAt", None),
-                stale_after_seconds,
+                freshness_window,
             ),
             "smc": freshness_status(
                 getattr(data["smc"], "created_at", None),
-                stale_after_seconds,
+                freshness_window,
             ),
         },
         "latest_persisted_signal": persisted_signal["latest_usable"],
@@ -930,6 +1082,8 @@ def build_signal_batch_payload(db, symbols, timeframe="5m", stale_after_seconds=
 
     return {
         "source": "computed_current_batch",
+        "status": "OK",
+        "data_scope": "timeframe",
         "timeframe": timeframe,
         "count": len(records),
         "records": records,
@@ -1196,12 +1350,26 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
             "validation_errors": validation["errors"] if validation else [],
         }
 
-    if trade_repo.has_open_trade(db, symbol, side):
-        return {
-            **base,
-            "action": "skipped_existing_open",
-            "message": "Open trade plan already exists for symbol and side",
-        }
+    replaced_trade_plan_id = None
+    existing_trade = trade_repo.get_open_trade(db, symbol, side)
+    if existing_trade:
+        if _trade_plan_matches_existing_trade(
+            existing_trade,
+            trade_plan,
+            confidence=lower.get("confidence", 0),
+        ):
+            return {
+                **base,
+                "action": "skipped_existing_open",
+                "message": "Open trade plan already exists for symbol and side",
+            }
+
+        replaced_trade_plan_id = existing_trade.id
+        trade_repo.invalidate_trade(
+            db,
+            existing_trade,
+            reason="Open trade plan replaced by newer READY signal",
+        )
 
     trade = trade_repo.save_ready_trade_plan(
         db,
@@ -1223,7 +1391,8 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
 
     return {
         **base,
-        "action": "saved",
+        "action": "replaced_existing_open" if replaced_trade_plan_id else "saved",
+        "replaced_trade_plan_id": replaced_trade_plan_id,
         "trade_plan_id": trade.id,
         "entry_price": trade.entry_price,
         "stop_loss": trade.stop_loss,
@@ -1234,7 +1403,28 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
     }
 
 
-def _watchlist_row(payload):
+def _trade_plan_matches_existing_trade(existing_trade, trade_plan, confidence=None):
+    return (
+        _same_optional_number(getattr(existing_trade, "entry_price", None), trade_plan.get("entry"))
+        and _same_optional_number(getattr(existing_trade, "stop_loss", None), trade_plan.get("stop_loss"))
+        and _same_optional_number(getattr(existing_trade, "target1", None), trade_plan.get("target1"))
+        and _same_optional_number(getattr(existing_trade, "target2", None), trade_plan.get("target2"))
+        and _same_optional_number(getattr(existing_trade, "risk_reward", None), trade_plan.get("risk_reward"))
+        and _same_optional_number(getattr(existing_trade, "confidence", None), confidence)
+    )
+
+
+def _same_optional_number(left, right, tolerance=1e-8):
+    if left is None and right is None:
+        return True
+
+    if left is None or right is None:
+        return False
+
+    return abs(float(left) - float(right)) <= tolerance
+
+
+def _watchlist_row(payload, risk=None):
     timeframes = {
         item["timeframe"]: item
         for item in payload["timeframes"]
@@ -1242,6 +1432,9 @@ def _watchlist_row(payload):
     trade_plan = payload["trade_plan"] or {}
     trigger = payload["trigger"]
     confirmation = payload["confirmation"]
+    computed_risk = _watchlist_computed_risk_payload(payload)
+    eligibility = _watchlist_eligibility(payload, risk, computed_risk)
+    risk_source = "persisted" if risk else "computed" if computed_risk else "trigger"
 
     return {
         "symbol": payload["symbol"],
@@ -1250,21 +1443,215 @@ def _watchlist_row(payload):
         "overall_bias": confirmation["overall_bias"],
         "trade_permission": confirmation["trade_permission"],
         "reason": trigger["reason"],
+        "confidence": confirmation.get("confidence"),
+        "stack_confidence": trigger.get("stack_confidence"),
+        "confidence_window": trigger.get("confidence_window"),
         "failed_conditions": [
             item["name"]
             for item in trigger.get("conditions", [])
             if not item["passed"]
         ],
+        "validation_errors": (
+            payload.get("trade_plan_validation", {}).get("errors", [])
+            if payload.get("trade_plan_validation")
+            else []
+        ),
+        "eligibility_label": eligibility["label"],
+        "eligibility_tone": eligibility["tone"],
+        "eligibility_reason": eligibility["reason"],
+        "risk_source": risk_source,
+        "persisted_risk": risk,
+        "computed_risk": computed_risk,
+        "risk_decision": None if not risk else risk.get("decision"),
+        "risk_status": None if not risk else risk.get("status"),
+        "risk_is_usable": None if not risk else risk.get("is_usable"),
+        "risk_reason": None if not risk else risk.get("reason"),
+        "risk_validation_errors": [] if not risk else (risk.get("validation_errors") or []),
         "bias_5m": _timeframe_value(timeframes, "5m", "bias"),
         "bias_15m": _timeframe_value(timeframes, "15m", "bias"),
         "bias_1h": _timeframe_value(timeframes, "1h", "bias"),
+        "bias_4h": _timeframe_value(timeframes, "4h", "bias"),
+        "bias_1d": _timeframe_value(timeframes, "1d", "bias"),
         "score_5m": _timeframe_value(timeframes, "5m", "score"),
+        "score_15m": _timeframe_value(timeframes, "15m", "score"),
+        "score_1h": _timeframe_value(timeframes, "1h", "score"),
+        "score_4h": _timeframe_value(timeframes, "4h", "score"),
+        "score_1d": _timeframe_value(timeframes, "1d", "score"),
         "entry": trade_plan.get("entry"),
         "stop_loss": trade_plan.get("stop_loss"),
         "target1": trade_plan.get("target1"),
         "risk_reward": trade_plan.get("risk_reward"),
         "price_precision": trade_plan.get("price_precision"),
     }
+
+
+def _watchlist_eligibility(payload, risk=None, computed_risk=None):
+    trigger = payload["trigger"] or {}
+    trade_plan = payload.get("trade_plan") or {}
+    validation = payload.get("trade_plan_validation") or {}
+    failed_conditions = [
+        item.get("name")
+        for item in trigger.get("conditions", [])
+        if not item.get("passed")
+    ]
+
+    if trigger.get("status") != "READY":
+        if "confidence_window" in failed_conditions:
+            return {
+                "label": "Blocked by confidence",
+                "tone": "amber",
+                "reason": trigger.get("reason") or "Confidence is outside the entry window",
+            }
+
+        return {
+            "label": "Blocked",
+            "tone": "rose",
+            "reason": trigger.get("reason") or "Entry trigger is not ready",
+        }
+
+    if risk and risk.get("is_usable") is False:
+        return {
+            "label": "Blocked by risk",
+            "tone": "rose",
+            "reason": risk.get("reason") or "Persisted risk decision is not usable",
+        }
+
+    if risk and risk.get("is_usable") is True:
+        return {
+            "label": "Eligible",
+            "tone": "emerald",
+            "reason": risk.get("reason") or "Persisted risk decision approved",
+        }
+
+    if computed_risk and computed_risk.get("is_usable") is False:
+        return {
+            "label": "Blocked by risk",
+            "tone": "rose",
+            "reason": computed_risk.get("reason") or "Computed risk decision is not usable",
+        }
+
+    if computed_risk and computed_risk.get("is_usable") is True:
+        return {
+            "label": "Eligible",
+            "tone": "emerald",
+            "reason": computed_risk.get("reason") or "Computed risk decision approved",
+        }
+
+    if validation and not validation.get("is_valid", True):
+        errors = validation.get("errors") or []
+        return {
+            "label": "Blocked by risk",
+            "tone": "rose",
+            "reason": ", ".join(errors) if errors else "Trade plan validation failed",
+        }
+
+    risk_reward = trade_plan.get("risk_reward")
+    if risk_reward is not None and float(risk_reward) < 1.3:
+        return {
+            "label": "Blocked by risk",
+            "tone": "rose",
+            "reason": "Risk reward is below minimum threshold",
+        }
+
+    return {
+        "label": "Eligible",
+        "tone": "emerald",
+        "reason": trigger.get("reason") or "Signal passes watchlist eligibility checks",
+    }
+
+
+def _watchlist_risk_payload(risk, stale_after_seconds):
+    if not risk:
+        return None
+
+    validation = validate_trade_plan_direction(
+        risk.signal,
+        risk.entry_price,
+        risk.target1,
+    )
+    freshness = freshness_status(risk.created_at, stale_after_seconds)
+    is_usable = validation["is_valid"] and not freshness["is_stale"]
+    reason = _risk_reason_text(risk)
+
+    return {
+        "symbol": risk.symbol,
+        "status": _watchlist_risk_status(freshness, validation),
+        "decision": risk.decision,
+        "reason": reason,
+        "freshness": freshness,
+        "is_valid_trade_plan": validation["is_valid"],
+        "is_usable": is_usable,
+        "validation_errors": validation["errors"],
+    }
+
+
+def _watchlist_computed_risk_payload(payload):
+    trigger = payload.get("trigger") or {}
+    trade_plan = payload.get("trade_plan") or {}
+    confirmation = payload.get("confirmation") or {}
+
+    side = trigger.get("side")
+    entry = trade_plan.get("entry")
+    stop_loss = trade_plan.get("stop_loss")
+    target1 = trade_plan.get("target1")
+    target2 = trade_plan.get("target2")
+    confidence = confirmation.get("confidence")
+
+    if not side or entry is None or stop_loss is None or target1 is None:
+        return None
+
+    try:
+        result = _risk_engine.analyze_trade_plan(
+            symbol=payload.get("symbol"),
+            side=side,
+            entry=entry,
+            stop_loss=stop_loss,
+            target1=target1,
+            target2=target2,
+            confidence=confidence or 0,
+            risk_percent=1,
+        )
+    except Exception:
+        return None
+
+    if not isinstance(result, dict):
+        return None
+
+    return {
+        "symbol": payload.get("symbol"),
+        "decision": result.get("decision"),
+        "reason": result.get("reason"),
+        "risk_reward": result.get("risk_reward"),
+        "position_size": result.get("position_size"),
+        "confidence": result.get("confidence"),
+        "risk_percent": result.get("risk_percent"),
+        "is_usable": str(result.get("decision") or "").upper() == "APPROVE",
+        "validation_errors": [] if str(result.get("decision") or "").upper() == "APPROVE" else [result.get("reason") or "Computed risk rejected"],
+    }
+
+
+def _watchlist_risk_status(freshness, validation):
+    if freshness.get("is_stale") and not validation.get("is_valid"):
+        return "historical_stale_invalid"
+    if freshness.get("is_stale"):
+        return "historical_stale"
+    if validation.get("is_valid"):
+        return "current_valid"
+    return "current_invalid"
+
+
+def _watchlist_risk_reason_text(risk):
+    for field in ("reason", "message"):
+        value = getattr(risk, field, None)
+        if value:
+            return value
+
+    decision = str(getattr(risk, "decision", "") or "").upper()
+    if decision == "APPROVE":
+        return "Risk engine approved signal"
+    if decision == "REJECT":
+        return "Risk engine rejected signal"
+    return "Persisted risk decision available"
 
 
 def _timeframe_value(timeframes, timeframe, key):
@@ -1277,31 +1664,34 @@ def _timeframe_value(timeframes, timeframe, key):
 
 
 def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
+    freshness_window = stale_after_seconds_for_timeframe(
+        timeframe,
+        fallback=stale_after_seconds,
+    )
     candle = _latest_candle(db, symbol, timeframe)
 
     if not candle:
+        probability = build_probability_profile(
+            db,
+            symbol,
+            timeframe,
+            freshness_window,
+        )
         return {
             "symbol": symbol,
             "timeframe": timeframe,
             "source": "computed_current",
+            "status": "NO_DATA",
+            "data_scope": "timeframe",
             "signal": "NO_DATA",
             "bias": "NO_DATA",
             "confidence": 0,
             "score": 0,
-            "freshness": freshness_status(None, stale_after_seconds),
+            "freshness": freshness_status(None, freshness_window),
             "message": "No latest candle found for symbol/timeframe",
-            "contradiction": build_contradiction_report(
-                db,
-                symbol,
-                timeframe,
-                stale_after_seconds,
-            ),
-            "probability": build_probability_profile(
-                db,
-                symbol,
-                timeframe,
-                stale_after_seconds,
-            ),
+            "contradiction": build_contradiction_report(db, symbol, timeframe, freshness_window),
+            "probability": probability,
+            **_probability_aliases(probability),
         }
 
     data = get_ai_inputs(db, symbol, timeframe)
@@ -1311,48 +1701,42 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
     components = score_master_signal_components(
         data["feature"], data["regime"], data["orderflow"], data["smc"]
     )
+    probability = build_probability_profile(db, symbol, timeframe, freshness_window)
 
     return {
         "symbol": symbol,
         "timeframe": timeframe,
         "source": "computed_current",
+        "status": "OK",
+        "data_scope": "timeframe",
         "signal": signal["signal"],
         "bias": signal["bias"],
         "confidence": signal["confidence"],
         "score": signal["score"],
         "current_price": float(candle.close_price),
         "candle_time": candle.candle_time,
-        "freshness": freshness_status(candle.candle_time, stale_after_seconds),
+        "freshness": freshness_status(candle.candle_time, freshness_window),
         "component_scores": components,
         "reasons": signal["reasons"],
-        "contradiction": build_contradiction_report(
-            db,
-            symbol,
-            timeframe,
-            stale_after_seconds,
-        ),
-        "probability": build_probability_profile(
-            db,
-            symbol,
-            timeframe,
-            stale_after_seconds,
-        ),
+        "contradiction": build_contradiction_report(db, symbol, timeframe, freshness_window),
+        "probability": probability,
+        **_probability_aliases(probability),
         "inputs": {
             "feature": freshness_status(
                 getattr(data["feature"], "CreatedAt", None),
-                stale_after_seconds,
+                freshness_window,
             ),
             "regime": freshness_status(
                 getattr(data["regime"], "CreatedAt", None),
-                stale_after_seconds,
+                freshness_window,
             ),
             "orderflow": freshness_status(
                 getattr(data["orderflow"], "CreatedAt", None),
-                stale_after_seconds,
+                freshness_window,
             ),
             "smc": freshness_status(
                 getattr(data["smc"], "created_at", None),
-                stale_after_seconds,
+                freshness_window,
             ),
         },
     }

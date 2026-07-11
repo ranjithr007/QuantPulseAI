@@ -1,27 +1,34 @@
+import { formatTimeInIst } from "../utils/formatters";
+
 export function buildSignalRow(symbol, signal, watchlist) {
   const side = signalType(signal);
   const actionable = side !== "WAIT";
   const tradePlan = side === "WAIT" ? {} : signal?.trade_plan || {};
   const watchRow = (watchlist?.records || []).find((item) => item.symbol === symbol);
   const invalidation = signalInvalidationReason(signal);
-  const directional = directionalSplit(signal, displayDirection(signal, side));
+  const directional = directionalSplit(signal, signalDirectionHint(signal));
+  const probability = signal?.probability || {};
 
   return {
     symbol,
+    timeframe: signal?.timeframe || null,
     type: side,
     confidence: effectiveConfidence(signal),
     signalBias: signal?.bias || signal?.signal || "WAIT",
     signalScore: safeNumber(signal?.score, 0),
+    probabilityLong: normalizedProbability(probability?.probabilities?.LONG ?? probability?.long_probability ?? signal?.long_probability),
+    probabilityShort: normalizedProbability(probability?.probabilities?.SHORT ?? probability?.short_probability ?? signal?.short_probability),
+    probabilityWait: normalizedProbability(probability?.probabilities?.WAIT ?? probability?.wait_probability ?? signal?.wait_probability),
     longPct: directional.longPct,
     shortPct: directional.shortPct,
     longSidePct: directional.longPct,
     shortSidePct: directional.shortPct,
-    entry: actionable ? tradePlan.entry ?? watchRow?.entry ?? null : null,
-    stopLoss: actionable ? tradePlan.stop_loss ?? watchRow?.stop_loss ?? null : null,
+    entry: actionable ? tradePlan.entry ?? null : null,
+    stopLoss: actionable ? tradePlan.stop_loss ?? null : null,
     targets: actionable ? [tradePlan.target1, tradePlan.target2].filter((value) => value !== null && value !== undefined) : [],
-    riskReward: actionable ? tradePlan.risk_reward ?? watchRow?.risk_reward ?? null : null,
-    regime: signal?.bias || watchRow?.overall_bias || signal?.signal || "WAIT",
-    reason: invalidation || formatReason(signal?.reasons, watchRow?.reason),
+    riskReward: actionable ? tradePlan.risk_reward ?? null : null,
+    regime: signal?.bias || signal?.signal || "WAIT",
+    reason: invalidation || formatReason(signal?.reasons, signal?.message),
     currentPrice: signal?.current_price ?? null,
     liveChangePct: safeNumber(signal?.live_market?.price_change_pct, null),
     liveUpdatedAt: signal?.live_market?.received_at || signal?.live_market?.event_time || null,
@@ -36,17 +43,22 @@ export function buildSelectedDetail({
   candles,
   orderflow,
   smc,
+  orderflowPayload,
+  smcPayload,
   risk,
   aiScores,
   derivatives,
   multiTimeframe,
+  predictionContext,
+  prediction,
+  timing,
   tradeSetup,
   entryTrigger,
 }) {
   const currentPrice = safeNumber(signal?.current_price, candles?.[0]?.close_price || candles?.[0]?.close || 0);
   const signalBias = signalType(signal);
   const rawTradePlan = signal?.trade_plan || {};
-  const directional = directionalSplit(signal, displayDirection(signal, signalBias));
+  const directional = directionalSplit(signal, signalDirectionHint(signal));
   const tradePlan =
     signalBias === "WAIT"
       ? {
@@ -61,8 +73,8 @@ export function buildSelectedDetail({
   const regimeLabel = signal?.bias || diagnostics?.bias || "WAIT";
   const invalidation = signalInvalidationReason(signal);
   const regimeReason = invalidation || formatReason(diagnostics?.reasons, signal?.reasons?.[0]);
-  const selectedOrderflow = orderflow?.[0] || null;
-  const selectedSmc = smc?.[0] || null;
+  const selectedOrderflow = firstRecord(orderflow);
+  const selectedSmc = firstRecord(smc);
   const atr = safeNumber(tradePlan.atr, currentPrice * 0.01);
   const recentHigh = candles.length ? Math.max(...candles.map((item) => safeNumber(item.high_price ?? item.high, currentPrice))) : currentPrice;
   const recentLow = candles.length ? Math.min(...candles.map((item) => safeNumber(item.low_price ?? item.low, currentPrice))) : currentPrice;
@@ -95,12 +107,26 @@ export function buildSelectedDetail({
         { label: "Exhaustion", value: formatValue(getValue(selectedOrderflow, "exhaustion_type", "Exhaustion")) },
       ]
     : [{ label: "Order flow", value: "No data" }];
-  const breakdown = buildConfidenceBreakdown(signal, diagnostics, risk, aiScores);
+  const smcTone = smcToneFromRecord(selectedSmc);
+  const smcBadge = formatValue(getValue(selectedSmc, "smc_bias", "bias", "structure"));
+  const smcLines = selectedSmc
+    ? [
+        { label: "Bias", value: formatValue(getValue(selectedSmc, "smc_bias", "bias")) },
+        { label: "Structure", value: formatValue(getValue(selectedSmc, "structure")) },
+        { label: "BOS", value: formatValue(getValue(selectedSmc, "bos_type")) },
+        { label: "CHoCH", value: formatValue(getValue(selectedSmc, "choch_type")) },
+        { label: "Order block", value: formatStructureLevel(getValue(selectedSmc, "order_block_type"), getValue(selectedSmc, "order_block_price")) },
+        { label: "Liquidity sweep", value: formatSweepValue(selectedSmc) },
+      ]
+    : [{ label: "SMC", value: "No data" }];
+  const breakdown = buildConfidenceBreakdown(signal, diagnostics, risk, aiScores, selectedOrderflow, selectedSmc);
   const liquidityZones = {
     upper: currentPrice + atr * 1.75,
     lower: currentPrice - atr * 1.75,
   };
   const regimeTone = regimeToneFromLabel(regimeLabel);
+  const predictionStack = predictionContext?.prediction_stack || multiTimeframe?.prediction_stack || multiTimeframe?.timeframes_used || [];
+  const timingStack = timing?.timing_stack || entryTrigger?.timing_stack || entryTrigger?.entry_stack || multiTimeframe?.timing_stack || multiTimeframe?.entry_stack || [];
 
   return {
     symbol,
@@ -124,6 +150,9 @@ export function buildSelectedDetail({
     orderflowTone,
     orderflowBadge,
     orderflowLines,
+    smcTone,
+    smcBadge,
+    smcLines,
     whaleTone,
     whaleBuyCount,
     whaleSellCount,
@@ -135,18 +164,51 @@ export function buildSelectedDetail({
     tradeSetup,
     entryTrigger,
     multiTimeframe,
+    predictionContext,
+    prediction,
+    timing,
+    predictionStack,
+    timingStack,
     aiScores,
     derivatives,
     risk,
     selectedOrderflow,
     selectedSmc,
+    selectedOrderflowPayload: orderflowPayload || null,
+    selectedSmcPayload: smcPayload || null,
   };
+}
+
+function hasMeaningfulComponentScore(component) {
+  if (!component || typeof component !== "object") {
+    return false;
+  }
+
+  const score = Number(component.score);
+  if (!Number.isFinite(score)) {
+    return false;
+  }
+
+  if (score !== 0) {
+    return true;
+  }
+
+  const reason = String(component.reason || "").trim().toLowerCase();
+  if (!reason) {
+    return false;
+  }
+
+  return !reason.startsWith("no ") && !reason.includes("no order flow score") && !reason.includes("no smc score");
 }
 
 export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, performance, openTrades, tradePlan, multiTimeframe }) {
   const reasons = [];
+  const warnings = [];
   const signalSide = signalType(signal);
   const confidence = effectiveConfidence(signal);
+  const stackState = timeframeStackState(multiTimeframe);
+  const confidencePenalty = stackState === "MIXED_STRONG" ? 15 : stackState === "MIXED_LIGHT" ? 5 : 0;
+  const adjustedConfidence = Math.max(0, confidence - confidencePenalty);
   const invalidation = signalInvalidationReason(signal);
   const dailyLoss = sumWithinDays(openTrades, 1, "unrealized_pnl_percent") + sumWithinDays(performance?.closedTrades || [], 1);
   const directionAllowed =
@@ -161,25 +223,30 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
   if (!directionAllowed) reasons.push("Direction not allowed");
   if (signalSide === "WAIT") reasons.push("Signal is WAIT");
   if (invalidation) reasons.push(invalidation);
-  if (confidence < auto.minConfidence) reasons.push("Confidence below minimum");
+  if (stackState === "MIXED_LIGHT" || stackState === "MIXED_STRONG") warnings.push("Timeframe stack is mixed");
+  if (stackState === "MIXED_STRONG") reasons.push("Timeframe stack is strongly mixed");
+  if (adjustedConfidence < auto.minConfidence) reasons.push("Confidence below minimum");
   if (openTrades.length >= auto.maxOpenTrades) reasons.push("Open trade cap reached");
   if (safeNumber(performance?.open_trades, 0) >= auto.maxOpenTrades) reasons.push("Backend open trade cap reached");
   if (safeNumber(performance?.total_pnl_percent, 0) <= -Math.abs(auto.dailyLossLimit)) reasons.push("Daily loss limit reached");
   if (risk?.is_usable === false) reasons.push("Risk decision not usable");
   if (tradePlan && safeNumber(tradePlan.risk_reward, 0) < 1) reasons.push("Risk reward is weak");
-  if (multiTimeframe?.overall_bias && String(multiTimeframe.overall_bias).includes("MIXED")) reasons.push("Timeframe stack is mixed");
 
   const allowed = reasons.length === 0;
   const reason = allowed
-    ? "Selected signal passes allowlist, direction, confidence, and risk checks."
+    ? `Selected signal passes allowlist, direction, confidence, and risk checks.${warnings.length ? " Timeframe stack is mixed, so confidence was reduced." : ""}`
     : `Automatic execution blocked by ${reasons.join(", ")}.`;
 
   return {
     allowed,
     reason,
     reasons,
+    warnings,
     signalSide,
-    confidence,
+    confidence: adjustedConfidence,
+    rawConfidence: confidence,
+    confidencePenalty,
+    stackState,
     dailyLoss,
   };
 }
@@ -199,7 +266,7 @@ export function normalizeCandles(response) {
         high: safeNumber(item.high_price ?? item.high, 0),
         low: safeNumber(item.low_price ?? item.low, 0),
         close: safeNumber(item.close_price ?? item.close, 0),
-        volume: safeNumber(item.volume, 0),
+        volume: safeNumber(item.volume ?? item.Volume, 0),
       };
     })
     .sort((a, b) => a.sortTime - b.sortTime);
@@ -287,7 +354,7 @@ export function dateValue(value) {
   return Number.isFinite(date.getTime()) ? date.getTime() : 0;
 }
 
-function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores) {
+function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores, selectedOrderflow, selectedSmc) {
   const componentScores = diagnostics?.component_scores || {};
   const signalConfidence = effectiveConfidence(signal, diagnostics?.confidence);
   const aiScore = safeNumber(
@@ -298,6 +365,12 @@ function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores) {
   const contradictionScore = diagnostics?.contradiction?.conflict_score
     ? Math.max(0, 100 - safeNumber(diagnostics.contradiction.conflict_score, 0))
     : 60;
+  const orderflowComponent = hasMeaningfulComponentScore(componentScores.orderflow)
+    ? componentScores.orderflow
+    : fallbackOrderflowComponent(selectedOrderflow) || componentScores.orderflow || null;
+  const smcComponent = hasMeaningfulComponentScore(componentScores.smc)
+    ? componentScores.smc
+    : fallbackSmcComponent(selectedSmc) || componentScores.smc || null;
 
   return [
     {
@@ -320,15 +393,15 @@ function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores) {
     },
     {
       label: "Order flow",
-      score: safeNumber(componentScores.orderflow?.score, 0),
-      reason: componentScores.orderflow?.reason || "No order flow score",
-      width: clamp(Math.abs(safeNumber(componentScores.orderflow?.score, 0)) * 2, 0, 100),
+      score: safeNumber(orderflowComponent?.score, 0),
+      reason: orderflowComponent?.reason || "No order flow score",
+      width: clamp(Math.abs(safeNumber(orderflowComponent?.score, 0)) * 2, 0, 100),
     },
     {
       label: "SMC",
-      score: safeNumber(componentScores.smc?.score, 0),
-      reason: componentScores.smc?.reason || "No SMC score",
-      width: clamp(Math.abs(safeNumber(componentScores.smc?.score, 0)) * 2, 0, 100),
+      score: safeNumber(smcComponent?.score, 0),
+      reason: smcComponent?.reason || "No SMC score",
+      width: clamp(Math.abs(safeNumber(smcComponent?.score, 0)) * 2, 0, 100),
     },
     {
       label: "AI score",
@@ -349,6 +422,64 @@ function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores) {
       width: clamp(contradictionScore, 0, 100),
     },
   ];
+}
+
+function fallbackOrderflowComponent(record) {
+  const resolved = firstRecord(record);
+  if (!resolved) {
+    return null;
+  }
+
+  const signal = String(
+    getValue(resolved, "FlowSignal", "flow_signal", "aggressive_side", "aggressiveSide") || ""
+  ).toUpperCase();
+  const delta = safeNumber(getValue(resolved, "delta", "Delta", "cumulative_delta", "CVD"), 0);
+
+  if (signal === "BUYERS_CONTROL") {
+    return { score: 25, reason: "Buyers control flow" };
+  }
+  if (signal === "SELLERS_CONTROL") {
+    return { score: -25, reason: "Sellers control flow" };
+  }
+  if (signal === "POSSIBLE_BUY_REVERSAL") {
+    return { score: 15, reason: "Buyer absorption hints at reversal" };
+  }
+  if (signal === "POSSIBLE_SELL_REVERSAL") {
+    return { score: -15, reason: "Seller absorption hints at reversal" };
+  }
+  if (delta > 0) {
+    return { score: 10, reason: "Positive orderflow delta" };
+  }
+  if (delta < 0) {
+    return { score: -10, reason: "Negative orderflow delta" };
+  }
+
+  return null;
+}
+
+function fallbackSmcComponent(record) {
+  const resolved = firstRecord(record);
+  if (!resolved) {
+    return null;
+  }
+
+  const bias = String(getValue(resolved, "smc_bias", "bias") || "").toUpperCase();
+  const structure = String(getValue(resolved, "structure", "bos_type", "choch_type") || "").toUpperCase();
+
+  if (bias === "LONG") {
+    return { score: 30, reason: "SMC bullish" };
+  }
+  if (bias === "SHORT") {
+    return { score: -30, reason: "SMC bearish" };
+  }
+  if (structure.includes("BULL") || structure.includes("LONG")) {
+    return { score: 20, reason: "Bullish SMC structure" };
+  }
+  if (structure.includes("BEAR") || structure.includes("SHORT")) {
+    return { score: -20, reason: "Bearish SMC structure" };
+  }
+
+  return null;
 }
 
 function priceChangePct(candles) {
@@ -373,6 +504,11 @@ function signalType(signal) {
   if (bias.includes("LONG") && rawSignal !== "WAIT") return "BUY";
   if (bias.includes("SHORT") && rawSignal !== "WAIT") return "SELL";
   return "WAIT";
+}
+
+function timeframeStackState(multiTimeframe) {
+  const confirmation = multiTimeframe?.confirmation || multiTimeframe || {};
+  return String(confirmation.stack_state || "").toUpperCase();
 }
 
 function directionalSplit(signal, fallbackSide = "WAIT") {
@@ -418,14 +554,47 @@ function directionalSplit(signal, fallbackSide = "WAIT") {
   };
 }
 
+function signalDirectionHint(signal) {
+  const rawSignal = String(signal?.signal || "").toUpperCase();
+  if (rawSignal === "LONG" || rawSignal === "BUY") return "BUY";
+  if (rawSignal === "SHORT" || rawSignal === "SELL") return "SELL";
+
+  const bias = String(signal?.bias || "").toUpperCase();
+  if (bias.includes("LONG")) return "BUY";
+  if (bias.includes("SHORT")) return "SELL";
+
+  const score = safeNumber(signal?.score, 0);
+  if (score > 0) return "BUY";
+  if (score < 0) return "SELL";
+
+  const probabilityDecision = String(signal?.probability?.decision || "").toUpperCase();
+  if (probabilityDecision === "LONG") return "BUY";
+  if (probabilityDecision === "SHORT") return "SELL";
+
+  return "WAIT";
+}
+
 function displayDirection(signal, fallbackSide = "WAIT") {
   if (fallbackSide === "BUY" || fallbackSide === "SELL") {
     return fallbackSide;
   }
 
+  const invalidation = signalInvalidationReason(signal);
+  const hardInvalidation =
+    invalidation &&
+    !String(invalidation).startsWith("Probability engine decision:");
+
+  if (hardInvalidation) {
+    return "WAIT";
+  }
+
   const bias = String(signal?.bias || "").toUpperCase();
   if (bias.includes("LONG")) return "BUY";
   if (bias.includes("SHORT")) return "SELL";
+
+  const score = safeNumber(signal?.score, 0);
+  if (score > 0) return "BUY";
+  if (score < 0) return "SELL";
 
   const probabilityDecision = String(signal?.probability?.decision || "").toUpperCase();
   if (probabilityDecision === "LONG") return "BUY";
@@ -437,6 +606,10 @@ function displayDirection(signal, fallbackSide = "WAIT") {
 function extractProbabilityPair(signal) {
   const probability = signal?.probability || {};
   const candidates = [
+    [signal?.probabilityLong, signal?.probabilityShort],
+    [signal?.probability_long, signal?.probability_short],
+    [signal?.longProbability, signal?.shortProbability],
+    [signal?.long_probability, signal?.short_probability],
     [probability.probabilities?.LONG, probability.probabilities?.SHORT],
     [probability.probabilities?.long, probability.probabilities?.short],
     [probability.probabilities?.long_probability, probability.probabilities?.short_probability],
@@ -474,12 +647,13 @@ function signalInvalidationReason(signal) {
   const probabilityDecision = String(signal?.probability?.decision || "").toUpperCase();
   const probabilityActionable = signal?.probability?.actionable;
   const freshness = signal?.freshness;
+  const rawSignal = String(signal?.signal || "").toUpperCase();
 
   if (freshness?.is_stale) return "Signal data is stale";
   if (contradictionStatus === "INVALIDATED") return signal?.contradiction?.summary || "Signal invalidated by contradiction engine";
   if (contradictionTradeAllowed === false) return signal?.contradiction?.summary || "Trade blocked by contradiction engine";
-  if (probabilityActionable === false) return `Probability engine decision: ${probabilityDecision || "WAIT"}`;
-  if (probabilityDecision === "WAIT" && String(signal?.signal || "").toUpperCase() !== "WAIT") return "Probability engine decision: WAIT";
+  if (probabilityActionable === false && rawSignal === "WAIT") return `Probability engine decision: ${probabilityDecision || "WAIT"}`;
+  if (probabilityDecision === "WAIT" && rawSignal === "WAIT") return "Probability engine decision: WAIT";
 
   return "";
 }
@@ -518,6 +692,18 @@ function orderflowToneFromRecord(record) {
   return "amber";
 }
 
+function smcToneFromRecord(record) {
+  if (!record) return "slate";
+
+  const bias = String(getValue(record, "smc_bias", "bias") || "").toUpperCase();
+  const structure = String(getValue(record, "structure", "bos_type", "choch_type") || "").toUpperCase();
+
+  if (bias === "LONG" || structure.includes("BULL")) return "emerald";
+  if (bias === "SHORT" || structure.includes("BEAR")) return "rose";
+  if (bias === "NEUTRAL") return "amber";
+  return "cyan";
+}
+
 function regimeToneFromLabel(label) {
   const text = String(label || "").toUpperCase();
   if (text.includes("BULL")) return "emerald";
@@ -532,14 +718,66 @@ function formatValue(value) {
   return String(value);
 }
 
+function firstRecord(value) {
+  if (Array.isArray(value)) {
+    return value.find((item) => item && typeof item === "object") || null;
+  }
+
+  if (value && typeof value === "object") {
+    return value;
+  }
+
+  return null;
+}
+
+function formatStructureLevel(type, price) {
+  const label = formatValue(type);
+  if (price === null || price === undefined || price === "") {
+    return label;
+  }
+
+  return `${label} @ ${formatNumber(price, 6)}`;
+}
+
+function formatSweepValue(record) {
+  const resolved = firstRecord(record);
+  const detected = getValue(resolved, "liquidity_sweep");
+  const price = getValue(resolved, "sweep_price");
+
+  if (detected === false) {
+    return "NONE";
+  }
+
+  if (price === null || price === undefined || price === "") {
+    return detected ? "DETECTED" : "N/A";
+  }
+
+  return formatNumber(price, 6);
+}
+
 function getValue(item, ...keys) {
   if (!item) return null;
+
+  const normalizedEntries = Object.entries(item).map(([entryKey, entryValue]) => [normalizeLookupKey(entryKey), entryValue]);
+
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(item, key) && item[key] !== null && item[key] !== undefined) {
       return item[key];
     }
+
+    const normalizedKey = normalizeLookupKey(key);
+    const normalizedMatch = normalizedEntries.find(([entryKey]) => entryKey === normalizedKey);
+    if (normalizedMatch && normalizedMatch[1] !== null && normalizedMatch[1] !== undefined) {
+      return normalizedMatch[1];
+    }
   }
   return null;
+}
+
+function normalizeLookupKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
 function clamp(value, min, max) {
@@ -556,9 +794,7 @@ function formatNumber(value, digits = 2) {
 
 function formatShortTime(value) {
   if (!value) return "N/A";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return formatTimeInIst(value, String(value));
 }
 
 function formatCompactIndex(index) {

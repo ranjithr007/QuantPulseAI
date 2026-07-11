@@ -3,19 +3,22 @@ import { Eye } from "lucide-react";
 import { Link } from "react-router-dom";
 import Pill from "./ui/Pill";
 import { formatPercent, formatPrice, formatSigned } from "../utils/formatters";
+import { deriveRowEligibilityState } from "../utils/eligibility";
 import { formatTickAge, getLiveMarketState, liveStateClasses } from "../utils/liveMarket";
 
 export default function MarketSignalTable({
   rows = [],
   watchlist,
   liveStatus,
+  paperTradeCandidates = [],
+  minConfidence = 65,
   activeSymbol,
   onOpenSymbol,
   getSymbolHref,
   title = "Market scan",
   subtitle = "Live source, AI signal, and risk context",
 }) {
-  const enrichedRows = rows.map((row) => enrichRow(row, watchlist, liveStatus));
+  const enrichedRows = rows.map((row) => enrichRow(row, watchlist, liveStatus, minConfidence, paperTradeCandidates));
 
   return (
     <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-900/70">
@@ -28,10 +31,11 @@ export default function MarketSignalTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="min-w-[1060px] divide-y divide-white/5 text-left text-sm">
+        <table className="min-w-[920px] divide-y divide-white/5 text-left text-sm xl:min-w-[1040px]">
           <thead className="bg-slate-950/60 text-[11px] uppercase tracking-[0.16em] text-slate-500">
             <tr>
               <th className="px-3 py-2.5">Symbol</th>
+              <th className="px-3 py-2.5">Timeframe</th>
               <th className="px-3 py-2.5">Live price</th>
               <th className="px-3 py-2.5">AI signal</th>
               <th className="px-3 py-2.5">Confidence</th>
@@ -46,11 +50,14 @@ export default function MarketSignalTable({
           <tbody className="divide-y divide-white/5">
             {enrichedRows.map((row) => (
               <tr key={row.symbol} className={clsx("transition hover:bg-white/5", activeSymbol === row.symbol && "bg-cyan-500/10")}>
-                <td className="px-3 py-2.5">
+                <td className="px-2.5 py-2.5 sm:px-3">
                   <div className="font-medium text-white">{row.symbol}</div>
                   <div className="text-[11px] text-slate-500">{row.watchStatus}</div>
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-2.5 py-2.5 sm:px-3">
+                  <Pill tone="slate">{row.timeframe || "-"}</Pill>
+                </td>
+                <td className="px-2.5 py-2.5 sm:px-3">
                   <div className="flex items-center gap-2">
                     <div className="font-medium text-slate-100">{formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}</div>
                     <span className={clsx("inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]", liveStateClasses(row.liveState.tone))}>
@@ -75,18 +82,18 @@ export default function MarketSignalTable({
                       : formatTickAge(row.liveState.ageSeconds)}
                   </div>
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-2.5 py-2.5 sm:px-3">
                   <Pill tone={signalTone(row.type)}>{row.type}</Pill>
                 </td>
-                <td className="px-3 py-2.5 text-slate-300">{formatPercent(row.confidence, 0, "-")}</td>
-                <td className="px-3 py-2.5">
+                <td className="px-2.5 py-2.5 text-slate-300 sm:px-3">{formatPercent(row.confidence, 0, "-")}</td>
+                <td className="px-2.5 py-2.5 sm:px-3">
                   <span className={clsx("font-medium", row.rsScore >= 0 ? "text-emerald-300" : "text-rose-300")}>
                     {formatSigned(row.rsScore, 0, "-")}
                   </span>
                 </td>
-                <td className="px-3 py-2.5 text-slate-300">{row.stage}</td>
-                <td className="px-3 py-2.5 text-slate-300">{row.regime}</td>
-                <td className="px-3 py-2.5">
+                <td className="px-2.5 py-2.5 text-slate-300 sm:px-3">{row.stage}</td>
+                <td className="px-2.5 py-2.5 text-slate-300 sm:px-3">{row.regime}</td>
+                <td className="px-2.5 py-2.5 sm:px-3">
                   <div className="flex min-w-28 overflow-hidden rounded-full bg-slate-950/80">
                     <div className="h-2 bg-emerald-400" style={{ width: `${row.longPct}%` }} />
                     <div className="h-2 bg-rose-400" style={{ width: `${row.shortPct}%` }} />
@@ -95,11 +102,26 @@ export default function MarketSignalTable({
                     {formatPercent(row.longPct, 0)} / {formatPercent(row.shortPct, 0)}
                   </div>
                 </td>
-                <td className="px-3 py-2.5">
-                  <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
-                  <div className="mt-1 text-[11px] text-slate-500">RR {formatSigned(row.riskReward, 2, "-")}</div>
+                <td className="w-[190px] px-2.5 py-2.5 align-top sm:w-[210px] sm:px-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
+                    <Pill tone={row.executorTone}>{row.executorLabel}</Pill>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                    <span>{riskSourceLabel(row.riskSource)}</span>
+                    <span>RR {formatSigned(row.riskReward, 2, "-")}</span>
+                    {row.riskLabel === "Blocked by confidence" ? <span>Min conf {minConfidence}</span> : null}
+                  </div>
+                  {(row.executorNote || row.riskNote) ? (
+                    <div
+                      className="mt-1 max-w-[10rem] line-clamp-3 text-[11px] leading-4 text-slate-500 sm:max-w-[12rem]"
+                      title={row.executorNote || row.riskNote}
+                    >
+                      {row.executorNote || row.riskNote}
+                    </div>
+                  ) : null}
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-2.5 py-2.5 sm:px-3">
                   <DetailAction row={row} onOpenSymbol={onOpenSymbol} getSymbolHref={getSymbolHref} />
                 </td>
               </tr>
@@ -132,16 +154,17 @@ function DetailAction({ row, onOpenSymbol, getSymbolHref }) {
   );
 }
 
-export function enrichRow(row, watchlist, liveStatus) {
+export function enrichRow(row, watchlist, liveStatus, minConfidence = 65, paperTradeCandidates = []) {
   const watchRow = (watchlist?.records || []).find((item) => item.symbol === row.symbol) || {};
-  const rsScore = numberFrom(watchRow.score_5m, watchRow.rs_score, row.confidence - 50);
+  const rsScore = resolveRsScore(row, watchRow);
   const longPct = resolveDirectionalPct(row, "LONG");
   const shortPct = resolveDirectionalPct(row, "SHORT");
   const riskReward = numberFrom(row.riskReward, watchRow.risk_reward, 0);
   const stage = inferStage(row, watchRow);
-  const risk = inferRisk(row, watchRow, riskReward);
+  const risk = deriveRowEligibilityState({ row, watchRow, minConfidence });
   const hasLiveRecord = Boolean(row.liveUpdatedAt);
   const liveState = getLiveMarketState({ liveStatus, updatedAt: row.liveUpdatedAt, hasLiveRecord });
+  const executor = deriveExecutorState(row, paperTradeCandidates);
 
   return {
     ...row,
@@ -157,13 +180,99 @@ export function enrichRow(row, watchlist, liveStatus) {
     riskReward,
     riskLabel: risk.label,
     riskTone: risk.tone,
+    riskNote: risk.note,
+    executorStatus: executor.status,
+    executorLabel: executor.label,
+    executorTone: executor.tone,
+    executorNote: executor.note,
   };
+}
+
+export function deriveExecutorState(row, candidates = []) {
+  const side = normalizeTradeSide(row.type);
+  const candidate = candidates.find(
+    (item) =>
+      String(item?.symbol || "").toUpperCase() === String(row.symbol || "").toUpperCase() &&
+      normalizeTradeSide(item?.side) === side
+  );
+
+  if (!candidate) {
+    return {
+      status: "NO_QUEUED_PLAN",
+      label: "No queued plan",
+      tone: "amber",
+      note: "Executor has no OPEN trade plan queued for this symbol/side.",
+    };
+  }
+
+  const riskFreshness = candidate?.risk_decision?.freshness || null;
+  if (riskFreshness?.is_stale) {
+    return {
+      status: "STALE",
+      label: "Risk stale",
+      tone: "amber",
+      note: `Queued OPEN trade plan exists, but ${staleFreshnessNote(riskFreshness, "risk decision")}.`,
+    };
+  }
+
+  if (candidate.eligible) {
+    return {
+      status: "READY",
+      label: "Executor ready",
+      tone: "emerald",
+      note: "Queued OPEN trade plan passes executor checks.",
+    };
+  }
+
+  return {
+    status: "BLOCKED",
+    label: "Executor blocked",
+    tone: "rose",
+    note: candidate.blocked_reasons?.[0] || "Queued OPEN trade plan is blocked.",
+  };
+}
+
+function normalizeTradeSide(value) {
+  const side = String(value || "").toUpperCase();
+  if (["BUY", "LONG", "STRONG_LONG"].includes(side)) return "LONG";
+  if (["SELL", "SHORT", "STRONG_SHORT"].includes(side)) return "SHORT";
+  return side || null;
 }
 
 function signalTone(type) {
   if (type === "BUY") return "emerald";
   if (type === "SELL") return "rose";
   return "slate";
+}
+
+function riskSourceLabel(source) {
+  const value = String(source || "").toLowerCase();
+  if (value === "persisted") return "Persisted";
+  if (value === "computed") return "Computed";
+  return "Fallback";
+}
+
+function riskSourceTone(source) {
+  const value = String(source || "").toLowerCase();
+  if (value === "persisted") return "cyan";
+  if (value === "computed") return "amber";
+  return "slate";
+}
+
+function staleFreshnessNote(freshness, label) {
+  const ageSeconds = Number(freshness?.data_age_seconds);
+  if (Number.isFinite(ageSeconds) && ageSeconds >= 0) {
+    return `${label} is stale (${formatAgeShort(ageSeconds)} old)`;
+  }
+  return `${label} is stale`;
+}
+
+function formatAgeShort(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown age";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / 86400)}d`;
 }
 
 function directionalPct(type, confidence, side) {
@@ -174,10 +283,21 @@ function directionalPct(type, confidence, side) {
 }
 
 function resolveDirectionalPct(row, side) {
+  const probabilityPrimary = side === "LONG" ? "probabilityLong" : "probabilityShort";
+  const probabilitySecondary = side === "LONG" ? "probability_long" : "probability_short";
+  const probabilityTertiary = side === "LONG" ? "longProbability" : "shortProbability";
+  const probabilityQuaternary = side === "LONG" ? "long_probability" : "short_probability";
   const primary = side === "LONG" ? "longPct" : "shortPct";
   const secondary = side === "LONG" ? "longSidePct" : "shortSidePct";
   const fallback = directionalPct(row.type, row.confidence, side);
-  const raw = numberFrom(row[primary], row[secondary]);
+  const raw = numberFrom(
+    row[probabilityPrimary],
+    row[probabilitySecondary],
+    row[probabilityTertiary],
+    row[probabilityQuaternary],
+    row[primary],
+    row[secondary]
+  );
 
   if (raw !== 50) {
     return raw;
@@ -205,19 +325,50 @@ function resolveDirectionalPct(row, side) {
   return fallback;
 }
 
+function resolveRsScore(row, watchRow) {
+  const timeframeKey = scoreKeyForTimeframe(row.timeframe);
+  return numberFrom(
+    row.signalScore,
+    timeframeKey ? watchRow?.[timeframeKey] : null,
+    watchRow?.score_1d,
+    watchRow?.score_4h,
+    watchRow?.score_1h,
+    watchRow?.score_15m,
+    watchRow?.score_5m,
+    watchRow?.rs_score,
+    row.confidence - 50
+  );
+}
+
+function scoreKeyForTimeframe(timeframe) {
+  return {
+    "5m": "score_5m",
+    "15m": "score_15m",
+    "1h": "score_1h",
+    "4h": "score_4h",
+    "1d": "score_1d",
+  }[String(timeframe || "").toLowerCase()] || null;
+}
+
 function inferStage(row, watchRow) {
-  const text = `${row.regime || ""} ${watchRow.overall_bias || ""} ${watchRow.bias_1h || ""}`.toUpperCase();
+  const timeframeBias = timeframeBiasForRow(row, watchRow);
+  const primaryText = `${row.regime || ""} ${timeframeBias || ""}`.trim().toUpperCase();
+  const fallbackText = `${watchRow.overall_bias || ""} ${watchRow.bias_1d || ""} ${watchRow.bias_4h || ""} ${watchRow.bias_1h || ""} ${watchRow.bias_15m || ""} ${watchRow.bias_5m || ""}`.toUpperCase();
+  const text = primaryText || fallbackText;
   if (row.type === "BUY" || text.includes("BULL") || text.includes("LONG")) return "Stage 2 Uptrend";
   if (row.type === "SELL" || text.includes("BEAR") || text.includes("SHORT")) return "Stage 4 Downtrend";
   if (text.includes("RANGE") || text.includes("MIXED")) return "Stage 1 Base";
   return "Stage 3 Transition";
 }
 
-function inferRisk(row, watchRow, riskReward) {
-  if (row.type === "WAIT" || watchRow.status === "WAIT") return { label: "Blocked", tone: "rose" };
-  if ((Number(row.confidence) || 0) < 60) return { label: "Confidence block", tone: "amber" };
-  if (riskReward > 0 && riskReward < 1.3) return { label: "Risk block", tone: "amber" };
-  return { label: "Eligible", tone: "emerald" };
+function timeframeBiasForRow(row, watchRow) {
+  return {
+    "5m": watchRow?.bias_5m,
+    "15m": watchRow?.bias_15m,
+    "1h": watchRow?.bias_1h,
+    "4h": watchRow?.bias_4h,
+    "1d": watchRow?.bias_1d,
+  }[String(row?.timeframe || "").toLowerCase()] || null;
 }
 
 function numberFrom(...values) {

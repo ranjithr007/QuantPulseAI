@@ -21,7 +21,7 @@ class MarketRepository:
             seconds=FUTURE_CANDLE_TOLERANCE_SECONDS
         )
         if candle_time_utc > max_usable_time:
-            return
+            return False
         exists = (
             db.query(MarketCandle)
             .filter(
@@ -32,7 +32,7 @@ class MarketRepository:
             .first()
         )
         if exists:
-            return
+            return False
 
         entity = MarketCandle(
             symbol=candle["symbol"],
@@ -46,7 +46,17 @@ class MarketRepository:
         )
         db.add(entity)
         commit_or_rollback(db)
+        return True
 
     def get_last_candle_time(self, db, symbol: str, timeframe: str):
         candle = get_latest_candle(db, symbol, timeframe)
         return candle.candle_time if candle else None
+
+    def delete_candles(self, db, symbol: str, timeframe: str):
+        (
+            db.query(MarketCandle)
+            .filter(MarketCandle.symbol == symbol)
+            .filter(MarketCandle.timeframe == timeframe)
+            .delete(synchronize_session=False)
+        )
+        commit_or_rollback(db)

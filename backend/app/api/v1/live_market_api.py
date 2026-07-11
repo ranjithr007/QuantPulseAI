@@ -57,6 +57,7 @@ async def start_live_market(symbols: str | None = Query(default=None)):
 @router.websocket("/ws/live-market")
 async def live_market_websocket(websocket: WebSocket, symbols: str | None = None):
     service = get_live_market_service()
+    start_live_market_listener(symbols)
     await websocket.accept()
 
     queue = service.subscribe()

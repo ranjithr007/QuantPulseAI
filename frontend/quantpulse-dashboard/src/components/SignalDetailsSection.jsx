@@ -27,10 +27,12 @@ import {
   formatPrice,
   formatSigned,
   formatTargets,
+  formatTimeInIst,
   safeNumber,
   tooltipStyle,
 } from "../utils/formatters";
-import { getLiveMarketState } from "../utils/liveMarket";
+import { getUnifiedMarketState } from "../utils/liveMarket";
+import { humanizeMachineStatus } from "../utils/text";
 
 export default function SignalDetailsSection({
   view,
@@ -45,12 +47,13 @@ export default function SignalDetailsSection({
   const tradePlan = activeTradePlan || selectedDetail.tradePlan || {};
   const riskState = riskApprovalState(selectedRisk, selectedDetail);
   const fundingOi = fundingOiSnapshot(selectedDetail);
-  const liveRecord = selectedDetail.liveMarket;
-  const selectedLiveState = getLiveMarketState({
+  const marketState = getUnifiedMarketState({
     liveStatus,
-    updatedAt: liveRecord?.received_at || liveRecord?.event_time,
-    hasLiveRecord: Boolean(liveRecord),
+    liveRecord: selectedDetail.liveMarket,
+    freshness: selectedDetail.freshness,
   });
+  const selectedLiveState = marketState.liveState;
+  const candleState = marketState.candleState;
   const feedConnected = Boolean(liveStatus?.connected);
 
   return (
@@ -82,7 +85,7 @@ export default function SignalDetailsSection({
           <DecisionMetric
             label="Live price"
             value={formatPrice(chartPrice, { fallback: "-", compactSmall: true })}
-            note={selectedLiveState.source}
+            note={marketState.priceSource}
             icon={RadioTower}
             tone="cyan"
           />
@@ -119,8 +122,8 @@ export default function SignalDetailsSection({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Pill tone="cyan">{formatPrice(chartPrice, { fallback: "-", compactSmall: true })}</Pill>
-                  <Pill tone={selectedDetail.freshness?.is_stale ? "amber" : "emerald"}>
-                    {selectedDetail.freshness?.is_stale ? "STALE CANDLE" : "FRESH CANDLE"}
+                  <Pill tone={candleState.tone}>
+                    {candleState.label}
                   </Pill>
                 </div>
               </div>
@@ -161,8 +164,9 @@ export default function SignalDetailsSection({
               <AiReasonPanel selectedDetail={selectedDetail} selectedRisk={selectedRisk} />
             </SidebarGroup>
 
-            <SidebarGroup title="Order flow" subtitle="Execution and participation" className="2xl:col-span-2">
+            <SidebarGroup title="Order flow and SMC" subtitle="Execution, participation, and structure" className="2xl:col-span-2">
               <OrderflowPanel selectedDetail={selectedDetail} />
+              <SmcPanel selectedDetail={selectedDetail} />
               <WhalePanel selectedDetail={selectedDetail} />
             </SidebarGroup>
 
@@ -292,10 +296,10 @@ function AiReasonPanel({ selectedDetail, selectedRisk }) {
   const reasons = [
     { label: "Regime", value: selectedDetail.regimeReason || "No regime explanation" },
     {
-      label: "Setup",
-      value: selectedDetail.tradeSetup?.setup?.reason || selectedDetail.tradeSetup?.trigger?.reason || "Unavailable",
+      label: "Prediction",
+      value: selectedDetail.prediction?.setup?.reason || selectedDetail.tradeSetup?.setup?.reason || selectedDetail.tradeSetup?.trigger?.reason || "Unavailable",
     },
-    { label: "Trigger", value: selectedDetail.entryTrigger?.trigger?.reason || "Unavailable" },
+    { label: "Timing", value: selectedDetail.timing?.trigger?.reason || selectedDetail.entryTrigger?.trigger?.reason || "Unavailable" },
     { label: "Risk", value: selectedRisk?.decision || selectedRisk?.status || "No risk decision" },
   ];
 
@@ -315,6 +319,8 @@ function AiReasonPanel({ selectedDetail, selectedRisk }) {
 }
 
 function OrderflowPanel({ selectedDetail }) {
+  const hasOrderflow = Boolean(selectedDetail.selectedOrderflow);
+  const orderflowPayload = selectedDetail.selectedOrderflowPayload || {};
   return (
     <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2">
       <div className="mb-2 flex items-center justify-between">
@@ -322,10 +328,33 @@ function OrderflowPanel({ selectedDetail }) {
         <Pill tone={selectedDetail.orderflowTone}>{selectedDetail.orderflowBadge || "FLOW"}</Pill>
       </div>
       <div className="space-y-2">
+        <InfoLine label="Trend" value={orderflowPayload.trend || "UNKNOWN"} />
+        <InfoLine label="Series" value={orderflowPayload.series?.length || 0} />
         {(selectedDetail.orderflowLines || []).map((item) => (
           <InfoLine key={item.label} label={item.label} value={item.value} />
         ))}
-        <InfoLine label="Delta source" value={selectedDetail.selectedOrderflow ? "Orderflow engine" : "Unavailable"} />
+        <InfoLine label="Delta source" value={hasOrderflow ? "Orderflow engine" : "Unavailable in current payload"} />
+      </div>
+    </div>
+  );
+}
+
+function SmcPanel({ selectedDetail }) {
+  const hasSmc = Boolean(selectedDetail.selectedSmc);
+  const smcPayload = selectedDetail.selectedSmcPayload || {};
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-white">SMC</h3>
+        <Pill tone={selectedDetail.smcTone}>{selectedDetail.smcBadge || "SMC"}</Pill>
+      </div>
+      <div className="space-y-2">
+        <InfoLine label="Trend" value={smcPayload.trend || "UNKNOWN"} />
+        <InfoLine label="Series" value={smcPayload.series?.length || 0} />
+        {(selectedDetail.smcLines || []).map((item) => (
+          <InfoLine key={item.label} label={item.label} value={item.value} />
+        ))}
+        <InfoLine label="SMC source" value={hasSmc ? "SMC engine" : "Unavailable in current payload"} />
       </div>
     </div>
   );
@@ -469,22 +498,22 @@ function SidebarGroup({ title, subtitle, children, className }) {
 
 function riskApprovalState(selectedRisk, selectedDetail) {
   if (selectedRisk?.is_usable === true || selectedRisk?.decision === "APPROVE") {
-    return { label: "Approved", note: selectedRisk?.status || "Risk engine approved", tone: "emerald" };
+    return { label: "Approved", note: humanizeMachineStatus(selectedRisk?.status, "Risk engine approved"), tone: "emerald" };
   }
   if (selectedRisk?.is_usable === false || selectedRisk?.decision === "REJECT") {
-    return { label: "Blocked", note: selectedRisk?.status || "Risk engine blocked", tone: "rose" };
+    return { label: "Blocked", note: humanizeMachineStatus(selectedRisk?.status, "Risk engine blocked"), tone: "rose" };
   }
   if (selectedDetail.invalidationReason) {
     return { label: "Invalidated", note: selectedDetail.invalidationReason, tone: "rose" };
   }
-  return { label: "Pending", note: selectedRisk?.status || "No risk decision", tone: "amber" };
+  return { label: "Pending", note: humanizeMachineStatus(selectedRisk?.status, "No risk decision"), tone: "amber" };
 }
 
 function riskMessages(selectedRisk, selectedDetail) {
   const validationErrors = selectedRisk?.validation_errors || [];
   const ignoredReasons = selectedRisk?.ignored_reasons || [];
   const messages = [
-    { label: "Decision", value: selectedRisk?.decision || selectedRisk?.status || "Unavailable" },
+    { label: "Decision", value: selectedRisk?.decision || humanizeMachineStatus(selectedRisk?.status, "Unavailable") },
     { label: "Signal", value: selectedDetail.signalType || "WAIT" },
   ];
 
@@ -506,29 +535,39 @@ function fundingOiSnapshot(selectedDetail) {
   const latestOpenInterest = derivatives?.openInterest?.latest || null;
   const fundingRate =
     latestFunding?.rate ??
+    derivatives?.latest_funding_rate ??
+    derivatives?.latestFundingRate ??
     source.funding_rate ??
     source.fundingRate ??
     source.FundingRate;
   const openInterest =
     latestOpenInterest?.value ??
+    derivatives?.latest_open_interest ??
+    derivatives?.latestOpenInterest ??
     source.open_interest ??
     source.openInterest ??
     source.OpenInterest;
-  const openInterestChangePct = derivatives?.latest_open_interest_change_pct;
+  const openInterestChangePct =
+    derivatives?.latest_open_interest_change_pct ??
+    derivatives?.latestOpenInterestChangePct ??
+    source.open_interest_change_pct ??
+    source.openInterestChangePct;
   const longPct = normalizeProbability(selectedDetail.longSidePct);
   const shortPct = normalizeProbability(selectedDetail.shortSidePct);
+  const hasFundingRate = fundingRate !== null && fundingRate !== undefined && fundingRate !== "";
+  const hasOpenInterest = openInterest !== null && openInterest !== undefined && openInterest !== "";
 
-  const fundingHistory = (derivatives?.funding?.history || []).map((item) => ({
-    label: formatChartLabel(item.funding_time || item.created_at),
-    value: Number(item.rate ?? 0) * 100,
+  const fundingHistory = (derivatives?.funding?.series || derivatives?.funding_rate_graph || derivatives?.fundingRateGraph || derivatives?.funding?.history || []).map((item) => ({
+    label: item.label || formatChartLabel(item.funding_time || item.created_at),
+    value: Number(item.value ?? item.rate ?? 0) * 100,
   }));
-  const openInterestHistory = (derivatives?.openInterest?.history || []).map((item) => ({
-    label: formatChartLabel(item.timestamp || item.created_at),
+  const openInterestHistory = (derivatives?.openInterest?.series || derivatives?.open_interest_graph || derivatives?.openInterestGraph || derivatives?.openInterest?.history || []).map((item) => ({
+    label: item.label || formatChartLabel(item.timestamp || item.created_at),
     value: Number(item.value ?? 0),
   }));
 
-  if (fundingRate !== undefined || openInterest !== undefined) {
-    const bias = fundingRate > 0 ? "LONG" : fundingRate < 0 ? "SHORT" : longPct >= shortPct ? "LONG" : "SHORT";
+  if (hasFundingRate || hasOpenInterest) {
+    const bias = fundingRate > 0 ? "LONG" : fundingRate < 0 ? "SHORT" : "NEUTRAL";
     return {
       bias,
       funding: formatFunding(fundingRate),
@@ -543,15 +582,8 @@ function fundingOiSnapshot(selectedDetail) {
     };
   }
 
-  if (longPct > shortPct + 15) {
-    return { bias: "LONG", funding: "Unavailable", openInterest: "Unavailable", note: "Probability favors long exposure", tone: "emerald", fundingHistory, openInterestHistory };
-  }
-  if (shortPct > longPct + 15) {
-    return { bias: "SHORT", funding: "Unavailable", openInterest: "Unavailable", note: "Probability favors short exposure", tone: "rose", fundingHistory, openInterestHistory };
-  }
-
   return {
-    bias: "NEUTRAL",
+    bias: "NO FEED",
     funding: "Unavailable",
     openInterest: "Unavailable",
     note: "No derivative feed in current payload",
@@ -573,9 +605,7 @@ function compactDerivativeTick(value) {
 
 function formatChartLabel(value) {
   if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return formatTimeInIst(value, "");
 }
 
 function normalizeProbability(value) {

@@ -2,7 +2,10 @@ import clsx from "clsx";
 import { BarChart3, PauseCircle, ShieldCheck, TrendingUp, Wallet } from "lucide-react";
 import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
+import { deriveSelectedEligibilityState } from "../utils/eligibility";
 import { formatCurrency, formatPercent, safeNumber } from "../utils/formatters";
+import { dedupeReasonList } from "../utils/reasonDisplay";
+import { humanizeMachineStatus } from "../utils/text";
 
 const AUTO_DIRECTIONS = ["LONG", "SHORT", "BOTH"];
 
@@ -15,7 +18,12 @@ export default function AutomationSection({
   autoDecision,
   selectedDetail,
   openTrades,
+  selectedRisk,
 }) {
+  const eligibilityState = deriveSelectedEligibilityState({ auto, autoDecision, selectedDetail, selectedRisk, openTrades });
+  const warningPills = dedupeReasonList(autoDecision.warnings || []);
+  const reasonPills = dedupeReasonList(autoDecision.reasons || []);
+
   return (
     <section className="border-b border-white/5">
       <div className="mx-auto w-full max-w-[1680px] px-4 py-3 sm:px-6 lg:px-8">
@@ -180,14 +188,14 @@ export default function AutomationSection({
                   <div className="text-sm font-medium text-white">Automation verdict</div>
                   <div className="text-xs text-slate-500">Risk checks are evaluated against the selected signal</div>
                 </div>
-                <Pill tone={autoDecision.allowed ? "emerald" : "rose"}>
-                  {autoDecision.allowed ? "READY" : "BLOCKED"}
+                <Pill tone={eligibilityState.tone}>
+                  {eligibilityState.label}
                 </Pill>
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2.5">
                 <MetricCard
-                  label="Allowed symbol"
+                  label="Allowed contract"
                   value={auto.allowedSymbols.includes(view.symbol) ? "Yes" : "No"}
                   note={view.symbol}
                   icon={ShieldCheck}
@@ -196,10 +204,10 @@ export default function AutomationSection({
                 />
                 <MetricCard
                   label="Signal confidence"
-                  value={formatPercent(selectedDetail.confidence)}
-                  note={`Min ${auto.minConfidence}%`}
+                  value={formatPercent(autoDecision.confidence ?? selectedDetail.confidence)}
+                  note={`${autoDecision.stackState || "STACK"} • Min ${auto.minConfidence}%`}
                   icon={BarChart3}
-                  accent={selectedDetail.confidence >= auto.minConfidence ? "emerald" : "amber"}
+                  accent={(autoDecision.stackState === "MIXED_STRONG" || (autoDecision.confidence ?? selectedDetail.confidence) < auto.minConfidence) ? "amber" : "emerald"}
                   compact
                 />
                 <MetricCard
@@ -222,14 +230,21 @@ export default function AutomationSection({
 
               <div className="mt-2 rounded-lg border border-white/10 bg-slate-950/70 p-2">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Action reason</div>
-                <div className="mt-1.5 line-clamp-2 text-sm leading-5 text-slate-200">{autoDecision.reason}</div>
+                <div className="mt-1.5 line-clamp-2 text-sm leading-5 text-slate-200">{humanizeMachineStatus(autoDecision.reason, "No action reason")}</div>
               </div>
 
               <div className="mt-2 rounded-lg border border-white/10 bg-slate-950/70 p-2">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Risk blocks</div>
                 <div className="mt-2.5 flex flex-wrap gap-2">
-                  {autoDecision.reasons.length ? (
-                    autoDecision.reasons.map((reason) => (
+                  {warningPills.length ? (
+                    warningPills.map((warning) => (
+                      <Pill key={warning} tone="amber">
+                        {warning}
+                      </Pill>
+                    ))
+                  ) : null}
+                  {reasonPills.length ? (
+                    reasonPills.map((reason) => (
                       <Pill key={reason} tone="rose">
                         {reason}
                       </Pill>

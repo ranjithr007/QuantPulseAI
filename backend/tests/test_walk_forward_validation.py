@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.api.v1 import backtest_api
 from app.backtesting.walk_forward_validator import WalkForwardConfig
+from app.backtesting.walk_forward_validator import phase2_walk_forward_defaults
 from app.backtesting.walk_forward_validator import run_walk_forward
 
 
@@ -235,3 +236,49 @@ def test_walk_forward_api_rejects_bad_grid_and_overlap():
             slippage_bps=2,
         )
     assert overlap_error.value.status_code == 422
+
+
+def test_walk_forward_api_uses_phase2_defaults_for_official_timeframe(monkeypatch):
+    captured = {}
+
+    def execute(symbol, timeframe, signal, **options):
+        captured.update(options)
+        return {"engine_version": "walk_forward_v1", "fold_count": 6}
+
+    defaults = phase2_walk_forward_defaults("1h")
+    monkeypatch.setattr(backtest_api, "execute_walk_forward", execute)
+
+    response = backtest_api.walk_forward_validation(
+        symbol="BTCUSDT",
+        signal="LONG",
+        timeframe="1h",
+    )
+
+    assert response["result"]["fold_count"] == 6
+    assert captured["train_size"] == defaults["train_size"]
+    assert captured["test_size"] == defaults["test_size"]
+    assert captured["step_size"] == defaults["step_size"]
+    assert captured["limit"] == defaults["minimum_fold_candles"]
+
+
+def test_walk_forward_contract_summary_marks_official_config_as_pass_with_six_folds():
+    defaults = phase2_walk_forward_defaults("1d")
+    result = run_walk_forward(
+        candles(defaults["minimum_fold_candles"]),
+        "LONG",
+        timeframe="1d",
+        stop_grid=[1],
+        target_grid=[2],
+        train_size=defaults["train_size"],
+        test_size=defaults["test_size"],
+        step_size=defaults["step_size"],
+        min_train_trades=1,
+        fee_bps=0,
+        slippage_bps=0,
+    )
+
+    contract = result["validation_contract"]
+    assert contract["timeframe_status"] == "OFFICIAL"
+    assert contract["configuration_matches_contract"] is True
+    assert contract["minimum_fold_requirement"] == 6
+    assert contract["contract_status"] == "PASS"

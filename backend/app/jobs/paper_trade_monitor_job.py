@@ -27,12 +27,13 @@ def run_paper_trade_monitor_job():
         for trade in repo.get_open_trades(db):
             summary["processed"] += 1
             try:
-                candle = get_latest_candle(db, trade.symbol, DEFAULT_TIMEFRAME)
+                timeframe = getattr(trade, "entry_timeframe", None) or DEFAULT_TIMEFRAME
+                candle = get_latest_candle(db, trade.symbol, timeframe)
 
                 if candle is None:
                     summary["skipped"] += 1
                     summary["errors"].append(
-                        f"No latest candle for {trade.symbol} {DEFAULT_TIMEFRAME}"
+                        f"No latest candle for {trade.symbol} {timeframe}"
                     )
                     continue
 

@@ -19,9 +19,7 @@ from app.database.models.market_candles import MarketCandle
 from app.database.sqlserver import SessionLocal
 from app.intelligence.master_ai_engine import generate_master_signal
 from app.repositories.candle_repository import get_latest_candle
-from app.repositories.point_in_time_snapshot_repository import get_decision_snapshot_as_of
-from app.repositories.point_in_time_snapshot_repository import get_feature_snapshot_as_of
-from app.features.point_in_time_feature_service import build_point_in_time_leakage_diagnostics
+from app.features.point_in_time_feature_service import build_point_in_time_bundle
 from app.repositories.intelligence_repository import get_ai_inputs
 from app.repositories._db_utils import safe_rollback
 from app.trading.trade_plan_engine import build_trade_plan
@@ -169,22 +167,18 @@ def get_intelligence_snapshot_as_of(
     db = SessionLocal()
 
     try:
-        feature = get_feature_snapshot_as_of(db, symbol, timeframe, as_of)
-        decision = get_decision_snapshot_as_of(db, symbol, timeframe, as_of)
-        leakage_diagnostics = build_point_in_time_leakage_diagnostics(
-            as_of_timestamp=as_of,
-            feature_snapshot=feature,
-            decision_snapshot=decision,
-        )
+        bundle = build_point_in_time_bundle(db, symbol, timeframe, as_of)
 
         return {
             "symbol": symbol,
             "timeframe": timeframe,
             "as_of": as_of,
             "source": "point_in_time_snapshot",
-            "feature_snapshot": _snapshot_payload(feature, "feature"),
-            "decision_snapshot": _snapshot_payload(decision, "decision"),
-            "leakage_diagnostics": leakage_diagnostics,
+            "feature_snapshot": _snapshot_payload(bundle["feature_snapshot"], "feature"),
+            "decision_snapshot": _snapshot_payload(bundle["decision_snapshot"], "decision"),
+            "thesis_snapshot": bundle["serialized"]["thesis_snapshot"],
+            "leakage_diagnostics": bundle["feature_leakage_diagnostics"],
+            "thesis_leakage_diagnostics": bundle["thesis_leakage_diagnostics"],
         }
 
     except Exception:
@@ -295,6 +289,12 @@ def get_intelligence_bundle(
             mode=mode,
             stale_after_seconds=stale_after_seconds,
         )
+        multi_timeframe_context = (
+            multi_timeframe_context
+            if isinstance(multi_timeframe_context, dict)
+            and "stack" in multi_timeframe_context
+            else None
+        )
         multi_timeframe = _bundle_section(
             db,
             "multiTimeframe",
@@ -355,6 +355,9 @@ def get_intelligence_bundle(
             "multiTimeframe": multi_timeframe,
             "tradeSetup": trade_setup,
             "entryTrigger": entry_trigger,
+            "predictionContext": multi_timeframe,
+            "prediction": trade_setup,
+            "timing": entry_trigger,
             "bundleStatus": "PARTIAL" if failures else "OK",
             "failures": failures,
         }
@@ -378,6 +381,9 @@ def get_intelligence_bundle(
             "multiTimeframe": None,
             "tradeSetup": None,
             "entryTrigger": None,
+            "predictionContext": None,
+            "prediction": None,
+            "timing": None,
             "bundleStatus": "FAILED",
             "failures": [
                 {

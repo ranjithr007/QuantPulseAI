@@ -25,6 +25,7 @@ import {
 } from "recharts";
 import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
+import { deriveSelectedEligibilityState } from "../utils/eligibility";
 import { formatDate, formatPercent, formatPrice, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
@@ -44,10 +45,33 @@ export default function PnLSection({
   pnlBySymbol,
   pnlBySide,
   equitySeries,
+  auto,
+  selectedDetail,
+  autoDecision,
+  selectedRisk,
+  selectedPaperTradeCandidate,
 }) {
   const totalTrades = tradeHistory.length + openPositions.length;
   const avgProfit = averagePnl(tradeHistory, true);
   const avgLoss = averagePnl(tradeHistory, false);
+  const entryTrigger = selectedDetail?.timing?.trigger || selectedDetail?.entryTrigger?.trigger || selectedDetail?.timing || selectedDetail?.entryTrigger || null;
+  const tradeSetup = selectedDetail?.prediction?.setup || selectedDetail?.tradeSetup?.setup || selectedDetail?.prediction || selectedDetail?.tradeSetup || null;
+  const entryBand = entryTrigger?.confidence_window || tradeSetup?.confidence_window || null;
+  const stackConfidence = entryTrigger?.stack_confidence ?? selectedDetail?.multiTimeframe?.confirmation?.stack_confidence ?? null;
+  const predictionStack = selectedDetail?.predictionStack?.length ? selectedDetail.predictionStack.join(" / ") : selectedDetail?.multiTimeframe?.prediction_stack?.join(" / ") || "1h / 4h / 1d";
+  const timingStack = selectedDetail?.timingStack?.length ? selectedDetail.timingStack.join(" / ") : selectedDetail?.multiTimeframe?.timing_stack?.join(" / ") || selectedDetail?.multiTimeframe?.entry_stack?.join(" / ") || "15m / 5m";
+  const executionReason = entryTrigger?.reason || tradeSetup?.reason || "No execution reason available";
+  const executionState = entryTrigger?.status || tradeSetup?.status || null;
+  const eligibilityState = deriveSelectedEligibilityState({
+    auto,
+    autoDecision,
+    selectedDetail,
+    selectedRisk,
+    openTrades: openPositions,
+  });
+  const executionPending = eligibilityState.label === "Ready to execute";
+  const entryTriggerWaiting = executionState === "WAIT";
+  const executor = executorState(selectedPaperTradeCandidate);
 
   return (
     <section className="border-b border-white/5">
@@ -58,6 +82,66 @@ export default function PnLSection({
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Trade performance</h2>
           </div>
         </div>
+
+        {selectedDetail ? (
+          <div
+            className={clsx(
+              "mt-3 rounded-lg border px-3 py-2.5",
+              entryTriggerWaiting
+                ? "border-amber-400/20 bg-amber-500/10 text-amber-100"
+                : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"
+            )}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-medium">
+                {selectedDetail.symbol || "Selected contract"}{" "}
+                {executor.label === "Executor blocked"
+                  ? "is blocked by the paper-trade executor"
+                  : executionPending
+                  ? "is eligible and waiting for futures paper-trade execution"
+                  : entryTriggerWaiting
+                    ? "is waiting for timing confirmation"
+                    : "is execution-ready"}
+              </div>
+              <Pill tone={executor.tone === "rose" ? "rose" : executionPending ? "amber" : entryTriggerWaiting ? "amber" : "emerald"}>
+                {executor.label === "Executor blocked" ? executor.label : executionPending ? "READY" : executionState || autoDecision?.stackState || "UNKNOWN"}
+              </Pill>
+            </div>
+            <div className="mt-1.5 text-xs leading-5 opacity-90">
+              {executor.label === "Executor blocked"
+                ? executor.note
+                : executionPending
+                  ? "The risk gate passed, but no futures paper trade has been opened yet."
+                  : executionReason}
+            </div>
+            {selectedPaperTradeCandidate?.blocked_reasons?.length ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedPaperTradeCandidate.blocked_reasons.map((reason) => (
+                  <Pill key={reason} tone="rose">{reason}</Pill>
+                ))}
+              </div>
+            ) : null}
+            {entryBand ? (
+              <div className="mt-1 text-[11px] opacity-80">
+                Entry band: {entryBand.min}% - {entryBand.max}% confidence, preferred {entryBand.preferred}%
+              </div>
+            ) : null}
+            {stackConfidence !== null && stackConfidence !== undefined ? (
+              <div className="mt-0.5 text-[11px] opacity-70">Stack confidence: {Number(stackConfidence).toFixed(2)}%</div>
+            ) : null}
+            <div className="mt-0.5 text-[11px] opacity-70">Prediction stack: {predictionStack}</div>
+            <div className="mt-0.5 text-[11px] opacity-70">Timing stack: {timingStack}</div>
+            {entryTrigger?.conditions?.length ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {entryTrigger.conditions.map((condition) => (
+                  <Pill key={condition.name} tone={condition.passed ? "emerald" : "rose"}>
+                    {condition.name}: {condition.passed ? "PASS" : "WAIT"}
+                  </Pill>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
           <MetricCard label="Total unrealized PnL" value={formatSigned(unrealizedPnl)} note="Open PnL" icon={TrendingUp} accent="emerald" />
@@ -75,7 +159,46 @@ export default function PnLSection({
           <MetricCard label="Avg profit / loss" value={`${formatSigned(avgProfit)} / ${formatSigned(avgLoss)}`} note="Closed samples" icon={BarChart3} accent="amber" compact />
         </div>
 
-        <div className="mt-3.5 grid gap-3.5 xl:grid-cols-[1.35fr_0.65fr]">
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-2">
+          <DiagnosticStrip
+            label="Executor truth"
+            value={executor.label}
+            note={executor.note}
+            tone={executor.tone}
+          />
+          <DiagnosticStrip
+            label="Eligibility"
+            value={eligibilityState.label}
+            note={eligibilityState.note}
+            tone={eligibilityState.tone}
+          />
+          <DiagnosticStrip
+            label="Top block"
+            value={topReasonLabel(autoDecision?.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
+            note={topReasonNote(autoDecision?.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
+            tone={topReasonTone(autoDecision?.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
+          />
+          <DiagnosticStrip
+            label="Timing state"
+            value={executionState || "UNKNOWN"}
+            note={executionReason}
+            tone={timingTone(executionState)}
+          />
+        </div>
+
+        <div className="mt-3">
+          <LifecyclePanel
+            stages={paperTradeLifecycle({
+              symbol: selectedDetail?.symbol,
+              eligibilityState,
+              selectedPaperTradeCandidate,
+              openPositions,
+              tradeHistory,
+            })}
+          />
+        </div>
+
+        <div className="mt-3.5 grid items-start gap-3.5 xl:grid-cols-[1.35fr_0.65fr]">
           <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
@@ -138,7 +261,7 @@ export default function PnLSection({
           </div>
         </div>
 
-        <div className="mt-3.5 grid gap-3.5 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="mt-3.5 grid items-start gap-3.5 xl:grid-cols-[0.9fr_1.1fr]">
           <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
@@ -172,13 +295,187 @@ export default function PnLSection({
   );
 }
 
+function executorState(candidate) {
+  if (!candidate) {
+    return {
+      label: "No queued plan",
+      note: "No OPEN trade plan is currently queued for the paper-trade executor on this symbol.",
+      tone: "amber",
+    };
+  }
+
+  if (candidate.eligible) {
+    return {
+      label: "Executor ready",
+      note: "Queued OPEN trade plan passes executor checks.",
+      tone: "emerald",
+    };
+  }
+
+  return {
+    label: "Executor blocked",
+    note: candidate.blocked_reasons?.[0] || "Queued OPEN trade plan is blocked by executor checks.",
+    tone: "rose",
+  };
+}
+
+function DiagnosticStrip({ label, value, note, tone = "slate" }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{label}</div>
+        <Pill tone={tone}>{value ?? "-"}</Pill>
+      </div>
+      <div className="mt-1.5 line-clamp-3 text-xs leading-5 text-slate-400" title={note || "-"}>{note || "-"}</div>
+    </div>
+  );
+}
+
+function LifecyclePanel({ stages = [] }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-white">Paper-trade lifecycle</div>
+          <div className="text-xs text-slate-500">From gate pass to queued candidate, opened trade, and closed result</div>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3">
+        {stages.map((stage) => (
+          <div key={stage.key} className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{stage.label}</div>
+              <Pill tone={stage.tone}>{stage.state}</Pill>
+            </div>
+            <div className="mt-1.5 line-clamp-3 text-xs leading-5 text-slate-400" title={stage.note}>{stage.note}</div>
+            {stage.when ? <div className="mt-1 text-[11px] text-slate-500">{stage.when}</div> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function topReasonLabel(riskReasons = [], executorReasons = []) {
+  const reason = (riskReasons && riskReasons[0]) || (executorReasons && executorReasons[0]);
+  return reason || "No active blocks";
+}
+
+function topReasonNote(riskReasons = [], executorReasons = []) {
+  if (riskReasons?.length) return `Risk/auto rules report ${riskReasons.length} active block(s)`;
+  if (executorReasons?.length) return `Executor reports ${executorReasons.length} active block(s)`;
+  return "No active risk or executor blocks";
+}
+
+function topReasonTone(riskReasons = [], executorReasons = []) {
+  if (riskReasons?.length || executorReasons?.length) return "rose";
+  return "emerald";
+}
+
+function timingTone(status) {
+  const value = String(status || "").toUpperCase();
+  if (value === "READY" || value === "TRIGGERED" || value === "ACTIVE") return "emerald";
+  if (value === "WAIT") return "amber";
+  return "slate";
+}
+
+function paperTradeLifecycle({ symbol, eligibilityState, selectedPaperTradeCandidate, openPositions = [], tradeHistory = [] }) {
+  const normalizedSymbol = String(symbol || "").toUpperCase();
+  const selectedOpenTrade = openPositions.find((trade) => String(trade?.symbol || "").toUpperCase() === normalizedSymbol);
+  const selectedClosedTrade = tradeHistory.find((trade) => String(trade?.symbol || "").toUpperCase() === normalizedSymbol);
+  const eligible = ["Eligible", "Ready to execute"].includes(String(eligibilityState?.label || ""));
+  const candidateExists = Boolean(selectedPaperTradeCandidate);
+  const executorReady = Boolean(selectedPaperTradeCandidate?.eligible);
+  const openNow = Boolean(selectedOpenTrade);
+  const closedSeen = Boolean(selectedClosedTrade);
+  const queuedAt = selectedPaperTradeCandidate?.trade_plan?.created_at || null;
+  const executorCheckedAt = selectedPaperTradeCandidate?.risk_decision?.created_at || queuedAt || null;
+  const openedAt = selectedOpenTrade?.opened_at || selectedOpenTrade?.created_at || null;
+  const closedAt = selectedClosedTrade?.closed_at || selectedClosedTrade?.created_at || null;
+  const riskFreshness = selectedPaperTradeCandidate?.risk_decision?.freshness || null;
+  const riskStale = Boolean(riskFreshness?.is_stale);
+  const staleNote = staleFreshnessNote(riskFreshness, "Risk decision");
+
+  return [
+    {
+      key: "eligible",
+      label: "1. Eligible",
+      state: eligible ? (riskStale ? "Stale" : "Done") : "Blocked",
+      tone: eligible ? (riskStale ? "amber" : "emerald") : "rose",
+      note: eligible
+        ? (riskStale ? `Signal passed earlier, but ${staleNote}.` : "Signal passed the current auto/risk gate.")
+        : (eligibilityState?.note || "Signal has not passed the gate."),
+      when: stageTimestampLabel(executorCheckedAt || queuedAt),
+    },
+    {
+      key: "queued",
+      label: "2. Queued",
+      state: candidateExists ? (riskStale && !openNow ? "Stale" : "Done") : "Waiting",
+      tone: candidateExists ? (riskStale && !openNow ? "amber" : "emerald") : "amber",
+      note: candidateExists
+        ? (riskStale && !openNow ? `An OPEN paper-trade candidate exists, but ${staleNote}.` : "An OPEN paper-trade candidate exists for this symbol/side.")
+        : "No OPEN paper-trade candidate is queued yet.",
+      when: stageTimestampLabel(queuedAt),
+    },
+    {
+      key: "executor",
+      label: "3. Executor ready",
+      state: executorReady ? (riskStale ? "Stale risk" : "Done") : candidateExists ? (riskStale ? "Stale risk" : "Blocked") : "Waiting",
+      tone: executorReady ? (riskStale ? "amber" : "emerald") : candidateExists ? (riskStale ? "amber" : "rose") : "amber",
+      note: executorReady
+        ? (riskStale ? `Queued candidate would be ready, but ${staleNote}.` : "Queued candidate passes executor checks.")
+        : candidateExists
+          ? (riskStale ? "Executor needs a fresh risk decision before treating this candidate as ready." : (selectedPaperTradeCandidate?.blocked_reasons?.[0] || "Queued candidate is blocked by executor checks."))
+          : "Executor has nothing to evaluate yet.",
+      when: stageTimestampLabel(executorCheckedAt),
+    },
+    {
+      key: "opened",
+      label: "4. Opened",
+      state: openNow ? "Live" : "Waiting",
+      tone: openNow ? "cyan" : "amber",
+      note: openNow ? "A futures paper trade is currently open for this symbol." : "No open futures paper trade is active for this symbol.",
+      when: stageTimestampLabel(openedAt),
+    },
+    {
+      key: "closed",
+      label: "5. Closed",
+      state: closedSeen ? "Done" : "Pending",
+      tone: closedSeen ? "emerald" : "slate",
+      note: closedSeen ? "At least one closed futures paper trade exists for this symbol." : "No closed futures paper trade has been recorded for this symbol yet.",
+      when: stageTimestampLabel(closedAt),
+    },
+  ];
+}
+
+function stageTimestampLabel(value) {
+  if (!value) return null;
+  return `Updated ${formatDate(value)}`;
+}
+
+function staleFreshnessNote(freshness, label) {
+  const ageSeconds = Number(freshness?.data_age_seconds);
+  if (Number.isFinite(ageSeconds) && ageSeconds > 0) {
+    return `${label.toLowerCase()} is stale (${formatAgeShort(ageSeconds)} old)`;
+  }
+  return `${label.toLowerCase()} is stale`;
+}
+
+function formatAgeShort(seconds) {
+  const total = Math.max(0, Number(seconds) || 0);
+  if (total < 60) return `${Math.round(total)}s`;
+  if (total < 3600) return `${Math.round(total / 60)}m`;
+  if (total < 86400) return `${Math.round(total / 3600)}h`;
+  return `${Math.round(total / 86400)}d`;
+}
+
 function OpenPositionsTable({ openPositions }) {
   return (
     <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-white">Open positions</div>
-          <div className="text-xs text-slate-500">Current open paper trades</div>
+          <div className="text-xs text-slate-500">Current open futures paper trades</div>
         </div>
         <Pill tone="cyan">{openPositions.length} open</Pill>
       </div>
@@ -227,7 +524,7 @@ function TradeHistoryTable({ tradeHistory }) {
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-white">Trade history</div>
-          <div className="text-xs text-slate-500">Closed paper trades</div>
+          <div className="text-xs text-slate-500">Closed futures paper trades</div>
         </div>
         <Pill tone="slate">{tradeHistory.length} closed</Pill>
       </div>

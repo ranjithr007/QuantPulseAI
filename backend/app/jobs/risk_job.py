@@ -494,7 +494,8 @@ class RiskJob:
                 self._get_value(trade, "side")
             )
             timeframe = (
-                self._get_value(trade, "timeframe")
+                self._get_value(trade, "entry_timeframe")
+                or self._get_value(trade, "timeframe")
                 or self.config.default_timeframe
             )
 

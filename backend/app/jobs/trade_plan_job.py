@@ -61,6 +61,7 @@ def run_trade_plan_job():
                     }
 
                     plan = planner.create_plan(ai_signal, price, feature.ATR)
+                    plan["entry_timeframe"] = signal_timeframe
 
                     if trade_repo.has_open_trade(db, plan["symbol"], plan["side"]):
 

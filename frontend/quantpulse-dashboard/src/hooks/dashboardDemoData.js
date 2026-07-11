@@ -98,6 +98,9 @@
       risk,
       aiScores,
       multiTimeframe,
+      predictionContext: multiTimeframe,
+      prediction: tradeSetup,
+      timing: entryTrigger,
       tradeSetup,
       entryTrigger,
     },
@@ -319,15 +322,25 @@ function buildDemoAiScores(signal) {
 }
 
 function buildDemoMultiTimeframe(signal) {
+  const stackState = signal.bias === "BULLISH_PULLBACK" || signal.bias === "BEARISH_CONTINUATION" || signal.bias === "BULLISH_CONTINUATION" || signal.bias === "BEARISH_PULLBACK" || signal.bias === "BULLISH_ALIGNMENT" || signal.bias === "BEARISH_ALIGNMENT"
+    ? "ALIGNED"
+    : signal.bias === "MIXED"
+      ? "MIXED_STRONG"
+      : "MIXED_LIGHT";
   return {
     symbol: signal.symbol,
     source: "multi_timeframe_confirmation",
     overall_bias: signal.bias,
     trade_permission: signal.signal === "SHORT" ? "SHORT_ALLOWED" : signal.signal === "WAIT" ? "WAIT" : "LONG_ONLY",
-    timeframes_used: ["5m", "15m", "1h"],
+    timeframes_used: ["1h", "4h", "1d"],
+    prediction_stack: ["1h", "4h", "1d"],
+    entry_stack: ["15m", "5m"],
+    timing_stack: ["15m", "5m"],
     confirmation: {
       overall_bias: signal.bias,
       trade_permission: signal.signal === "SHORT" ? "SHORT_ALLOWED" : signal.signal === "WAIT" ? "WAIT" : "LONG_ONLY",
+      stack_state: stackState,
+      confidence_penalty: stackState === "MIXED_STRONG" ? 15 : stackState === "MIXED_LIGHT" ? 5 : 0,
     },
   };
 }
@@ -347,6 +360,9 @@ function buildDemoTradeSetup(signal) {
     trade_plan: signal.trade_plan,
     trade_plan_validation: { is_valid: signal.signal !== "WAIT", errors: [] },
     timeframes: [],
+    prediction_stack: ["1h", "4h", "1d"],
+    entry_stack: ["15m", "5m"],
+    timing_stack: ["15m", "5m"],
   };
 }
 
@@ -368,6 +384,9 @@ function buildDemoEntryTrigger(signal) {
     trade_plan: signal.trade_plan,
     trade_plan_validation: { is_valid: signal.signal !== "WAIT", errors: [] },
     timeframes: [],
+    prediction_stack: ["1h", "4h", "1d"],
+    entry_stack: ["15m", "5m"],
+    timing_stack: ["15m", "5m"],
   };
 }
 

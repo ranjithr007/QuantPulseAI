@@ -39,7 +39,7 @@ def run_market_job():
                 fetched_count = 0
                 saved_count = 0
                 skipped_count = 0
-                source = "BINANCE"
+                source = "BINANCE_FUTURES"
                 latest_candle = None
                 try:
                     last_time = repo.get_last_candle_time(
@@ -84,11 +84,14 @@ def run_market_job():
                             total_skipped += 1
                             continue
 
-                        repo.save_candle(db, candle)
-
-                        saved_count += 1
-                        total_saved += 1
-                        latest_candle = candle
+                        inserted = repo.save_candle(db, candle)
+                        if inserted:
+                            saved_count += 1
+                            total_saved += 1
+                            latest_candle = candle
+                        else:
+                            skipped_count += 1
+                            total_skipped += 1
 
                     result = {
                         "symbol": symbol_name,

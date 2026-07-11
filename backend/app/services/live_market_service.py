@@ -1,8 +1,10 @@
 import asyncio
 import json
+import threading
 from datetime import datetime
 from datetime import timezone
 
+import requests
 import websockets
 
 from app.utils.network_resilience import classify_network_error
@@ -10,9 +12,12 @@ from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
 
 
-BINANCE_STREAM_URL = "wss://stream.binance.com:9443/stream"
+BINANCE_STREAM_URL = "wss://fstream.binance.com/stream"
+BINANCE_TICKER_PRICE_URL = "https://fapi.binance.com/fapi/v1/ticker/price"
 DEFAULT_LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
 LIVE_STALE_AFTER_SECONDS = 15
+LIVE_CONNECT_TIMEOUT_SECONDS = 10
+LIVE_REST_REFRESH_SECONDS = 10
 
 
 class LiveMarketService:
@@ -27,20 +32,39 @@ class LiveMarketService:
         self._last_error = None
         self._reconnect_count = 0
         self._started_at = None
+        self._seed_thread = None
 
     def start(self, symbols=None):
+        selected_symbols = _normalize_symbols(symbols or DEFAULT_LIVE_SYMBOLS)
+
         if self._task and not self._task.done():
-            return True
+            if self._symbols == selected_symbols:
+                return True
+
+            self._task.cancel()
+            self._task = None
+            self._connected = False
 
         self._stopping = False
-        selected_symbols = _normalize_symbols(symbols or DEFAULT_LIVE_SYMBOLS)
         self._symbols = selected_symbols
         self._started_at = _utc_now()
         self._last_error = None
+        self._reconnect_count = 0
+        self._trigger_rest_seed(selected_symbols)
         self._task = asyncio.create_task(self._run(selected_symbols))
         return True
 
     def status(self):
+        if (
+            self._connected
+            and (
+                not self._records
+                or _age_seconds(self._last_message_at) is None
+                or _age_seconds(self._last_message_at) > LIVE_REST_REFRESH_SECONDS
+            )
+        ):
+            self._trigger_rest_seed(self._symbols)
+
         running = bool(self._task and not self._task.done())
         symbol_status = {
             symbol: _record_status(self._records.get(symbol), running, self._connected)
@@ -83,6 +107,13 @@ class LiveMarketService:
         self._connected = False
 
     def snapshot(self, symbols=None):
+        if (
+            not self._records
+            or _age_seconds(self._last_message_at) is None
+            or _age_seconds(self._last_message_at) > LIVE_REST_REFRESH_SECONDS
+        ):
+            self._trigger_rest_seed(self._symbols)
+
         selected = set(_normalize_symbols(symbols)) if symbols else None
         records = [_decorate_record(record) for record in self._records.values()]
 
@@ -107,6 +138,7 @@ class LiveMarketService:
             try:
                 async with websockets.connect(
                     url,
+                    open_timeout=LIVE_CONNECT_TIMEOUT_SECONDS,
                     ping_interval=20,
                     ping_timeout=20,
                     close_timeout=5,
@@ -153,6 +185,63 @@ class LiveMarketService:
             except asyncio.QueueFull:
                 pass
 
+    def _seed_from_rest(self, symbols):
+        selected_symbols = set(_normalize_symbols(symbols or self._symbols))
+        if not selected_symbols:
+            return
+
+        try:
+            response = requests.get(
+                BINANCE_TICKER_PRICE_URL,
+                timeout=3,
+            )
+            response.raise_for_status()
+            payload = response.json() or []
+        except Exception as exc:
+            if self._last_error is None:
+                self._last_error = summarize_network_error(exc)
+            return
+
+        received_at = _utc_now()
+
+        for item in payload:
+            symbol = str(item.get("symbol") or "").upper()
+            if symbol not in selected_symbols:
+                continue
+
+            self._records[symbol] = {
+                "source": "binance_futures_rest_ticker",
+                "market_type": "FUTURES",
+                "venue": "BINANCE_FUTURES",
+                "symbol": symbol,
+                "timeframe": "1m",
+                "event_time": received_at,
+                "candle_time": None,
+                "current_price": _as_float(item.get("price")),
+                "open_price": 0.0,
+                "high_price": 0.0,
+                "low_price": 0.0,
+                "close_price": _as_float(item.get("price")),
+                "volume": 0.0,
+                "price_change_pct": None,
+                "is_closed": False,
+                "received_at": received_at,
+            }
+
+        if self._records:
+            self._last_message_at = received_at
+
+    def _trigger_rest_seed(self, symbols):
+        if self._seed_thread and self._seed_thread.is_alive():
+            return
+
+        self._seed_thread = threading.Thread(
+            target=self._seed_from_rest,
+            args=(symbols,),
+            daemon=True,
+        )
+        self._seed_thread.start()
+
 
 def _record_from_message(raw_message):
     payload = json.loads(raw_message)
@@ -171,6 +260,8 @@ def _record_from_message(raw_message):
 
     return {
         "source": "binance_ws_kline",
+        "market_type": "FUTURES",
+        "venue": "BINANCE_FUTURES",
         "symbol": data.get("s") or candle.get("s"),
         "timeframe": candle.get("i") or "1m",
         "event_time": _from_ms(data.get("E")),

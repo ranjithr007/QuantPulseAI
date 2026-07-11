@@ -31,13 +31,15 @@ export default function AdvancedTradingViewPanel({
     let timeoutId = null;
     let initId = null;
     setStatus("loading");
-    container.replaceChildren();
 
     initId = window.setTimeout(() => {
       if (!mounted || settled || !container.isConnected) return;
 
+      container.innerHTML = "";
+
       const widgetHost = document.createElement("div");
       widgetHost.className = "tradingview-widget-container__widget h-full w-full";
+      widgetHost.dataset.tradingviewHost = "true";
 
       const script = document.createElement("script");
       script.type = "text/javascript";
@@ -66,9 +68,11 @@ export default function AdvancedTradingViewPanel({
         if (mounted && !settled) setStatus("error");
       };
       script.onload = () => {
+        if (!mounted || settled || !container.isConnected) return;
+
         pollId = window.setInterval(() => {
           if (!mounted || settled) return;
-          if (container.querySelector("iframe")) {
+          if (widgetHost.querySelector("iframe") || container.querySelector("iframe")) {
             settled = true;
             window.clearInterval(pollId);
             window.clearTimeout(timeoutId);
@@ -83,7 +87,8 @@ export default function AdvancedTradingViewPanel({
         }, 12000);
       };
 
-      container.append(widgetHost, script);
+      widgetHost.appendChild(script);
+      container.appendChild(widgetHost);
     }, 0);
 
     return () => {
@@ -92,7 +97,6 @@ export default function AdvancedTradingViewPanel({
       if (initId) window.clearTimeout(initId);
       if (pollId) window.clearInterval(pollId);
       if (timeoutId) window.clearTimeout(timeoutId);
-      container.replaceChildren();
     };
   }, [interval, reloadKey, tradingViewSymbol]);
 

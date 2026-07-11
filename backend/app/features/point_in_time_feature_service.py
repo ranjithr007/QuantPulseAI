@@ -1,9 +1,15 @@
+import json
 from datetime import datetime
 from datetime import timezone
 
 from app.features.feature_factory import build_features
 from app.features.feature_factory import order_candles_for_features
 from app.repositories.candle_repository import get_candles_as_of
+from app.repositories.point_in_time_snapshot_repository import get_decision_snapshot_as_of
+from app.repositories.point_in_time_snapshot_repository import get_feature_snapshot_as_of
+from app.repositories.thesis_snapshot_repository import build_thesis_snapshot_leakage_diagnostics
+from app.repositories.thesis_snapshot_repository import get_thesis_snapshot_as_of
+from app.repositories.thesis_snapshot_repository import serialize_thesis_snapshot
 from app.repositories.point_in_time_snapshot_repository import save_decision_snapshot
 from app.repositories.point_in_time_snapshot_repository import save_feature_snapshot
 from app.utils.freshness import normalize_timestamp_to_utc
@@ -215,6 +221,13 @@ def build_point_in_time_leakage_diagnostics(
 
 
 def build_features_as_of(db, symbol, timeframe, as_of_timestamp, *, limit=200):
+    snapshot = get_feature_snapshot_as_of(db, symbol, timeframe, as_of_timestamp)
+    if snapshot is not None:
+        try:
+            return json.loads(snapshot.snapshot_json)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
     candles = get_candles_as_of(db, symbol, timeframe, as_of_timestamp, limit=limit)
     if not candles:
         return None
@@ -226,3 +239,29 @@ def build_features_as_of(db, symbol, timeframe, as_of_timestamp, *, limit=200):
         source_timestamp=as_of_timestamp,
         effective_timestamp=as_of_timestamp,
     )
+
+
+def build_point_in_time_bundle(db, symbol, timeframe, as_of_timestamp):
+    feature = get_feature_snapshot_as_of(db, symbol, timeframe, as_of_timestamp)
+    decision = get_decision_snapshot_as_of(db, symbol, timeframe, as_of_timestamp)
+    thesis = get_thesis_snapshot_as_of(db, symbol, as_of_timestamp)
+
+    return {
+        "feature_snapshot": feature,
+        "decision_snapshot": decision,
+        "thesis_snapshot": thesis,
+        "feature_leakage_diagnostics": build_point_in_time_leakage_diagnostics(
+            as_of_timestamp=as_of_timestamp,
+            feature_snapshot=feature,
+            decision_snapshot=decision,
+        ),
+        "thesis_leakage_diagnostics": build_thesis_snapshot_leakage_diagnostics(
+            thesis,
+            as_of_timestamp,
+        ),
+        "serialized": {
+            "feature_snapshot": None if feature is None else json.loads(feature.snapshot_json),
+            "decision_snapshot": None if decision is None else json.loads(decision.snapshot_json),
+            "thesis_snapshot": serialize_thesis_snapshot(thesis),
+        },
+    }

@@ -10,7 +10,7 @@ const STALE_AFTER_BY_TIMEFRAME = {
 const PAGE_DATA_NEEDS = {
   dashboard: { watchlist: true, paper: true, risk: true, signals: true },
   "market-scan": { watchlist: true, paper: true, risk: true, signals: true },
-  signals: { watchlist: true, signals: true },
+  signals: { watchlist: true, paper: true, signals: true },
   "coin-details": {},
   "trading-details": { pipeline: true, paper: true, risk: true },
   "risk-controls": { paper: true, risk: true },
@@ -21,6 +21,13 @@ const PAGE_DATA_NEEDS = {
   "rs-ranking": { watchlist: true, signals: true },
   "stage-analysis": { watchlist: true, signals: true },
 };
+const SYMBOL_SCOPED_PAPER_PAGES = new Set([
+  "trading-details",
+  "risk-controls",
+  "auto-trading",
+  "pnl",
+  "backtest",
+]);
 
 export function liveMarketWebSocketUrl(symbols = []) {
   const url = new URL("/ws/live-market", API_BASE);
@@ -119,6 +126,100 @@ export async function loadBacktestSummary({ symbol, signalSide, timeframe = "15m
   return response || null;
 }
 
+export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "15m", signal }) {
+  const response = await requestJson(
+    "/backtest/walk-forward",
+    {
+      symbol,
+      signal: signalSide,
+      timeframe,
+      min_train_trades: 1,
+    },
+    signal,
+    120000
+  );
+
+  return response || null;
+}
+
+export async function loadPhase2ValidationReport({ symbol, signalSide, timeframe = "15m", signal }) {
+  const response = await requestJson(
+    "/backtest/phase2-report",
+    {
+      symbol,
+      signal: signalSide,
+      timeframe,
+      min_train_trades: 1,
+    },
+    signal,
+    120000
+  );
+
+  return response || null;
+}
+
+export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "15m", signal }) {
+  const response = await requestJson(
+    "/backtest/phase2-report/export",
+    {
+      symbol,
+      signal: signalSide,
+      timeframe,
+      min_train_trades: 1,
+    },
+    signal,
+    120000,
+    "POST"
+  );
+
+  return response || null;
+}
+
+export async function loadPhase2ValidationHistory({ symbol, timeframe, signalSide, limit = 8, signal } = {}) {
+  const response = await requestJson(
+    "/backtest/phase2-report/history",
+    {
+      symbol,
+      timeframe,
+      signal: signalSide,
+      limit,
+    },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
+export async function loadPhase2ValidationArtifact({ artifactId, signal } = {}) {
+  const response = await requestJson(
+    "/backtest/phase2-report/artifact",
+    {
+      artifact_id: artifactId,
+    },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
+export async function loadPhase2ValidationSummary({ symbol, timeframe, signalSide, limit = 20, signal } = {}) {
+  const response = await requestJson(
+    "/backtest/phase2-report/summary",
+    {
+      symbol,
+      timeframe,
+      signal: signalSide,
+      limit,
+    },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
 export async function loadAutomationSettings({ signal } = {}) {
   const response = await requestJson("/automation/settings", {}, signal, 15000);
   return response?.settings || null;
@@ -134,12 +235,40 @@ export async function saveAutomationEmergencyStop({ active, signal } = {}) {
   return response?.settings || null;
 }
 
+export async function executePaperTradeCandidates({ symbol, staleAfterSeconds = 900, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/execute-candidates",
+    {
+      symbol,
+      stale_after_seconds: staleAfterSeconds,
+    },
+    signal,
+    60000,
+    "POST"
+  );
+  return response || null;
+}
+
+export async function loadPaperTradeCandidates({ symbol, staleAfterSeconds = 900, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/candidates",
+    {
+      symbol,
+      stale_after_seconds: staleAfterSeconds,
+    },
+    signal,
+    60000
+  );
+  return response || null;
+}
+
 export async function loadDashboardBatches({ activePage, view, filters, auto, symbols, signal }) {
   const common = {
     timeframe: view.timeframe,
     stale_after_seconds: staleAfterSeconds(view.timeframe),
   };
   const needs = PAGE_DATA_NEEDS[activePage] || PAGE_DATA_NEEDS.dashboard;
+  const paperSymbol = SYMBOL_SCOPED_PAPER_PAGES.has(activePage) ? view.symbol : null;
 
   const overviewRequests = [];
 
@@ -150,6 +279,7 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
         "/signals/watchlist",
         {
           mode: view.mode,
+          stale_after_seconds: staleAfterSeconds(view.timeframe),
           status: filters.watchlistStatus === "ALL" ? null : filters.watchlistStatus,
           side: filters.watchlistSide === "ALL" ? null : filters.watchlistSide,
           failed_max: filters.failedMax,
@@ -175,7 +305,21 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
   if (needs.paper) {
     overviewRequests.push({
       key: "paperTradeBundle",
-      promise: requestJson("/paper-trade/bundle", {}, signal),
+      promise: requestJson(
+        "/paper-trade/bundle",
+        {
+          symbol: paperSymbol,
+        },
+        signal
+      ),
+    });
+    overviewRequests.push({
+      key: "paperTradeCandidates",
+      promise: loadPaperTradeCandidates({
+        symbol: paperSymbol,
+        staleAfterSeconds: staleAfterSeconds(view.timeframe),
+        signal,
+      }),
     });
   }
 

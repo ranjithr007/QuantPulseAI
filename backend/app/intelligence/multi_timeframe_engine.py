@@ -1,5 +1,13 @@
 BULLISH_BIASES = {"LONG", "WEAK_LONG"}
 BEARISH_BIASES = {"SHORT", "WEAK_SHORT"}
+ALIGNED_BIASES = {
+    "BULLISH_ALIGNMENT",
+    "BEARISH_ALIGNMENT",
+    "BULLISH_CONTINUATION",
+    "BEARISH_CONTINUATION",
+    "BULLISH_PULLBACK",
+    "BEARISH_PULLBACK",
+}
 
 
 def combine_timeframe_signals(timeframes):
@@ -10,6 +18,8 @@ def combine_timeframe_signals(timeframes):
             "overall_bias": "NO_DATA",
             "trade_permission": "BLOCKED",
             "reason": "One or more required timeframes have no signal data",
+            "stack_state": "NO_DATA",
+            "confidence_penalty": 0,
         }
 
     lower_bias = lower["bias"]
@@ -24,6 +34,8 @@ def combine_timeframe_signals(timeframes):
             "overall_bias": "BULLISH_PULLBACK",
             "trade_permission": "LONG_ONLY",
             "reason": f"{higher_label} is bullish while {lower_label} is pulling back",
+            "stack_state": "ALIGNED",
+            "confidence_penalty": 0,
         }
 
     if _is_bearish(higher_bias) and _is_bullish(lower_bias):
@@ -31,6 +43,8 @@ def combine_timeframe_signals(timeframes):
             "overall_bias": "BEARISH_PULLBACK",
             "trade_permission": "SHORT_ONLY",
             "reason": f"{higher_label} is bearish while {lower_label} is bouncing",
+            "stack_state": "ALIGNED",
+            "confidence_penalty": 0,
         }
 
     if all(_is_bullish(item["bias"]) for item in [lower, middle, higher]):
@@ -38,6 +52,8 @@ def combine_timeframe_signals(timeframes):
             "overall_bias": "BULLISH_ALIGNMENT",
             "trade_permission": "LONG_ALLOWED",
             "reason": f"{lower_label}, {middle_label}, and {higher_label} are bullish",
+            "stack_state": "ALIGNED",
+            "confidence_penalty": 0,
         }
 
     if all(_is_bearish(item["bias"]) for item in [lower, middle, higher]):
@@ -45,6 +61,8 @@ def combine_timeframe_signals(timeframes):
             "overall_bias": "BEARISH_ALIGNMENT",
             "trade_permission": "SHORT_ALLOWED",
             "reason": f"{lower_label}, {middle_label}, and {higher_label} are bearish",
+            "stack_state": "ALIGNED",
+            "confidence_penalty": 0,
         }
 
     if _is_bullish(higher_bias) and (
@@ -54,6 +72,8 @@ def combine_timeframe_signals(timeframes):
             "overall_bias": "BULLISH_CONTINUATION",
             "trade_permission": "LONG_ALLOWED",
             "reason": "Higher timeframe is bullish with lower timeframe support",
+            "stack_state": "ALIGNED",
+            "confidence_penalty": 0,
         }
 
     if _is_bearish(higher_bias) and (
@@ -63,12 +83,17 @@ def combine_timeframe_signals(timeframes):
             "overall_bias": "BEARISH_CONTINUATION",
             "trade_permission": "SHORT_ALLOWED",
             "reason": "Higher timeframe is bearish with lower timeframe support",
+            "stack_state": "ALIGNED",
+            "confidence_penalty": 0,
         }
 
+    stack_state, confidence_penalty = _mixed_stack_profile(timeframes)
     return {
         "overall_bias": "MIXED",
         "trade_permission": "WAIT",
         "reason": "Timeframes are mixed or neutral",
+        "stack_state": stack_state,
+        "confidence_penalty": confidence_penalty,
     }
 
 
@@ -89,3 +114,19 @@ def _is_bullish(bias):
 
 def _is_bearish(bias):
     return bias in BEARISH_BIASES
+
+
+def _mixed_stack_profile(timeframes):
+    bullish_count = sum(1 for item in timeframes if _is_bullish(item.get("bias")))
+    bearish_count = sum(1 for item in timeframes if _is_bearish(item.get("bias")))
+
+    if bullish_count and bearish_count:
+        return "MIXED_STRONG", 15
+
+    if bullish_count == 2 or bearish_count == 2:
+        return "MIXED_LIGHT", 5
+
+    if bullish_count == 1 or bearish_count == 1:
+        return "MIXED_LIGHT", 5
+
+    return "MIXED_LIGHT", 5

@@ -51,6 +51,8 @@
     <Folder Include="backend\app\ml\training\" />
     <Folder Include="backend\app\models\" />
     <Folder Include="backend\app\debug\" />
+    <Folder Include="backend\app\observability\" />
+    <Folder Include="backend\app\observability\__pycache__\" />
     <Folder Include="backend\app\paper_trading\" />
     <Folder Include="backend\app\paper_trading\__pycache__\" />
     <Folder Include="backend\app\storage\" />
@@ -90,6 +92,7 @@
     <Compile Include="backend\app\api\v1\automation_api.py" />
     <Compile Include="backend\app\api\v1\backtest_api.py" />
     <Compile Include="backend\app\api\v1\dataset_api.py" />
+    <Compile Include="backend\app\api\v1\derivatives_api.py" />
     <Compile Include="backend\app\api\v1\features_api.py" />
     <Compile Include="backend\app\api\v1\health_api.py" />
     <Compile Include="backend\app\api\v1\indicators_api.py" />
@@ -105,6 +108,7 @@
     <Compile Include="backend\app\api\v1\risk_api.py" />
     <Compile Include="backend\app\api\v1\scheduler_api.py" />
     <Compile Include="backend\app\api\v1\symbols_api.py" />
+    <Compile Include="backend\app\api\v1\thesis_api.py" />
     <Compile Include="backend\app\api\v1\trade_plan_api.py" />
     <Compile Include="backend\app\api\v2\fusion_ai_api.py" />
     <Compile Include="backend\app\api\v2\master_ai_v2_api.py" />
@@ -114,8 +118,11 @@
     <Compile Include="backend\app\api\v1\smc_api.py" />
     <Compile Include="backend\app\backtesting\backtest_engine.py" />
     <Compile Include="backend\app\backtesting\filtered_replay_engine.py" />
+    <Compile Include="backend\app\backtesting\phase2_validation_artifacts.py" />
+    <Compile Include="backend\app\backtesting\phase2_validation_report.py" />
     <Compile Include="backend\app\backtesting\trade_simulator.py" />
     <Compile Include="backend\app\backtesting\performance_engine.py" />
+    <Compile Include="backend\app\backtesting\walk_forward_validator.py" />
     <Compile Include="backend\app\backtesting\__init__.py" />
     <Compile Include="backend\app\collectors\binances\candle_collector.py" />
     <Compile Include="backend\app\collectors\binances\funding_collector.py" />
@@ -132,6 +139,7 @@
     <Compile Include="backend\app\database\models\ai_signals.py" />
     <Compile Include="backend\app\database\models\automation_settings.py" />
     <Compile Include="backend\app\database\models\backtest_results.py" />
+    <Compile Include="backend\app\database\models\data_quality_events.py" />
     <Compile Include="backend\app\database\models\funding_rates.py" />
     <Compile Include="backend\app\database\models\liquidations.py" />
     <Compile Include="backend\app\database\models\liquidation_heatmaps.py" />
@@ -148,14 +156,17 @@
     <Compile Include="backend\app\database\models\open_interest.py" />
     <Compile Include="backend\app\database\models\order_flow_signal.py" />
     <Compile Include="backend\app\database\models\paper_trade.py" />
+    <Compile Include="backend\app\database\models\point_in_time_snapshots.py" />
     <Compile Include="backend\app\database\models\regimes.py" />
     <Compile Include="backend\app\database\models\risk_decision.py" />
     <Compile Include="backend\app\database\models\risk_signal.py" />
     <Compile Include="backend\app\database\models\signals.py" />
     <Compile Include="backend\app\database\models\symbols.py" />
+    <Compile Include="backend\app\database\models\thesis_snapshots.py" />
     <Compile Include="backend\app\database\models\trades.py" />
     <Compile Include="backend\app\database\models\trade_memory.py" />
     <Compile Include="backend\app\database\models\trade_plan.py" />
+    <Compile Include="backend\app\database\models\trade_thesis.py" />
     <Compile Include="backend\app\database\models\whale_signals.py" />
     <Compile Include="backend\app\database\models\whale_trades.py" />
     <Compile Include="backend\app\database\models\__init__.py" />
@@ -189,6 +200,7 @@
     <Compile Include="backend\app\features\feature_service.py" />
     <Compile Include="backend\app\features\liquidity_features.py" />
     <Compile Include="backend\app\features\market_feature_builder.py" />
+    <Compile Include="backend\app\features\market_metrics_updated.py" />
     <Compile Include="backend\app\features\momentum_features.py" />
     <Compile Include="backend\app\features\point_in_time_feature_service.py" />
     <Compile Include="backend\app\features\trend_features.py" />
@@ -196,6 +208,7 @@
     <Compile Include="backend\app\features\__init__.py" />
     <Compile Include="backend\app\intelligence\confidence_engine.py" />
     <Compile Include="backend\app\intelligence\contradiction_engine.py" />
+    <Compile Include="backend\app\intelligence\data_quality_ledger.py" />
     <Compile Include="backend\app\intelligence\fusion\decision_engine.py" />
     <Compile Include="backend\app\intelligence\fusion\fusion_engine.py" />
     <Compile Include="backend\app\intelligence\fusion\fusion_models.py" />
@@ -255,6 +268,8 @@
     <Compile Include="backend\app\ml\trainer.py" />
     <Compile Include="backend\app\ml\training\model_trainer.py" />
     <Compile Include="backend\app\database\models\fusion_signal.py" />
+    <Compile Include="backend\app\observability\performance_budget.py" />
+    <Compile Include="backend\app\observability\__init__.py" />
     <Compile Include="backend\app\orderflow\absorption_engine.py" />
     <Compile Include="backend\app\orderflow\cvd_engine.py" />
     <Compile Include="backend\app\orderflow\delta_engine.py" />
@@ -265,6 +280,7 @@
     <Compile Include="backend\app\paper_trading\measurement.py" />
     <Compile Include="backend\app\paper_trading\paper_trade_monitor.py" />
     <Compile Include="backend\app\paper_trading\paper_trade_performance.py" />
+    <Compile Include="backend\app\paper_trading\validation_policy.py" />
     <Compile Include="backend\app\regimes\regime_engine.py" />
     <Compile Include="backend\app\regimes\regime_service.py" />
     <Compile Include="backend\app\regimes\rules.py" />
@@ -272,6 +288,7 @@
     <Compile Include="backend\app\repositories\automation_settings_repository.py" />
     <Compile Include="backend\app\repositories\backtest_repository.py" />
     <Compile Include="backend\app\repositories\candle_repository.py" />
+    <Compile Include="backend\app\repositories\data_quality_event_repository.py" />
     <Compile Include="backend\app\repositories\derivative_repository.py" />
     <Compile Include="backend\app\repositories\feature_repository.py" />
     <Compile Include="backend\app\repositories\fusion_repository.py" />
@@ -286,13 +303,17 @@
     <Compile Include="backend\app\repositories\ml_label_repository.py" />
     <Compile Include="backend\app\repositories\orderflow_repository.py" />
     <Compile Include="backend\app\repositories\paper_trade_repository.py" />
+    <Compile Include="backend\app\repositories\point_in_time_snapshot_repository.py" />
     <Compile Include="backend\app\repositories\risk_repository.py" />
     <Compile Include="backend\app\repositories\signal_quality_repository.py" />
     <Compile Include="backend\app\repositories\smc_repository.py" />
     <Compile Include="backend\app\repositories\symbol_repository.py" />
+    <Compile Include="backend\app\repositories\thesis_snapshot_repository.py" />
     <Compile Include="backend\app\repositories\trade_plan_repository.py" />
+    <Compile Include="backend\app\repositories\trade_thesis_repository.py" />
     <Compile Include="backend\app\repositories\whale_repository.py" />
     <Compile Include="backend\app\repositories\whale_signal_repository.py" />
+    <Compile Include="backend\app\repositories\_db_utils.py" />
     <Compile Include="backend\app\risk\drawdown_engine.py" />
     <Compile Include="backend\app\risk\position_sizing.py" />
     <Compile Include="backend\app\risk\risk_engine.py" />
@@ -303,6 +324,7 @@
     <Compile Include="backend\app\scheduler\scheduler.py" />
     <Compile Include="backend\app\scheduler\scheduler_old.py" />
     <Compile Include="backend\app\services\fusion_service.py" />
+    <Compile Include="backend\app\services\live_market_service.py" />
     <Compile Include="backend\app\services\market_price_service.py" />
     <Compile Include="backend\app\smc\bos_detector.py" />
     <Compile Include="backend\app\smc\choch_detector.py" />
@@ -325,6 +347,7 @@
     <Compile Include="backend\app\trading\trade_plan_engine.py" />
     <Compile Include="backend\app\trading\__init__.py" />
     <Compile Include="backend\app\utils\freshness.py" />
+    <Compile Include="backend\app\utils\network_resilience.py" />
     <Compile Include="backend\app\utils\signal_validation.py" />
     <Compile Include="backend\app\utils\__init__.py" />
     <Compile Include="backend\app\__init__.py" />
@@ -401,7 +424,10 @@
     <Compile Include="backend\tests\test_phase1_symbol_repository_static.py" />
     <Compile Include="backend\tests\test_phase1_trade_setup.py" />
     <Compile Include="backend\tests\test_phase1_validation_script_static.py" />
+    <Compile Include="backend\tests\test_phase2_validation_artifacts.py" />
+    <Compile Include="backend\tests\test_phase2_validation_report.py" />
     <Compile Include="backend\tests\test_pipeline_api_resilience.py" />
+    <Compile Include="backend\tests\test_ready_trade_plan_refresh.py" />
     <Compile Include="backend\tests\test_remaining_job_session_boundaries.py" />
     <Compile Include="backend\tests\test_repository_request_cache.py" />
     <Compile Include="backend\tests\test_risk_job_runtime.py" />
@@ -426,6 +452,8 @@
     <Content Include="backend\alembic\README" />
     <Content Include="backend\alembic\script.py.mako" />
     <Content Include="backend\alembic\__pycache__\env.cpython-313.pyc" />
+    <Content Include="backend\app\observability\__pycache__\performance_budget.cpython-311.pyc" />
+    <Content Include="backend\app\observability\__pycache__\__init__.cpython-311.pyc" />
     <Content Include="backend\app\paper_trading\__pycache__\fill_model.cpython-311.pyc" />
     <Content Include="backend\app\paper_trading\__pycache__\paper_trade_monitor.cpython-311.pyc" />
     <Content Include="backend\app\paper_trading\__pycache__\paper_trade_monitor.cpython-311.pyc.1448235273312" />
@@ -945,6 +973,7 @@
     <Content Include="frontend\quantpulse-dashboard\src\components\DashboardHeader.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\components\LiveMarketSection.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\components\MarketSignalTable.jsx" />
+    <Content Include="frontend\quantpulse-dashboard\src\components\Phase2ValidationBadge.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\components\PnLSection.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\components\signal-details\AdvancedTradingViewPanel.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\components\signal-details\ConfidenceRow.jsx" />
@@ -976,8 +1005,11 @@
     <Content Include="frontend\quantpulse-dashboard\src\pages\StageAnalysisPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\TradingDetailsPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\styles.css" />
+    <Content Include="frontend\quantpulse-dashboard\src\utils\eligibility.js" />
     <Content Include="frontend\quantpulse-dashboard\src\utils\formatters.js" />
     <Content Include="frontend\quantpulse-dashboard\src\utils\liveMarket.js" />
+    <Content Include="frontend\quantpulse-dashboard\src\utils\reasonDisplay.js" />
+    <Content Include="frontend\quantpulse-dashboard\src\utils\text.js" />
     <Content Include="frontend\quantpulse-dashboard\src\utils\toneClasses.js" />
     <Content Include="frontend\quantpulse-dashboard\vite.config.js" />
     <Content Include="outputs\QuantPulseAI_phase0_status_checklist.md" />

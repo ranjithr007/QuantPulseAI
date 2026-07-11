@@ -60,14 +60,23 @@ class OrderFlowRepository:
 
         commit_or_rollback(db)
 
-    def latest(self, db, symbol):
+    def latest(self, db, symbol, timeframe=None):
+        if timeframe:
+            latest_market_orderflow = (
+                db.query(MarketOrderFlow)
+                .filter(
+                    MarketOrderFlow.Symbol == symbol,
+                    MarketOrderFlow.Timeframe == timeframe,
+                )
+                .order_by(MarketOrderFlow.CreatedAt.desc(), MarketOrderFlow.Id.desc())
+                .first()
+            )
+            if latest_market_orderflow is not None:
+                return latest_market_orderflow
 
-        return (
-            db.query(OrderFlowSignal)
-            .filter(OrderFlowSignal.symbol == symbol)
-            .order_by(OrderFlowSignal.created_at.desc())
-            .first()
-        )
+        query = db.query(OrderFlowSignal).filter(OrderFlowSignal.symbol == symbol)
+
+        return query.order_by(OrderFlowSignal.created_at.desc(), OrderFlowSignal.id.desc()).first()
 
     @staticmethod
     def save_orderflow(db, symbol, timeframe, data):
@@ -77,7 +86,7 @@ class OrderFlowRepository:
             BuyVolume=data["buy_volume"],
             SellVolume=data["sell_volume"],
             Delta=data["delta"],
-            CVD=data["cumulative_delta"],
+            CVD=data.get("cumulative_delta", data.get("cvd", 0)),
             BuyerStrength=data["buyer_strength"],
             SellerStrength=data["seller_strength"],
             Absorption=data["absorption"],
@@ -93,6 +102,15 @@ class OrderFlowRepository:
         return record
 
     def get_last_cvd( db, symbol):
+        latest_market_orderflow = (
+            db.query(MarketOrderFlow)
+            .filter(MarketOrderFlow.Symbol == symbol)
+            .order_by(MarketOrderFlow.CreatedAt.desc(), MarketOrderFlow.Id.desc())
+            .first()
+        )
+
+        if latest_market_orderflow is not None and latest_market_orderflow.CVD is not None:
+            return latest_market_orderflow.CVD
 
         last = (
             db.query(OrderFlowSignal)

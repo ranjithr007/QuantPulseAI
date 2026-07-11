@@ -11,6 +11,7 @@ from app.backtesting.backtest_engine import _time_value
 from app.backtesting.backtest_engine import chronological_candles
 from app.backtesting.performance_engine import calculate_performance
 from app.features.point_in_time_feature_service import build_feature_snapshot
+from app.paper_trading.fill_model import build_fill_profile
 from app.regimes.rules import detect_regime
 
 
@@ -60,6 +61,7 @@ def run_filtered_replay(
     candles,
     side,
     *,
+    feature_resolver=None,
     initial_capital=10_000,
     position_size_percent=100,
     min_confidence=70,
@@ -91,6 +93,8 @@ def run_filtered_replay(
     equity_curve = [{"label": _time_label(ordered[0]) if ordered else "START", "equity": round(capital, 2)}]
     decision_counts = Counter()
     rejection_counts = Counter()
+    feature_source_counts = Counter()
+    point_in_time_counts = Counter()
     decision_index = config.warmup_candles - 1
     cooldown_until = 0
     signal_armed = True
@@ -101,8 +105,11 @@ def run_filtered_replay(
             ordered[: decision_index + 1],
             requested_side,
             config.min_confidence,
+            feature_resolver=feature_resolver,
         )
         decision_counts[decision["signal"]] += 1
+        feature_source_counts[decision["feature_source"]] += 1
+        point_in_time_counts.update(decision.get("point_in_time_flags") or {})
 
         if not decision["eligible"]:
             signal_armed = True
@@ -212,6 +219,7 @@ def run_filtered_replay(
                 "confidence": decision["confidence"],
                 "feature_score": decision["features"]["final_score"],
                 "atr": round(atr, 8),
+                "feature_source": decision["feature_source"],
             }
         )
         equity_curve.append({"label": _time_label(exit_candle), "equity": round(capital, 2)})
@@ -245,12 +253,32 @@ def run_filtered_replay(
         },
         "historical_input_status": {
             "candles": "AVAILABLE",
-            "features": "RECONSTRUCTED_FROM_CLOSED_CANDLES",
+            "features": "POINT_IN_TIME_SNAPSHOT_FIRST",
             "regime": "RECONSTRUCTED_FROM_CLOSED_CANDLES",
             "smc": "UNAVAILABLE_HISTORICALLY",
             "orderflow": "UNAVAILABLE_HISTORICALLY",
             "claim_scope": "CANDLE_FILTER_VALIDATION_NOT_FULL_AI_REPLAY",
         },
+        "replay_provenance": {
+            "feature_source_counts": dict(sorted(feature_source_counts.items())),
+            "feature_source_preference": "POINT_IN_TIME_THEN_CANDLE_FALLBACK",
+            "point_in_time_coverage": {
+                "evaluated_decisions": sum(decision_counts.values()),
+                "feature_snapshot_hits": point_in_time_counts.get("feature_snapshot_hit", 0),
+                "feature_reconstructed_fallbacks": point_in_time_counts.get("feature_reconstructed_fallback", 0),
+                "decision_snapshot_hits": point_in_time_counts.get("decision_snapshot_hit", 0),
+                "thesis_snapshot_hits": point_in_time_counts.get("thesis_snapshot_hit", 0),
+                "full_point_in_time_bundle_hits": point_in_time_counts.get("full_point_in_time_bundle_hit", 0),
+                "feature_leakage_passes": point_in_time_counts.get("feature_leakage_pass", 0),
+                "feature_leakage_partials": point_in_time_counts.get("feature_leakage_partial", 0),
+                "feature_leakage_failures": point_in_time_counts.get("feature_leakage_fail", 0),
+                "thesis_leakage_passes": point_in_time_counts.get("thesis_leakage_pass", 0),
+                "thesis_leakage_partials": point_in_time_counts.get("thesis_leakage_partial", 0),
+                "thesis_leakage_failures": point_in_time_counts.get("thesis_leakage_fail", 0),
+            },
+        },
+        "execution_parity": _execution_parity_summary(trades, config),
+        "eligibility_divergence": _eligibility_divergence_summary(rejection_counts),
         "assumptions": {
             **asdict(config),
             "entry_timing": "NEXT_CANDLE_OPEN",
@@ -265,9 +293,25 @@ def run_filtered_replay(
     }
 
 
-def build_candle_decision(candles, requested_side, min_confidence):
-    feature_contract = build_feature_snapshot("REPLAY", "REPLAY", candles)
-    features = feature_contract["feature"]
+def build_candle_decision(candles, requested_side, min_confidence, *, feature_resolver=None):
+    feature_contract = None
+    feature_source = "CANDLE_RECONSTRUCTION"
+    point_in_time_flags = {}
+    if feature_resolver is not None and candles:
+        feature_contract = feature_resolver(candles[-1].candle_time)
+        if feature_contract is not None:
+            metadata = feature_contract.get("_point_in_time") if isinstance(feature_contract, dict) else None
+            point_in_time_flags = _point_in_time_flags(metadata)
+            feature_source = (
+                "POINT_IN_TIME_SNAPSHOT"
+                if point_in_time_flags.get("feature_snapshot_hit")
+                else "POINT_IN_TIME_FALLBACK"
+            )
+
+    if feature_contract is None:
+        feature_contract = build_feature_snapshot("REPLAY", "REPLAY", candles)
+
+    features = feature_contract["feature"] if "feature" in feature_contract else feature_contract
     trend_score = features["trend_score"]
     trend = features["trend"]
     momentum_score = features["momentum_score"]
@@ -316,6 +360,8 @@ def build_candle_decision(candles, requested_side, min_confidence):
         "blocked_reasons": blocked,
         "confidence": confidence,
         "regime": regime["regime"],
+        "feature_source": feature_source,
+        "point_in_time_flags": point_in_time_flags,
         "features": {
             "trend": trend,
             "trend_score": trend_score,
@@ -326,3 +372,280 @@ def build_candle_decision(candles, requested_side, min_confidence):
             "atr": atr,
         },
     }
+
+
+def _point_in_time_flags(metadata):
+    if not isinstance(metadata, dict):
+        return {}
+
+    feature_status = str(metadata.get("feature_leakage_status") or "").upper()
+    thesis_status = str(metadata.get("thesis_leakage_status") or "").upper()
+    feature_snapshot_found = bool(metadata.get("feature_snapshot_found"))
+    decision_snapshot_found = bool(metadata.get("decision_snapshot_found"))
+    thesis_snapshot_found = bool(metadata.get("thesis_snapshot_found"))
+
+    flags = {
+        "feature_snapshot_hit": 1 if feature_snapshot_found else 0,
+        "feature_reconstructed_fallback": 0 if feature_snapshot_found else 1,
+        "decision_snapshot_hit": 1 if decision_snapshot_found else 0,
+        "thesis_snapshot_hit": 1 if thesis_snapshot_found else 0,
+        "full_point_in_time_bundle_hit": 1 if feature_snapshot_found and decision_snapshot_found and thesis_snapshot_found else 0,
+    }
+    flags.update(_leakage_status_flags("feature_leakage", feature_status))
+    flags.update(_leakage_status_flags("thesis_leakage", thesis_status))
+    return flags
+
+
+def _leakage_status_flags(prefix, status):
+    return {
+        f"{prefix}_pass": 1 if status == "PASS" else 0,
+        f"{prefix}_partial": 1 if status == "PARTIAL" else 0,
+        f"{prefix}_fail": 1 if status == "FAIL" else 0,
+    }
+
+
+def _execution_parity_summary(trades, config):
+    replay_entry_slippage_pct = round(float(config.slippage_bps) / 100, 4)
+    replay_exit_slippage_pct = round(float(config.slippage_bps) / 100, 4)
+
+    if not trades:
+        return {
+            "source": "filtered_replay_execution_parity",
+            "status": "NO_TRADES",
+            "backtest_model": {
+                "entry_slippage_pct": replay_entry_slippage_pct,
+                "exit_slippage_pct": replay_exit_slippage_pct,
+                "fee_bps": float(config.fee_bps),
+                "round_trip_fee_percent": round(float(config.fee_bps) * 2 / 100, 4),
+            },
+            "paper_model": None,
+            "summary": "No replay trades available for paper-vs-backtest fill comparison.",
+        }
+
+    paper_profiles = [
+        build_fill_profile(
+            side=trade.get("side"),
+            planned_entry_price=trade.get("entry_reference") or trade.get("entry"),
+            stop_loss=trade.get("stop"),
+            target1=trade.get("target"),
+            confidence=trade.get("confidence"),
+            risk_reward=_trade_risk_reward(trade),
+            fee_bps=config.fee_bps,
+        )
+        for trade in trades
+    ]
+
+    avg_paper_entry_slippage_pct = round(_average(profile.get("entry_slippage_pct") for profile in paper_profiles), 4)
+    avg_paper_exit_slippage_pct = round(_average(profile.get("exit_slippage_pct") for profile in paper_profiles), 4)
+    avg_paper_effective_rr = round(_average(profile.get("effective_risk_reward") for profile in paper_profiles), 4)
+    avg_replay_rr = round(_average(_trade_risk_reward(trade) for trade in trades), 4)
+    slippage_gap_pct = round(avg_paper_entry_slippage_pct - replay_entry_slippage_pct, 4)
+
+    if avg_paper_entry_slippage_pct <= replay_entry_slippage_pct * 0.9:
+        parity_label = "PAPER_TIGHTER_THAN_REPLAY"
+    elif avg_paper_entry_slippage_pct >= replay_entry_slippage_pct * 1.1:
+        parity_label = "PAPER_WIDER_THAN_REPLAY"
+    else:
+        parity_label = "PAPER_SIMILAR_TO_REPLAY"
+
+    return {
+        "source": "filtered_replay_execution_parity",
+        "status": "OK",
+        "backtest_model": {
+            "entry_slippage_pct": replay_entry_slippage_pct,
+            "exit_slippage_pct": replay_exit_slippage_pct,
+            "fee_bps": float(config.fee_bps),
+            "round_trip_fee_percent": round(float(config.fee_bps) * 2 / 100, 4),
+            "reward_risk_ratio": round(float(config.target_atr_multiple) / float(config.stop_atr_multiple), 4),
+        },
+        "paper_model": {
+            "fill_model": "paper_trade_fill_model_v1",
+            "avg_entry_slippage_pct": avg_paper_entry_slippage_pct,
+            "avg_exit_slippage_pct": avg_paper_exit_slippage_pct,
+            "avg_effective_risk_reward": avg_paper_effective_rr,
+            "round_trip_fee_percent": round(float(config.fee_bps) * 2 / 100, 4),
+        },
+        "comparison": {
+            "trade_count_compared": len(paper_profiles),
+            "entry_slippage_gap_pct": slippage_gap_pct,
+            "risk_reward_gap": round(avg_paper_effective_rr - avg_replay_rr, 4),
+            "parity_label": parity_label,
+        },
+        "summary": _execution_parity_summary_text(parity_label, slippage_gap_pct),
+    }
+
+
+def _execution_parity_summary_text(parity_label, slippage_gap_pct):
+    if parity_label == "PAPER_WIDER_THAN_REPLAY":
+        return f"Paper fill assumptions are wider than replay by about {abs(slippage_gap_pct):.4f}% on entry."
+    if parity_label == "PAPER_TIGHTER_THAN_REPLAY":
+        return f"Paper fill assumptions are tighter than replay by about {abs(slippage_gap_pct):.4f}% on entry."
+    return "Paper fill assumptions are close to replay slippage for this run."
+
+
+def _eligibility_divergence_summary(rejection_counts):
+    total_rejections = sum(rejection_counts.values())
+    if total_rejections == 0:
+        return {
+            "source": "filtered_replay_eligibility_divergence",
+            "status": "NO_REJECTIONS",
+            "summary": "No replay rejections were recorded, so there is no eligibility divergence to compare.",
+        }
+
+    comparable_counts = Counter()
+    replay_only_counts = Counter()
+    unknown_counts = Counter()
+
+    for reason, count in rejection_counts.items():
+        family, label = _replay_rejection_family(reason)
+        if family == "COMPARABLE_TO_PAPER_GATE":
+            comparable_counts[label] += count
+        elif family == "REPLAY_ONLY_GATE":
+            replay_only_counts[label] += count
+        else:
+            unknown_counts[reason] += count
+
+    comparable_total = sum(comparable_counts.values())
+    replay_only_total = sum(replay_only_counts.values())
+    unknown_total = sum(unknown_counts.values())
+    coverage_percent = round((comparable_total / total_rejections) * 100, 2) if total_rejections else 0.0
+
+    top_replay_blockers = [
+        {"reason": reason, "count": count}
+        for reason, count in rejection_counts.most_common(5)
+    ]
+
+    return {
+        "source": "filtered_replay_eligibility_divergence",
+        "status": "OK",
+        "replay_rejections": {
+            "total": total_rejections,
+            "top_blockers": top_replay_blockers,
+        },
+        "comparable_to_paper_gate": {
+            "count": comparable_total,
+            "coverage_percent": coverage_percent,
+            "families": dict(sorted(comparable_counts.items())),
+        },
+        "replay_only_gate": {
+            "count": replay_only_total,
+            "families": dict(sorted(replay_only_counts.items())),
+        },
+        "paper_only_gate": {
+            "count": 4,
+            "families": {
+                "DERIVATIVES_DATA_REQUIRED": [
+                    "Futures funding rate unavailable",
+                    "Futures open interest unavailable",
+                ],
+                "RISK_DECISION_REQUIRED": [
+                    "No risk decision found for trade plan",
+                    "Risk decision is not APPROVE",
+                ],
+                "RISK_FRESHNESS_REQUIRED": [
+                    "Risk decision is stale",
+                ],
+                "RISK_PLAN_ALIGNMENT_REQUIRED": [
+                    "Risk signal does not match trade side",
+                    "Risk entry does not match trade entry",
+                    "Risk stop_loss does not match trade stop_loss",
+                    "Risk target1 does not match trade target1",
+                    "Risk decision is older than trade plan",
+                ],
+            },
+        },
+        "unknown_replay_gate": {
+            "count": unknown_total,
+            "families": dict(sorted(unknown_counts.items())),
+        },
+        "summary": _eligibility_divergence_summary_text(
+            comparable_counts,
+            replay_only_counts,
+            coverage_percent,
+        ),
+    }
+
+
+def _replay_rejection_family(reason):
+    comparable_map = {
+        "CONFIDENCE_BELOW_THRESHOLD": "CONFIDENCE_GATE",
+        "TREND_NOT_BULLISH": "TREND_ALIGNMENT_GATE",
+        "TREND_NOT_BEARISH": "TREND_ALIGNMENT_GATE",
+        "MOMENTUM_NOT_BULLISH": "MOMENTUM_ALIGNMENT_GATE",
+        "MOMENTUM_NOT_BEARISH": "MOMENTUM_ALIGNMENT_GATE",
+        "FEATURE_SIGNAL_NOT_LONG": "FEATURE_SIGNAL_GATE",
+        "FEATURE_SIGNAL_NOT_SHORT": "FEATURE_SIGNAL_GATE",
+        "REGIME_NOT_BULLISH": "REGIME_GATE",
+        "REGIME_NOT_BEARISH": "REGIME_GATE",
+    }
+    replay_only_map = {
+        "ATR_UNAVAILABLE": "REPLAY_MARKET_DATA_GATE",
+        "MISSING_ENTRY_PRICE": "REPLAY_ENTRY_PRICING_GATE",
+        "INVALID_ATR_LEVELS": "REPLAY_RISK_LEVEL_GATE",
+        "COOLDOWN_ACTIVE": "REPLAY_COOLDOWN_GATE",
+        "SIGNAL_NOT_REARMED": "REPLAY_SIGNAL_REARM_GATE",
+    }
+
+    if reason in comparable_map:
+        return "COMPARABLE_TO_PAPER_GATE", comparable_map[reason]
+    if reason in replay_only_map:
+        return "REPLAY_ONLY_GATE", replay_only_map[reason]
+    return "UNKNOWN", reason
+
+
+def _eligibility_divergence_summary_text(comparable_counts, replay_only_counts, coverage_percent):
+    comparable_label = next(iter(comparable_counts), None)
+    replay_only_label = next(iter(replay_only_counts), None)
+
+    if comparable_label and replay_only_label:
+        return (
+            f"About {coverage_percent:.2f}% of replay rejections map cleanly to live paper gates, "
+            f"led by {comparable_label}; replay-only friction is led by {replay_only_label}."
+        )
+    if comparable_label:
+        return (
+            f"About {coverage_percent:.2f}% of replay rejections map cleanly to live paper gates, "
+            f"led by {comparable_label}."
+        )
+    if replay_only_label:
+        return (
+            f"Replay rejections are dominated by execution-only rules such as {replay_only_label}; "
+            "live paper gating differences still need separate risk/derivatives checks."
+        )
+    return "Replay rejection coverage could not be mapped cleanly to live paper gating families."
+
+
+def _trade_risk_reward(trade):
+    side = str(trade.get("side") or "").upper()
+    entry = _safe_float(trade.get("entry_reference") or trade.get("entry"))
+    stop = _safe_float(trade.get("stop"))
+    target = _safe_float(trade.get("target"))
+
+    if None in {entry, stop, target}:
+        return None
+
+    if side == "LONG":
+        risk = entry - stop
+        reward = target - entry
+    else:
+        risk = stop - entry
+        reward = entry - target
+
+    if risk <= 0 or reward <= 0:
+        return None
+
+    return reward / risk
+
+
+def _average(values):
+    numbers = [float(value) for value in values if value is not None]
+    if not numbers:
+        return 0.0
+    return sum(numbers) / len(numbers)
+
+
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

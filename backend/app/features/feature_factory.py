@@ -24,7 +24,7 @@ def build_features(symbol, timeframe, candles):
     trend_score = data["trend_score"]
     trend = data["trend"]
     momentum_score = data["momentum_score"]
-    print(f"trend_score : {trend_score}, trend : {trend}, Momentum : {momentum_score}")
+    # print(f"trend_score : {trend_score}, trend : {trend}, Momentum : {momentum_score}")
     # momentum_score = calculate_momentum(ordered_candles)
     # Updated timeframe-aware, symbol-relative candle metrics.
 

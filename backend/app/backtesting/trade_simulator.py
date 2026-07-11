@@ -5,6 +5,8 @@ from app.repositories.candle_repository import get_latest_candles
 from app.backtesting.backtest_engine import run_backtest
 from app.backtesting.filtered_replay_engine import run_filtered_replay
 from app.backtesting.walk_forward_validator import run_walk_forward
+from app.features.point_in_time_feature_service import build_point_in_time_bundle
+from app.features.point_in_time_feature_service import build_features_as_of
 
 def execute_backtest(
     symbol,
@@ -75,9 +77,41 @@ def execute_filtered_backtest(
     db = SessionLocal()
     try:
         candles = get_latest_candles(db, symbol, timeframe, limit)
+        def feature_resolver(as_of_timestamp):
+            bundle = build_point_in_time_bundle(db, symbol, timeframe, as_of_timestamp)
+            feature_contract = (
+                (bundle.get("serialized") or {}).get("feature_snapshot")
+                or build_features_as_of(
+                    db,
+                    symbol,
+                    timeframe,
+                    as_of_timestamp,
+                    limit=limit,
+                )
+            )
+            if not isinstance(feature_contract, dict):
+                return feature_contract
+
+            return {
+                **feature_contract,
+                "_point_in_time": {
+                    "feature_source": (
+                        "SNAPSHOT"
+                        if bundle.get("feature_snapshot") is not None
+                        else "RECONSTRUCTED_FALLBACK"
+                    ),
+                    "feature_snapshot_found": bundle.get("feature_snapshot") is not None,
+                    "decision_snapshot_found": bundle.get("decision_snapshot") is not None,
+                    "thesis_snapshot_found": bundle.get("thesis_snapshot") is not None,
+                    "feature_leakage_status": ((bundle.get("feature_leakage_diagnostics") or {}).get("status")),
+                    "thesis_leakage_status": ((bundle.get("thesis_leakage_diagnostics") or {}).get("status")),
+                },
+            }
+
         result = run_filtered_replay(
             candles,
             signal,
+            feature_resolver=feature_resolver,
             initial_capital=initial_capital,
             position_size_percent=position_size_percent,
             min_confidence=min_confidence,
@@ -117,6 +151,7 @@ def execute_walk_forward(
         result = run_walk_forward(
             candles,
             signal,
+            timeframe=timeframe,
             stop_grid=stop_grid,
             target_grid=target_grid,
             train_size=train_size,

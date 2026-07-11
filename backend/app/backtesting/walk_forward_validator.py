@@ -10,6 +10,23 @@ from app.backtesting.performance_engine import calculate_performance
 
 
 WALK_FORWARD_VERSION = "walk_forward_v1"
+PHASE2_VALIDATION_CONTRACT_VERSION = "phase2_proof_of_edge_v1"
+PHASE2_WALK_FORWARD_DAYS = {
+    "train_window_days": 180,
+    "test_window_days": 60,
+    "step_days": 30,
+    "minimum_folds": 6,
+}
+PHASE2_OFFICIAL_TIMEFRAMES = {"1h", "4h", "1d"}
+PHASE2_SUPPORTING_TIMEFRAMES = {"5m", "15m"}
+TIMEFRAME_MINUTES = {
+    "1m": 1,
+    "5m": 5,
+    "15m": 15,
+    "1h": 60,
+    "4h": 240,
+    "1d": 1440,
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +56,7 @@ def run_walk_forward(
     candles,
     signal,
     *,
+    timeframe=None,
     stop_grid=(0.75, 1.0, 1.25, 1.5),
     target_grid=(1.5, 2.0, 2.5, 3.0),
     train_size=200,
@@ -74,6 +92,7 @@ def run_walk_forward(
             len(ordered),
             minimum_candles,
             initial_capital,
+            timeframe=timeframe,
         )
 
     folds = []
@@ -228,6 +247,12 @@ def run_walk_forward(
             "fee_bps": float(fee_bps),
             "slippage_bps": float(slippage_bps),
         },
+        "validation_contract": _phase2_validation_contract_summary(
+            timeframe,
+            config,
+            len(folds),
+            len(ordered),
+        ),
         "leakage_controls": {
             "parameter_selection": "TRAIN_ONLY",
             "test_policy": "FROZEN_PARAMETERS",
@@ -349,7 +374,7 @@ def _compact_result(result):
     return {key: result.get(key) for key in keys}
 
 
-def _insufficient_data_result(side, config, candidates, candle_count, required, initial_capital):
+def _insufficient_data_result(side, config, candidates, candle_count, required, initial_capital, timeframe=None):
     return {
         "engine_version": WALK_FORWARD_VERSION,
         "backtest_engine_version": ENGINE_VERSION,
@@ -369,9 +394,111 @@ def _insufficient_data_result(side, config, candidates, candle_count, required, 
             **asdict(config),
             "candidate_count": len(candidates),
         },
+        "validation_contract": _phase2_validation_contract_summary(
+            timeframe,
+            config,
+            0,
+            candle_count,
+        ),
     }
 
 
 def _candle_time(candle):
     value = candle.get("candle_time") if isinstance(candle, dict) else getattr(candle, "candle_time", None)
     return value.isoformat() if hasattr(value, "isoformat") else str(value) if value is not None else None
+
+
+def phase2_walk_forward_defaults(timeframe):
+    timeframe_key = str(timeframe or "").strip()
+    minutes = TIMEFRAME_MINUTES.get(timeframe_key)
+    if minutes is None:
+        raise ValueError(f"Unsupported timeframe for walk-forward contract: {timeframe}")
+    candles_per_day = int(1440 / minutes)
+    train_size = PHASE2_WALK_FORWARD_DAYS["train_window_days"] * candles_per_day
+    test_size = PHASE2_WALK_FORWARD_DAYS["test_window_days"] * candles_per_day
+    step_size = PHASE2_WALK_FORWARD_DAYS["step_days"] * candles_per_day
+    minimum_fold_candles = minimum_candles_for_folds(
+        train_size,
+        test_size,
+        step_size,
+        PHASE2_WALK_FORWARD_DAYS["minimum_folds"],
+    )
+    return {
+        "train_size": train_size,
+        "test_size": test_size,
+        "step_size": step_size,
+        "minimum_fold_candles": minimum_fold_candles,
+    }
+
+
+def minimum_candles_for_folds(train_size, test_size, step_size, minimum_folds):
+    additional_folds = max(int(minimum_folds) - 1, 0)
+    return int(train_size) + int(test_size) + (int(step_size) * additional_folds)
+
+
+def _phase2_validation_contract_summary(timeframe, config, fold_count, candle_count):
+    timeframe_key = str(timeframe or "").strip()
+    timeframe_status = _timeframe_contract_status(timeframe_key)
+    defaults = phase2_walk_forward_defaults(timeframe_key) if timeframe_key in TIMEFRAME_MINUTES else None
+    issues = []
+
+    if timeframe_status == "NON_CANONICAL":
+        issues.append("timeframe_outside_phase2_contract")
+
+    windows_match_contract = bool(
+        defaults
+        and config.train_size == defaults["train_size"]
+        and config.test_size == defaults["test_size"]
+        and config.step_size == defaults["step_size"]
+    )
+    if timeframe_status == "OFFICIAL" and not windows_match_contract:
+        issues.append("walk_forward_windows_do_not_match_phase2_contract")
+
+    required_candles = (
+        minimum_candles_for_folds(
+            config.train_size,
+            config.test_size,
+            config.step_size,
+            PHASE2_WALK_FORWARD_DAYS["minimum_folds"],
+        )
+        if timeframe_status == "OFFICIAL"
+        else None
+    )
+    if timeframe_status == "OFFICIAL" and fold_count < PHASE2_WALK_FORWARD_DAYS["minimum_folds"]:
+        issues.append("minimum_fold_requirement_not_met")
+
+    if timeframe_status == "OFFICIAL" and candle_count < (required_candles or 0):
+        issues.append("insufficient_history_for_phase2_fold_requirement")
+
+    if timeframe_status == "OFFICIAL" and windows_match_contract and fold_count >= PHASE2_WALK_FORWARD_DAYS["minimum_folds"]:
+        contract_status = "PASS"
+    elif timeframe_status == "OFFICIAL":
+        contract_status = "INSUFFICIENT_EVIDENCE"
+    elif timeframe_status == "SUPPORTING":
+        contract_status = "PARTIAL"
+    else:
+        contract_status = "NOT_APPLICABLE"
+
+    return {
+        "contract_version": PHASE2_VALIDATION_CONTRACT_VERSION,
+        "timeframe": timeframe_key or None,
+        "timeframe_status": timeframe_status,
+        "official_timeframes": sorted(PHASE2_OFFICIAL_TIMEFRAMES),
+        "supporting_timeframes": sorted(PHASE2_SUPPORTING_TIMEFRAMES),
+        "target_windows_days": {**PHASE2_WALK_FORWARD_DAYS},
+        "derived_candle_windows": defaults,
+        "required_candle_count_for_minimum_folds": required_candles,
+        "actual_fold_count": int(fold_count),
+        "minimum_fold_requirement": PHASE2_WALK_FORWARD_DAYS["minimum_folds"],
+        "contract_status": contract_status,
+        "configuration_matches_contract": windows_match_contract if timeframe_status == "OFFICIAL" else None,
+        "issues": issues,
+    }
+
+
+def _timeframe_contract_status(timeframe):
+    if timeframe in PHASE2_OFFICIAL_TIMEFRAMES:
+        return "OFFICIAL"
+    if timeframe in PHASE2_SUPPORTING_TIMEFRAMES:
+        return "SUPPORTING"
+    return "NON_CANONICAL"

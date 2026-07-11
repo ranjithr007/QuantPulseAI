@@ -14,8 +14,8 @@ const STAGE_COLORS = {
   "Stage 4 Downtrend": "#fb7185",
 };
 
-export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol, getSymbolHref }) {
-  const rows = signalRows.map((row) => enrichRow(row, watchlist));
+export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol, auto, getSymbolHref }) {
+  const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 65));
   const groups = STAGE_ORDER.map((stage) => ({
     stage,
     count: rows.filter((row) => row.stage === stage).length,
@@ -38,9 +38,9 @@ export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol,
         </div>
 
         <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Dominant stage" value={dominant.stage.replace("Stage ", "S")} note={`${dominant.count} symbols`} icon={Layers3} accent={stageTone(dominant.stage)} />
-          <MetricCard label="Uptrend count" value={uptrend?.count || 0} note="Stage 2" icon={TrendingUp} accent="emerald" />
-          <MetricCard label="Downtrend count" value={downtrend?.count || 0} note="Stage 4" icon={TrendingDown} accent="rose" />
+          <MetricCard label="Dominant stage" value={dominant.stage} note={`${dominant.count} symbols`} icon={Layers3} accent={stageTone(dominant.stage)} />
+          <MetricCard label="Uptrend count" value={uptrend?.count || 0} note="Stage 2 Uptrend" icon={TrendingUp} accent="emerald" />
+          <MetricCard label="Downtrend count" value={downtrend?.count || 0} note="Stage 4 Downtrend" icon={TrendingDown} accent="rose" />
           <MetricCard label="Universe" value={rows.length} note="Tracked symbols" icon={ScanLine} accent="cyan" />
         </div>
 
@@ -48,7 +48,7 @@ export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol,
           <MetricCard label="Stage 2 avg RS" value={formatSigned(uptrend?.avgRs || 0, 0, "-")} note="Trend leaders" icon={TrendingUp} accent="emerald" compact />
           <MetricCard label="Stage 4 avg RS" value={formatSigned(downtrend?.avgRs || 0, 0, "-")} note="Trend laggards" icon={TrendingDown} accent="rose" compact />
           <MetricCard label="Stage spread" value={formatSigned(stageSpread, 0, "-")} note="Uptrend minus downtrend" icon={Layers3} accent={stageSpread >= 0 ? "emerald" : "rose"} compact />
-          <MetricCard label="Stage base count" value={groups.find((group) => group.stage === "Stage 1 Base")?.count || 0} note="Range / reset" icon={ScanLine} accent="cyan" compact />
+          <MetricCard label="Stage base count" value={groups.find((group) => group.stage === "Stage 1 Base")?.count || 0} note="Stage 1 Base" icon={ScanLine} accent="cyan" compact />
         </div>
 
         <div className="mt-3.5 grid gap-3.5 xl:grid-cols-[0.7fr_1.3fr]">
@@ -123,6 +123,10 @@ function StageColumn({ stage, rows, activeSymbol, getSymbolHref }) {
             <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-400">
               <span>RS {formatSigned(row.rsScore, 0)}</span>
               <span>{formatPercent(row.confidence, 0)}</span>
+            </div>
+            <div className="mt-1.5">
+              <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
+              {row.riskNote ? <div className="mt-1 text-[11px] leading-4 text-slate-500">{row.riskNote}</div> : null}
             </div>
             <div className="mt-2.5 inline-flex items-center gap-2 text-xs font-medium text-cyan-200">
               <Eye className="h-3.5 w-3.5" />

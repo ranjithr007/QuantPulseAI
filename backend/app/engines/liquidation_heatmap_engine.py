@@ -60,8 +60,8 @@ class LiquidationHeatmapEngine:
                 target = current_price
 
         total = above_value + below_value
-
-        confidence = max(above_value, below_value) / total * 100 if total > 0 else 0
+        if total > 0:
+            confidence = max(above_value, below_value) / total * 100
 
         return {
             "symbol": symbol,

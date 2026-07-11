@@ -38,15 +38,24 @@ class ProbabilityEngine:
 
         positive_support = sum(max(0.0, value) for value in component_scores.values())
         negative_support = sum(max(0.0, -value) for value in component_scores.values())
+        support_total = positive_support + negative_support
+        support_edge = positive_support - negative_support
         freshness_factor = self._freshness_factor(freshness)
         contradiction_score = float(contradiction.get("conflict_score", 0) or 0)
         contradiction_factor = max(0.15, 1 - contradiction_score / 120)
 
-        prior = self._prior(signal_score, contradiction.get("status"))
+        prior = self._prior(
+            signal_score,
+            contradiction.get("status"),
+            support_edge,
+            support_total,
+        )
         likelihood = self._likelihood(
             signal_score,
             positive_support,
             negative_support,
+            support_edge,
+            support_total,
             freshness_factor,
             contradiction_score,
             price_change_pct,
@@ -120,6 +129,8 @@ class ProbabilityEngine:
             "support": {
                 "positive": round(positive_support, 2),
                 "negative": round(negative_support, 2),
+                "total": round(support_total, 2),
+                "edge": round(support_edge, 2),
             },
             "current_price": current_price,
             "previous_price": previous_price,
@@ -129,10 +140,21 @@ class ProbabilityEngine:
             "reasons": reasons,
         }
 
-    def _prior(self, signal_score, contradiction_status):
-        long_prior = self._clamp(0.5 + signal_score / 200, 0.05, 0.95)
-        short_prior = self._clamp(0.5 - signal_score / 200, 0.05, 0.95)
-        wait_prior = self._clamp(0.35 + (1 - min(abs(signal_score), 100) / 100) * 0.35, 0.05, 0.8)
+    def _prior(self, signal_score, contradiction_status, support_edge=0, support_total=0):
+        edge_bias = self._clamp(support_edge / 220, -0.18, 0.18)
+        conviction = min(1.0, abs(signal_score) / 100)
+        support_conviction = min(1.0, abs(support_edge) / 80)
+
+        long_prior = self._clamp(0.5 + signal_score / 180 + edge_bias, 0.03, 0.97)
+        short_prior = self._clamp(0.5 - signal_score / 180 - edge_bias, 0.03, 0.97)
+        wait_prior = self._clamp(
+            0.2
+            + (1 - conviction) * 0.22
+            + (1 - support_conviction) * 0.18
+            + (0.08 if support_total < 20 else 0.0),
+            0.03,
+            0.75,
+        )
 
         if contradiction_status == "INVALIDATED":
             wait_prior = 0.9
@@ -150,28 +172,43 @@ class ProbabilityEngine:
         signal_score,
         positive_support,
         negative_support,
+        support_edge,
+        support_total,
         freshness_factor,
         contradiction_score,
         price_change_pct,
         signal_name,
     ):
-        long_likelihood = 0.5 + min(0.45, positive_support / 220)
-        short_likelihood = 0.5 + min(0.45, negative_support / 220)
-        wait_likelihood = 0.5 + min(0.35, contradiction_score / 200)
+        edge_strength = min(0.22, abs(support_edge) / 220)
+        long_likelihood = 0.42 + min(0.4, positive_support / 170)
+        short_likelihood = 0.42 + min(0.4, negative_support / 170)
+        wait_likelihood = 0.34 + min(0.34, contradiction_score / 180)
+
+        if support_edge > 0:
+            long_likelihood += edge_strength
+        elif support_edge < 0:
+            short_likelihood += edge_strength
 
         if signal_score > 0:
-            long_likelihood += min(0.1, signal_score / 400)
+            long_likelihood += min(0.14, signal_score / 280)
         elif signal_score < 0:
-            short_likelihood += min(0.1, abs(signal_score) / 400)
+            short_likelihood += min(0.14, abs(signal_score) / 280)
 
         if price_change_pct is not None:
             if price_change_pct > 0:
-                long_likelihood += min(0.05, price_change_pct / 100)
+                long_likelihood += min(0.06, price_change_pct / 80)
             elif price_change_pct < 0:
-                short_likelihood += min(0.05, abs(price_change_pct) / 100)
+                short_likelihood += min(0.06, abs(price_change_pct) / 80)
 
         if signal_name == "WAIT":
             wait_likelihood += 0.1
+
+        if support_total < 20:
+            wait_likelihood += 0.08
+        if abs(signal_score) < 15 and abs(support_edge) < 10:
+            wait_likelihood += 0.06
+        if abs(signal_score) >= 35 and abs(support_edge) >= 20:
+            wait_likelihood -= 0.08
 
         long_likelihood *= freshness_factor
         short_likelihood *= freshness_factor

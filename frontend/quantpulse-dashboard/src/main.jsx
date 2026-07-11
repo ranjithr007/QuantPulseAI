@@ -4,20 +4,33 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from
 import "./styles.css";
 import DashboardHeader from "./components/DashboardHeader";
 import useDashboardData from "./hooks/useDashboardData";
-import { loadAutomationSettings, saveAutomationEmergencyStop, saveAutomationSettings } from "./hooks/dashboardApi";
+import { executePaperTradeCandidates, loadAutomationSettings, saveAutomationEmergencyStop, saveAutomationSettings } from "./hooks/dashboardApi";
 
-const AutoTradingPage = React.lazy(() => import("./pages/AutoTradingPage"));
-const BacktestPage = React.lazy(() => import("./pages/BacktestPage"));
-const CoinDetailsPage = React.lazy(() => import("./pages/CoinDetailsPage"));
-const DashboardHomePage = React.lazy(() => import("./pages/DashboardHomePage"));
-const MarketScanPage = React.lazy(() => import("./pages/MarketScanPage"));
-const PnlPage = React.lazy(() => import("./pages/PnlPage"));
-const RiskControlsPage = React.lazy(() => import("./pages/RiskControlsPage"));
-const RotationPage = React.lazy(() => import("./pages/RotationPage"));
-const RsRankingPage = React.lazy(() => import("./pages/RsRankingPage"));
-const SignalsPage = React.lazy(() => import("./pages/SignalsPage"));
-const StageAnalysisPage = React.lazy(() => import("./pages/StageAnalysisPage"));
-const TradingDetailsPage = React.lazy(() => import("./pages/TradingDetailsPage"));
+const importAutoTradingPage = () => import("./pages/AutoTradingPage");
+const importBacktestPage = () => import("./pages/BacktestPage");
+const importCoinDetailsPage = () => import("./pages/CoinDetailsPage");
+const importDashboardHomePage = () => import("./pages/DashboardHomePage");
+const importMarketScanPage = () => import("./pages/MarketScanPage");
+const importPnlPage = () => import("./pages/PnlPage");
+const importRiskControlsPage = () => import("./pages/RiskControlsPage");
+const importRotationPage = () => import("./pages/RotationPage");
+const importRsRankingPage = () => import("./pages/RsRankingPage");
+const importSignalsPage = () => import("./pages/SignalsPage");
+const importStageAnalysisPage = () => import("./pages/StageAnalysisPage");
+const importTradingDetailsPage = () => import("./pages/TradingDetailsPage");
+
+const AutoTradingPage = React.lazy(importAutoTradingPage);
+const BacktestPage = React.lazy(importBacktestPage);
+const CoinDetailsPage = React.lazy(importCoinDetailsPage);
+const DashboardHomePage = React.lazy(importDashboardHomePage);
+const MarketScanPage = React.lazy(importMarketScanPage);
+const PnlPage = React.lazy(importPnlPage);
+const RiskControlsPage = React.lazy(importRiskControlsPage);
+const RotationPage = React.lazy(importRotationPage);
+const RsRankingPage = React.lazy(importRsRankingPage);
+const SignalsPage = React.lazy(importSignalsPage);
+const StageAnalysisPage = React.lazy(importStageAnalysisPage);
+const TradingDetailsPage = React.lazy(importTradingDetailsPage);
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
 const TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"];
@@ -42,6 +55,21 @@ const PAGES = [
   "stage-analysis",
 ];
 
+const ROUTE_PRELOADERS = [
+  importDashboardHomePage,
+  importMarketScanPage,
+  importSignalsPage,
+  importCoinDetailsPage,
+  importTradingDetailsPage,
+  importRiskControlsPage,
+  importAutoTradingPage,
+  importPnlPage,
+  importBacktestPage,
+  importRotationPage,
+  importRsRankingPage,
+  importStageAnalysisPage,
+];
+
 function normalizeView(view) {
   return {
     symbol: SYMBOLS.includes((view.symbol || "").toUpperCase()) ? view.symbol.toUpperCase() : "BTCUSDT",
@@ -54,8 +82,11 @@ function getViewFromLocation(pathname, search) {
   const params = new URLSearchParams(search);
   const diagnosticsMatch = pathname.match(/^\/signals\/([^/]+)\/diagnostics\/?$/i);
   const coinMatch = pathname.match(/^\/coins\/([^/]+)\/?$/i);
+  const contractMatch = pathname.match(/^\/contracts\/([^/]+)\/?$/i);
   const routeSymbol = diagnosticsMatch
     ? decodeURIComponent(diagnosticsMatch[1]).toUpperCase()
+    : contractMatch
+      ? decodeURIComponent(contractMatch[1]).toUpperCase()
     : coinMatch
       ? decodeURIComponent(coinMatch[1]).toUpperCase()
       : params.get("symbol");
@@ -69,7 +100,7 @@ function getViewFromLocation(pathname, search) {
 
 function getPageFromPath(pathname) {
   const path = pathname.toLowerCase();
-  if (path.startsWith("/coins/") || /^\/signals\/[^/]+\/diagnostics\/?$/i.test(pathname)) return "coin-details";
+  if (path.startsWith("/coins/") || path.startsWith("/contracts/") || /^\/signals\/[^/]+\/diagnostics\/?$/i.test(pathname)) return "coin-details";
   if (path.startsWith("/dashboard")) return "dashboard";
   if (path.startsWith("/risk-controls")) return "risk-controls";
   if (path.startsWith("/auto-trading")) return "auto-trading";
@@ -91,7 +122,7 @@ function buildPageUrl(page, view) {
   params.set("mode", nextView.mode);
 
   if (page === "coin-details") {
-    return `/coins/${nextView.symbol}?${params.toString()}`;
+    return `/contracts/${nextView.symbol}?${params.toString()}`;
   }
 
   params.set("symbol", nextView.symbol);
@@ -144,6 +175,8 @@ function DashboardApp() {
     candleSeries,
     volumeSeries,
     selectedRisk,
+    selectedPaperTradeCandidate,
+    paperTradeCandidates,
     equitySeries,
     pnlBySymbol,
     pnlBySide,
@@ -172,6 +205,24 @@ function DashboardApp() {
       setViewState(routeView);
     }
   }, [routeView, view.symbol, view.timeframe, view.mode]);
+
+  useEffect(() => {
+    const warmRoutes = () => {
+      ROUTE_PRELOADERS.forEach((loadPage) => {
+        loadPage().catch(() => {
+          // Keep route loading resilient even if a prefetch fails.
+        });
+      });
+    };
+
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(warmRoutes, { timeout: 1500 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+
+    const id = window.setTimeout(warmRoutes, 250);
+    return () => window.clearTimeout(id);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,6 +279,19 @@ function DashboardApp() {
       });
   }, []);
 
+  const handleExecutePaperTrades = useCallback(() => {
+    const controller = new AbortController();
+    executePaperTradeCandidates({ symbol: view.symbol, signal: controller.signal })
+      .then(() => {
+        setTick((current) => current + 1);
+      })
+      .catch(() => {
+        // Keep the dashboard usable; the next scheduler cycle can refresh the trade state.
+      });
+
+    return () => controller.abort();
+  }, [setTick, view.symbol]);
+
   useEffect(() => {
     saveLocalValue(SCAN_FILTERS_KEY, filters);
   }, [filters]);
@@ -275,6 +339,7 @@ function DashboardApp() {
       auto={auto}
       setAuto={setAuto}
       onEmergencyStop={handleEmergencyStop}
+      onExecutePaperTrades={handleExecutePaperTrades}
       openTrades={openTrades}
       selectedPipeline={selectedPipeline}
       candleSeries={candleSeries}
@@ -320,11 +385,14 @@ function DashboardLayout({
   auto,
   setAuto,
   onEmergencyStop,
+  onExecutePaperTrades,
   openTrades,
   selectedPipeline,
   candleSeries,
   volumeSeries,
   selectedRisk,
+  selectedPaperTradeCandidate,
+  paperTradeCandidates,
   equitySeries,
   pnlBySymbol,
   pnlBySide,
@@ -375,6 +443,7 @@ function DashboardLayout({
               element={
                 <DashboardHomePage
                   view={view}
+                  auto={auto}
                   marketSummary={marketSummary}
                   selectedDetail={selectedDetail}
                   activeTradePlan={activeTradePlan}
@@ -385,6 +454,7 @@ function DashboardLayout({
                   signalRows={signalRows}
                   candleSeries={candleSeries}
                   selectedRisk={selectedRisk}
+                  selectedPaperTradeCandidate={selectedPaperTradeCandidate}
                   onOpenSymbol={(symbol) => onPageChange("coin-details", { ...view, symbol })}
                 />
               }
@@ -394,14 +464,19 @@ function DashboardLayout({
               element={
                 <MarketScanPage
                   view={view}
+                  auto={auto}
+                  filters={filters}
+                  setFilters={setFilters}
                   marketSummary={marketSummary}
                   selectedDetail={selectedDetail}
                   activeTradePlan={activeTradePlan}
                   autoDecision={autoDecision}
                   liveStatus={liveStatus}
                   watchlist={watchlist}
+                  selectedRisk={selectedRisk}
                   openTrades={openTrades}
                   signalRows={signalRows}
+                  paperTradeCandidates={paperTradeCandidates}
                   onOpenSymbol={(symbol) => onPageChange("coin-details", { ...view, symbol })}
                   getSymbolHref={(symbol) => getPageHref("coin-details", { ...view, symbol })}
                 />
@@ -418,8 +493,24 @@ function DashboardLayout({
                   signalRows={signalRows}
                   watchlist={watchlist}
                   liveStatus={liveStatus}
+                  auto={auto}
+                  paperTradeCandidates={paperTradeCandidates}
                   onOpenSignal={(symbol) => onPageChange("coin-details", { ...view, symbol })}
                   getSymbolHref={(symbol) => getPageHref("coin-details", { ...view, symbol })}
+                />
+              }
+            />
+            <Route
+              path="/contracts/:symbol"
+              element={
+                <CoinDetailsPage
+                  view={view}
+                  selectedDetail={selectedDetail}
+                  activeTradePlan={activeTradePlan}
+                  candleSeries={candleSeries}
+                  volumeSeries={volumeSeries}
+                  selectedRisk={selectedRisk}
+                  liveStatus={liveStatus}
                 />
               }
             />
@@ -463,6 +554,9 @@ function DashboardLayout({
                   autoDecision={autoDecision}
                   selectedDetail={selectedDetail}
                   openTrades={openTrades}
+                  selectedRisk={selectedRisk}
+                  selectedPaperTradeCandidate={selectedPaperTradeCandidate}
+                  onExecutePaperTrades={onExecutePaperTrades}
                   selectedPipeline={selectedPipeline}
                   loading={loading}
                   realizedPnl={realizedPnl}
@@ -493,6 +587,7 @@ function DashboardLayout({
                   autoDecision={autoDecision}
                   selectedDetail={selectedDetail}
                   selectedRisk={selectedRisk}
+                  selectedPaperTradeCandidate={selectedPaperTradeCandidate}
                   openTrades={openTrades}
                 />
               }
@@ -508,7 +603,10 @@ function DashboardLayout({
                   onEmergencyStop={onEmergencyStop}
                   autoDecision={autoDecision}
                   selectedDetail={selectedDetail}
+                  selectedRisk={selectedRisk}
+                  selectedPaperTradeCandidate={selectedPaperTradeCandidate}
                   openTrades={openTrades}
+                  onExecutePaperTrades={onExecutePaperTrades}
                 />
               }
             />
@@ -530,6 +628,8 @@ function DashboardLayout({
                   pnlBySymbol={pnlBySymbol}
                   pnlBySide={pnlBySide}
                   equitySeries={equitySeries}
+                  selectedDetail={selectedDetail}
+                  autoDecision={autoDecision}
                 />
               }
             />
@@ -558,6 +658,7 @@ function DashboardLayout({
                 <RotationPage
                   signalRows={signalRows}
                   watchlist={watchlist}
+                  auto={auto}
                   getSymbolHref={(symbol) => getPageHref("coin-details", { ...view, symbol })}
                 />
               }
@@ -569,6 +670,7 @@ function DashboardLayout({
                   signalRows={signalRows}
                   watchlist={watchlist}
                   activeSymbol={view.symbol}
+                  auto={auto}
                   getSymbolHref={(symbol) => getPageHref("coin-details", { ...view, symbol })}
                 />
               }
@@ -580,6 +682,7 @@ function DashboardLayout({
                   signalRows={signalRows}
                   watchlist={watchlist}
                   activeSymbol={view.symbol}
+                  auto={auto}
                   getSymbolHref={(symbol) => getPageHref("coin-details", { ...view, symbol })}
                 />
               }
@@ -597,7 +700,7 @@ function RouteLoading() {
   return (
     <div className={`${SECTION} py-8`}>
       <div className="rounded-lg border border-white/10 bg-slate-900/70 p-4 text-sm text-slate-400">
-        Loading page...
+        Opening view...
       </div>
     </div>
   );
@@ -627,7 +730,7 @@ function normalizeAutoSettings(value) {
     maxOpenTrades: 4,
     maxLeverage: 5,
     maxPositionSize: 25000,
-    minConfidence: 70,
+    minConfidence: 65,
     direction: "BOTH",
     executionMode: "PAPER",
     liveExecutionEnabled: false,
@@ -669,6 +772,7 @@ function normalizeScanFilters(value) {
     watchlistStatus: "ALL",
     watchlistSide: "ALL",
     failedMax: "2",
+    executorStatus: "ALL",
   };
 
   if (!value || typeof value !== "object") {
@@ -678,11 +782,13 @@ function normalizeScanFilters(value) {
   const watchlistStatus = String(value.watchlistStatus || defaults.watchlistStatus).toUpperCase();
   const watchlistSide = String(value.watchlistSide || defaults.watchlistSide).toUpperCase();
   const failedMax = String(value.failedMax ?? defaults.failedMax);
+  const executorStatus = String(value.executorStatus || defaults.executorStatus).toUpperCase();
 
   return {
     watchlistStatus: ["ALL", "READY", "WAIT"].includes(watchlistStatus) ? watchlistStatus : defaults.watchlistStatus,
     watchlistSide: ["ALL", "LONG", "SHORT"].includes(watchlistSide) ? watchlistSide : defaults.watchlistSide,
     failedMax: ["0", "1", "2", "3", "4"].includes(failedMax) ? failedMax : defaults.failedMax,
+    executorStatus: ["ALL", "READY", "BLOCKED", "NO_QUEUED_PLAN"].includes(executorStatus) ? executorStatus : defaults.executorStatus,
   };
 }
 

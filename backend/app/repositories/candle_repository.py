@@ -10,7 +10,11 @@ FUTURE_CANDLE_TOLERANCE_SECONDS = 60
 
 
 def _normalized_candle_time(candle):
-    return normalize_timestamp_to_utc(candle.candle_time)
+    candle_time = getattr(candle, "candle_time", None)
+    normalized = normalize_timestamp_to_utc(candle_time)
+    if normalized is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return normalized
 
 
 def get_latest_candles(db, symbol, timeframe, limit=200):
@@ -39,7 +43,7 @@ def get_latest_candles(db, symbol, timeframe, limit=200):
         .all()
     )
     candidates = {
-        candle.id: candle
+        getattr(candle, "id", id(candle)): candle
         for candle in raw_time_candidates + recent_insert_candidates
     }.values()
     now = datetime.now(timezone.utc)

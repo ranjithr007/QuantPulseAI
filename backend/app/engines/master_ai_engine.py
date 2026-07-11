@@ -16,7 +16,7 @@ class MasterAIEngine:
         self.smc_repo = SMCRepository()
         self.risk_engine = RiskEngine()
 
-    def analyze(self, db, symbol, liquidity, heatmap, whale, current_price, atr):
+    def analyze(self, db, symbol, liquidity, heatmap, whale, current_price, atr, timeframe=None):
 
         long_score = 0
 
@@ -24,7 +24,9 @@ class MasterAIEngine:
 
         reasons = []
 
-        smc = self.smc_repo.latest(db, symbol)
+        smc = self.smc_repo.latest(db, symbol, timeframe=timeframe)
+        if smc is None and timeframe is not None:
+            smc = self.smc_repo.latest(db, symbol)
         if smc:
             if smc.confidence >= 70:
 
@@ -87,7 +89,9 @@ class MasterAIEngine:
         # ============================
         # Order Flow Engine (NEW)
         # ============================
-        orderflow = self.order_repo.latest(db, symbol)
+        orderflow = self.order_repo.latest(db, symbol, timeframe=timeframe)
+        if orderflow is None and timeframe is not None:
+            orderflow = self.order_repo.latest(db, symbol)
         order_score = 50
         if orderflow:
             order_score = self.order_engine.calculate(orderflow)
@@ -185,7 +189,11 @@ class MasterAIEngine:
         trade_risk = self.risk_engine.analyze(
            symbol=symbol, signal=signal, price=current_price, atr=atr,confidence=confidence
         )
-        reasons.extend(trade_risk.get("reason"))
+        risk_reason = trade_risk.get("reason")
+        if isinstance(risk_reason, list):
+            reasons.extend(risk_reason)
+        elif risk_reason:
+            reasons.append(str(risk_reason))
         return {
             "symbol": symbol,
             "signal": signal,

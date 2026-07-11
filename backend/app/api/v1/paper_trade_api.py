@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Query
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.v1.derivatives_api import build_derivatives_payload
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.measurement import MeasurementGates
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.paper_trading.validation_policy import build_architecture_paper_gate
+from app.risk.risk_engine import RiskEngine
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
@@ -14,6 +16,7 @@ from app.utils.freshness import freshness_status
 
 
 router = APIRouter(prefix="/paper-trade", tags=["Paper Trade"])
+risk_engine = RiskEngine()
 
 
 def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
@@ -37,6 +40,7 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     return {
         "source": "paper_trade_bundle",
         "symbol_filter": normalized_symbol,
+        "marketContext": _market_context_payload(normalized_symbol),
         "performance": {
             **paper_trade_performance(trades),
             "total_trades": len(trades),
@@ -301,6 +305,18 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 continue
 
+            trade_plan_id = candidate["trade_plan"]["id"]
+            if repo.has_trade_for_plan(db, trade_plan_id):
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_existing_paper_trade_for_plan",
+                        "trade_plan_id": trade_plan_id,
+                    }
+                )
+                continue
+
             paper_trade = repo.save_candidate(db, candidate)
             executed.append(
                 _paper_trade_payload(
@@ -353,11 +369,20 @@ def build_paper_trade_candidates(
         db,
         [trade.symbol for trade in trades],
     )
+    derivative_payloads = {
+        trade_symbol: _safe_derivatives_payload(
+            db,
+            trade_symbol,
+            stale_after_seconds=stale_after_seconds,
+        )
+        for trade_symbol in {trade.symbol for trade in trades}
+    }
     records = [
         _paper_trade_candidate(
             trade,
             latest_risks.get(trade.symbol),
             stale_after_seconds,
+            derivative_payloads.get(trade.symbol),
         )
         for trade in trades
     ]
@@ -395,6 +420,9 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "opened_at": paper_trade.opened_at,
         "closed_at": paper_trade.closed_at,
         "created_at": paper_trade.created_at,
+        "market_type": "FUTURES",
+        "instrument_type": "PERPETUAL",
+        "venue": "BINANCE_FUTURES",
     }
 
     if fill_profile is not None:
@@ -412,9 +440,9 @@ def _summarize_paper_trades(records):
     }
 
 
-def _paper_trade_candidate(trade, risk, stale_after_seconds):
+def _paper_trade_candidate(trade, risk, stale_after_seconds, derivatives=None):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
-    blocked_reasons = _paper_trade_blocked_reasons(trade, risk, risk_payload)
+    blocked_reasons = _paper_trade_blocked_reasons(trade, risk, risk_payload, derivatives)
     fill_profile = build_fill_profile(
         side=trade.side,
         planned_entry_price=trade.entry_price,
@@ -432,6 +460,7 @@ def _paper_trade_candidate(trade, risk, stale_after_seconds):
         "trade_plan": _trade_plan_payload(trade),
         "risk_decision": risk_payload,
         "fill_profile": fill_profile,
+        "market_context": _market_context_payload(trade.symbol, derivatives),
     }
 
 
@@ -466,6 +495,7 @@ def _risk_decision_payload(risk, stale_after_seconds):
         "id": risk.id,
         "signal": risk.signal,
         "decision": risk.decision,
+        "reason": _risk_reason(risk),
         "entry_price": risk.entry_price,
         "stop_loss": risk.stop_loss,
         "target1": risk.target1,
@@ -479,14 +509,20 @@ def _risk_decision_payload(risk, stale_after_seconds):
     }
 
 
-def _paper_trade_blocked_reasons(trade, risk, risk_payload):
+def _paper_trade_blocked_reasons(trade, risk, risk_payload, derivatives=None):
     reasons = []
 
     if risk is None:
         return ["No risk decision found for trade plan"]
 
     if risk.decision != "APPROVE":
-        reasons.append(f"Risk decision is not APPROVE: {risk.decision}")
+        rejection_reason = _risk_reason(risk)
+        if rejection_reason:
+            reasons.append(
+                f"Risk decision is not APPROVE: {risk.decision} ({rejection_reason})"
+            )
+        else:
+            reasons.append(f"Risk decision is not APPROVE: {risk.decision}")
 
     if risk_payload["freshness"]["is_stale"]:
         reasons.append("Risk decision is stale")
@@ -509,11 +545,64 @@ def _paper_trade_blocked_reasons(trade, risk, risk_payload):
     return reasons
 
 
+def _market_context_payload(symbol=None, derivatives=None):
+    availability = (derivatives or {}).get("availability") or {}
+    funding_available = bool(availability.get("funding"))
+    open_interest_available = bool(availability.get("open_interest"))
+    return {
+        "symbol": symbol,
+        "market_type": "FUTURES",
+        "instrument_type": "PERPETUAL",
+        "venue": "BINANCE_FUTURES",
+        "fundingAvailable": funding_available,
+        "openInterestAvailable": open_interest_available,
+        "isReady": funding_available and open_interest_available,
+    }
+
+
+def _safe_derivatives_payload(db, symbol, stale_after_seconds):
+    try:
+        return build_derivatives_payload(
+            db,
+            symbol,
+            stale_after_seconds=stale_after_seconds,
+        )
+    except SQLAlchemyError:
+        db.rollback()
+        return {}
+
+
 def _same_price(left, right):
     if left is None or right is None:
         return False
 
     return abs(float(left) - float(right)) <= 0.00000001
+
+
+def _risk_reason(risk):
+    stored_reason = getattr(risk, "reason", None)
+
+    if stored_reason:
+        return stored_reason
+
+    if str(getattr(risk, "decision", "") or "").upper() != "REJECT":
+        return None
+
+    try:
+        recomputed = risk_engine.analyze_trade_plan(
+            symbol=risk.symbol,
+            side=risk.signal,
+            entry=risk.entry_price,
+            stop_loss=risk.stop_loss,
+            target1=risk.target1,
+            target2=risk.target2,
+            confidence=risk.confidence or 0,
+            risk_percent=risk.risk_percent or 1,
+        )
+    except Exception:
+        return None
+
+    return recomputed.get("reason")
 
 
 def _paper_trade_unavailable_payload(operation, symbol_filter=None, status_filter=None, detail="Paper-trade data is unavailable because the database is not reachable."):

@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from app.database.models.paper_trade import PaperTrade
+from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 from app.repositories.trade_thesis_repository import TradeThesisRepository
@@ -8,6 +9,9 @@ from app.repositories.trade_thesis_repository import TradeThesisRepository
 
 class PaperTradeRepository:
     def ensure_table(self, db):
+        if not USING_SQLITE_FALLBACK:
+            return
+
         PaperTrade.__table__.create(bind=db.get_bind(), checkfirst=True)
 
     def get_open_trades(self, db):
@@ -48,6 +52,16 @@ class PaperTradeRepository:
             .filter(PaperTrade.symbol == symbol)
             .filter(PaperTrade.side == side)
             .filter(PaperTrade.status == "OPEN")
+            .first()
+            is not None
+        )
+
+    def has_trade_for_plan(self, db, trade_plan_id):
+        self.ensure_table(db)
+
+        return (
+            db.query(PaperTrade)
+            .filter(PaperTrade.trade_plan_id == trade_plan_id)
             .first()
             is not None
         )

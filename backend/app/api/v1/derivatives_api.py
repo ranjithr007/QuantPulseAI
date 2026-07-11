@@ -45,6 +45,11 @@ def get_derivatives(
             "latest_funding_rate": None,
             "latest_open_interest": None,
             "latest_open_interest_change_pct": None,
+            "latestFundingRate": None,
+            "latestOpenInterest": None,
+            "latestOpenInterestChangePct": None,
+            "fundingRateGraph": [],
+            "openInterestGraph": [],
         }
     finally:
         db.close()
@@ -107,23 +112,63 @@ def build_derivatives_payload(
             stale_after_seconds,
         )
 
+    funding_series = _dedupe_series(
+        [
+            {
+                "series_key": _series_key(item.get("funding_time") or item.get("created_at")),
+                "label": _series_label(item.get("funding_time") or item.get("created_at")),
+                "value": item.get("rate"),
+            }
+            for item in funding_history
+        ]
+    )
+    open_interest_series = _dedupe_series(
+        [
+            {
+                "series_key": _series_key(item.get("timestamp") or item.get("created_at")),
+                "label": _series_label(item.get("timestamp") or item.get("created_at")),
+                "value": item.get("value"),
+            }
+            for item in open_interest_history
+        ]
+    )
+
     return {
         "symbol": symbol,
         "source": "derivatives",
+        "status": "OK",
+        "data_scope": "symbol",
+        "availability": {
+            "funding": bool(funding_history),
+            "open_interest": bool(open_interest_history),
+        },
         "funding": {
             "count": len(funding_history),
             "latest": latest_funding,
             "history": funding_history,
+            "series": funding_series,
+            "trend": _funding_trend(funding_history),
         },
         "openInterest": {
             "count": len(open_interest_history),
             "latest": latest_open_interest,
             "latest_change_pct": latest_open_interest_change_pct,
             "history": open_interest_history,
+            "series": open_interest_series,
+            "trend": _open_interest_trend(open_interest_history),
         },
         "latest_funding_rate": latest_funding.get("rate") if latest_funding else None,
         "latest_open_interest": latest_open_interest.get("value") if latest_open_interest else None,
         "latest_open_interest_change_pct": latest_open_interest_change_pct,
+        "funding_rate_graph": funding_series,
+        "open_interest_graph": open_interest_series,
+        "latestFundingRate": latest_funding.get("rate") if latest_funding else None,
+        "latestOpenInterest": latest_open_interest.get("value") if latest_open_interest else None,
+        "latestOpenInterestChangePct": latest_open_interest_change_pct,
+        "fundingRateGraph": funding_series,
+        "openInterestGraph": open_interest_series,
+        "funding_trend": _funding_trend(funding_history),
+        "open_interest_trend": _open_interest_trend(open_interest_history),
     }
 
 
@@ -138,3 +183,56 @@ def _latest_open_interest_change_pct(history):
         return None
 
     return round(((latest - previous) / previous) * 100, 4)
+
+
+def _funding_trend(history):
+    if len(history) < 2:
+        return "UNKNOWN"
+
+    latest = history[-1].get("rate")
+    previous = history[-2].get("rate")
+
+    if latest is None or previous is None:
+        return "UNKNOWN"
+    if latest > previous:
+        return "RISING"
+    if latest < previous:
+        return "FALLING"
+    return "FLAT"
+
+
+def _open_interest_trend(history):
+    if len(history) < 2:
+        return "UNKNOWN"
+
+    latest = history[-1].get("value")
+    previous = history[-2].get("value")
+
+    if latest is None or previous is None:
+        return "UNKNOWN"
+    if latest > previous:
+        return "RISING"
+    if latest < previous:
+        return "FALLING"
+    return "FLAT"
+
+
+def _series_label(value):
+    if not value:
+        return ""
+
+    return value.strftime("%H:%M") if hasattr(value, "strftime") else str(value)
+
+
+def _dedupe_series(series):
+    unique = {}
+    for item in series:
+        key = item.get("series_key") or item.get("label") or ""
+        unique[key] = item
+    return list(unique.values())
+
+
+def _series_key(value):
+    if not value:
+        return ""
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)

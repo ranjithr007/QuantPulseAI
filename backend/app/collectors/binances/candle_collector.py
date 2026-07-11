@@ -9,7 +9,7 @@ from app.utils.network_resilience import is_transient_network_error
 
 class CandleCollector:
 
-    URL = "https://api.binance.com/api/v3/klines"
+    URL = "https://fapi.binance.com/fapi/v1/klines"
 
     def get_candles(self, symbol, interval="5m", limit=100):
 
