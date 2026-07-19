@@ -3,16 +3,14 @@ from importlib import import_module
 
 DEFAULT_JOB_IDS = [
     "market",
-    "derivative",
     "feature",
     "regime",
     "orderflow",
     "smc",
-    "heatmap",
-    "whales",
-    "whale_ai",
-    "intelligence",
-    "master_ai",
+    "watchlist_persist",
+    "risk",
+    "paper_trade_execute",
+    "paper_trade_monitor",
 ]
 
 

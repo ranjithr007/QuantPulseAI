@@ -4,7 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from
 import "./styles.css";
 import DashboardHeader from "./components/DashboardHeader";
 import useDashboardData from "./hooks/useDashboardData";
-import { executePaperTradeCandidates, loadAutomationSettings, saveAutomationEmergencyStop, saveAutomationSettings } from "./hooks/dashboardApi";
+import { executePaperTradeCandidates, loadAutomationSettings, persistReadyWatchlistSetups, saveAutomationEmergencyStop, saveAutomationSettings } from "./hooks/dashboardApi";
 
 const importAutoTradingPage = () => import("./pages/AutoTradingPage");
 const importBacktestPage = () => import("./pages/BacktestPage");
@@ -281,7 +281,22 @@ function DashboardApp() {
 
   const handleExecutePaperTrades = useCallback(() => {
     const controller = new AbortController();
-    executePaperTradeCandidates({ symbol: view.symbol, signal: controller.signal })
+    const normalizedSide =
+      selectedDetail?.signalType === "BUY"
+        ? "LONG"
+        : selectedDetail?.signalType === "SELL"
+          ? "SHORT"
+          : undefined;
+
+    persistReadyWatchlistSetups({
+      mode: view.mode,
+      side: normalizedSide,
+      signal: controller.signal,
+    })
+      .catch(() => null)
+      .then(() =>
+        executePaperTradeCandidates({ symbol: view.symbol, signal: controller.signal })
+      )
       .then(() => {
         setTick((current) => current + 1);
       })
@@ -290,7 +305,7 @@ function DashboardApp() {
       });
 
     return () => controller.abort();
-  }, [setTick, view.symbol]);
+  }, [setTick, view.mode, view.symbol, selectedDetail?.signalType]);
 
   useEffect(() => {
     saveLocalValue(SCAN_FILTERS_KEY, filters);

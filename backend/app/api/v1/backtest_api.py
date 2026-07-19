@@ -338,10 +338,7 @@ def _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size,
             detail="step_size must be at least test_size to prevent overlapping test folds",
         )
     if resolved_limit > 10000:
-        raise HTTPException(
-            status_code=422,
-            detail="resolved walk-forward limit exceeds API maximum of 10000 candles for this timeframe",
-        )
+        resolved_limit = 10000
 
     return {
         "limit": resolved_limit,

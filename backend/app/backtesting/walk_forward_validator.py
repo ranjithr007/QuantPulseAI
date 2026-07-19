@@ -14,7 +14,7 @@ PHASE2_VALIDATION_CONTRACT_VERSION = "phase2_proof_of_edge_v1"
 PHASE2_WALK_FORWARD_DAYS = {
     "train_window_days": 180,
     "test_window_days": 60,
-    "step_days": 30,
+    "step_days": 60,
     "minimum_folds": 6,
 }
 PHASE2_OFFICIAL_TIMEFRAMES = {"1h", "4h", "1d"}

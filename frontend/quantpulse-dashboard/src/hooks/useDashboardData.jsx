@@ -151,14 +151,14 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
             : null,
       risk:
         overviewByKey.riskBundle?.computedRisk ||
-        current.selected.risk ||
         overviewByKey.riskBundle?.risk ||
+        current.selected.risk ||
         null,
       paperTradeCandidates:
         overviewByKey.paperTradeCandidates?.records ||
         current.selected.paperTradeCandidates ||
         [],
-      autoDecision: current.selected.autoDecision || overviewByKey.riskBundle?.autoDecision || null,
+      autoDecision: overviewByKey.riskBundle?.autoDecision || current.selected.autoDecision || null,
     },
     lastRefresh: new Date(),
   };

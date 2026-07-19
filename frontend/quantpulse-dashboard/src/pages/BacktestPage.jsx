@@ -67,6 +67,7 @@ export default function BacktestPage({
   const [phase2ScopeStatusFilter, setPhase2ScopeStatusFilter] = useState("ALL");
   const [phase2ScopeSort, setPhase2ScopeSort] = useState("LATEST");
   const [phase2ReviewMode, setPhase2ReviewMode] = useState("ALL");
+  const [phase2Enabled, setPhase2Enabled] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState(null);
   const [selectedArtifactError, setSelectedArtifactError] = useState("");
   const [selectedArtifactLoading, setSelectedArtifactLoading] = useState(false);
@@ -153,11 +154,56 @@ export default function BacktestPage({
     let cancelled = false;
     const controller = new AbortController();
 
-    async function load() {
+    async function loadEngineSummary() {
       if (!view?.symbol || !signalSide) {
         setEngineSummary(null);
         setEngineError("");
         setEngineLoading(false);
+        return;
+      }
+
+      setEngineLoading(true);
+      setEngineError("");
+
+      try {
+        const backtestResult = await loadBacktestSummary({
+          symbol: view.symbol,
+          signalSide,
+          timeframe: view.timeframe || "15m",
+          signal: controller.signal,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        setEngineSummary(backtestResult);
+      } catch (error) {
+        if (!cancelled) {
+          setEngineSummary(null);
+          setEngineError(error instanceof Error ? error.message : "Unable to load backtest summary");
+        }
+      } finally {
+        if (!cancelled) {
+          setEngineLoading(false);
+        }
+      }
+    }
+
+    loadEngineSummary();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [view?.symbol, view?.timeframe, signalSide]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function loadPhase2() {
+      if (!view?.symbol || !signalSide || !phase2Enabled) {
         setWalkForwardSummary(null);
         setWalkForwardError("");
         setWalkForwardLoading(false);
@@ -176,8 +222,6 @@ export default function BacktestPage({
         return;
       }
 
-      setEngineLoading(true);
-      setEngineError("");
       setWalkForwardLoading(true);
       setWalkForwardError("");
       setPhase2ReportLoading(true);
@@ -191,13 +235,7 @@ export default function BacktestPage({
       setSelectedArtifactLoading(false);
 
       try {
-        const [backtestResult, walkForwardResponse, phase2ReportResponse, phase2HistoryResponse, phase2SummaryResponse] = await Promise.allSettled([
-          loadBacktestSummary({
-            symbol: view.symbol,
-            signalSide,
-            timeframe: view.timeframe || "15m",
-            signal: controller.signal,
-          }),
+        const [walkForwardResponse, phase2ReportResponse, phase2HistoryResponse, phase2SummaryResponse] = await Promise.allSettled([
           loadWalkForwardSummary({
             symbol: view.symbol,
             signalSide,
@@ -226,13 +264,6 @@ export default function BacktestPage({
 
         if (cancelled) {
           return;
-        }
-
-        if (backtestResult.status === "fulfilled") {
-          setEngineSummary(backtestResult.value);
-        } else {
-          setEngineSummary(null);
-          setEngineError(backtestResult.reason instanceof Error ? backtestResult.reason.message : "Unable to load backtest summary");
         }
 
         if (walkForwardResponse.status === "fulfilled") {
@@ -264,7 +295,6 @@ export default function BacktestPage({
         }
       } finally {
         if (!cancelled) {
-          setEngineLoading(false);
           setWalkForwardLoading(false);
           setPhase2ReportLoading(false);
           setPhase2HistoryLoading(false);
@@ -273,13 +303,13 @@ export default function BacktestPage({
       }
     }
 
-    load();
+    loadPhase2();
 
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [view?.symbol, view?.timeframe, signalSide]);
+  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled]);
 
   async function handleExportPhase2Report() {
     if (!view?.symbol || !signalSide) {
@@ -518,6 +548,14 @@ export default function BacktestPage({
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPhase2Enabled(true)}
+                disabled={!signalSide || walkForwardLoading || phase2ReportLoading}
+                className="inline-flex items-center rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {phase2Enabled ? "Phase 2 loaded" : "Load Phase 2"}
+              </button>
               <Pill tone={signalSide ? "violet" : "slate"}>{signalSide || "WAIT"}</Pill>
               <Pill tone={walkForwardLoading ? "amber" : walkForwardResult?.robustness?.profitable_fold_percent >= 50 ? "emerald" : "rose"}>
                 {walkForwardLoading ? "Running" : walkForwardResult?.fold_count ? `${walkForwardResult.fold_count} folds` : "Idle"}
@@ -526,6 +564,11 @@ export default function BacktestPage({
           </div>
 
           {walkForwardError ? <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{walkForwardError}</div> : null}
+          {!phase2Enabled ? (
+            <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-slate-400">
+              Phase 2 validation is manual now so heavy walk-forward jobs do not slow live pages. Click <span className="font-medium text-slate-200">Load Phase 2</span> only when you want proof-of-edge analysis.
+            </div>
+          ) : null}
 
           {walkForwardResult ? (
             <>
@@ -770,7 +813,7 @@ export default function BacktestPage({
               <button
                 type="button"
                 onClick={handleExportPhase2Report}
-                disabled={phase2ExportLoading || !signalSide}
+                disabled={phase2ExportLoading || !signalSide || !phase2Enabled}
                 className="inline-flex items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {phase2ExportLoading ? "Exporting..." : "Export report"}

@@ -249,6 +249,22 @@ export async function executePaperTradeCandidates({ symbol, staleAfterSeconds = 
   return response || null;
 }
 
+export async function persistReadyWatchlistSetups({ mode, side, staleAfterSeconds = 900, signal } = {}) {
+  const response = await requestJson(
+    "/signals/watchlist/persist-ready",
+    {
+      mode,
+      side,
+      stale_after_seconds: staleAfterSeconds,
+    },
+    signal,
+    60000,
+    "POST"
+  );
+
+  return response || null;
+}
+
 export async function loadPaperTradeCandidates({ symbol, staleAfterSeconds = 900, signal } = {}) {
   const response = await requestJson(
     "/paper-trade/candidates",
