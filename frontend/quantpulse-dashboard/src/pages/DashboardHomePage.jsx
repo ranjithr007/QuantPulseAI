@@ -317,7 +317,7 @@ function AutomationPanel({ autoDecision, selectedRisk, openTrades, selectedDetai
             <div className="mt-3">
                 <Phase2ValidationBadge
                     symbol={selectedDetail?.symbol}
-                    timeframe={selectedDetail?.timeframe || "15m"}
+                    timeframe={selectedDetail?.timeframe || "1h"}
                     signalType={selectedDetail?.signalType}
                 />
             </div>

@@ -38,18 +38,18 @@ from app.utils.signal_validation import validate_trade_plan_direction
 router = APIRouter(prefix="/signals", tags=["Signals"])
 _risk_engine = RiskEngine()
 SUPPORTED_TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h", "1d"}
-DEFAULT_TIMEFRAME_STACK = ["5m", "15m", "1h"]
+DEFAULT_TIMEFRAME_STACK = ["1h", "4h", "1d"]
 TIMEFRAME_MODES = {
-    "scalp": ["1m", "5m", "15m"],
-    "intraday": ["5m", "15m", "1h"],
-    "swing": ["15m", "1h", "4h"],
+    "scalp": ["1h", "4h", "1d"],
+    "intraday": ["1h", "4h", "1d"],
+    "swing": ["1h", "4h", "1d"],
     "position": ["1h", "4h", "1d"],
 }
 PREDICTION_TIMEFRAME_STACK = ["1h", "4h", "1d"]
 ENTRY_TIMING_TIMEFRAME_MODES = {
-    "scalp": ["15m", "5m"],
-    "intraday": ["15m", "5m"],
-    "swing": ["15m", "5m"],
+    "scalp": [],
+    "intraday": [],
+    "swing": [],
     "position": [],
 }
 WATCHLIST_STATUSES = {"READY", "WAIT"}
@@ -128,7 +128,7 @@ def build_trade_setup_payload(
     timeframes = context.get("prediction_timeframes") or context.get("timeframes")
     confirmation = context["confirmation"]
     setup = build_trade_setup_decision(confirmation, timeframes)
-    scenario = build_scenario_plan(confirmation, timeframes)
+    scenario = build_scenario_plan(confirmation, timeframes) if len(timeframes) == 3 else None
     trade_plan = None
     validation = None
 
@@ -138,13 +138,14 @@ def build_trade_setup_payload(
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
         trade_plan = build_trade_plan(setup["side"], current_price, atr)
-        scenario = build_scenario_plan(
-            confirmation,
-            timeframes,
-            trade_plan=trade_plan,
-            current_price=current_price,
-            atr=atr,
-        )
+        if len(timeframes) == 3:
+            scenario = build_scenario_plan(
+                confirmation,
+                timeframes,
+                trade_plan=trade_plan,
+                current_price=current_price,
+                atr=atr,
+            )
         validation = validate_trade_plan_direction(
             setup["side"],
             trade_plan["entry"],
@@ -223,6 +224,13 @@ def build_entry_trigger_payload(
     confirmation.setdefault("entry_stack", context.get("entry_stack") or [])
     confirmation.setdefault("entry_timeframes", context.get("entry_timeframes") or [])
     trigger = build_entry_trigger_decision(confirmation, timeframes)
+    # Scenario plans require the complete prediction stack.  Keep the
+    # entry-trigger payload usable for partial/mocked contexts as well.
+    scenario = (
+        build_scenario_plan(confirmation, timeframes)
+        if len(timeframes or []) == 3
+        else None
+    )
     trade_plan = None
     validation = None
 
@@ -233,6 +241,14 @@ def build_entry_trigger_payload(
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
         trade_plan = build_trade_plan(trigger["side"], current_price, atr)
+        if len(timeframes or []) == 3:
+            scenario = build_scenario_plan(
+                confirmation,
+                timeframes,
+                trade_plan=trade_plan,
+                current_price=current_price,
+                atr=atr,
+            )
         validation = validate_trade_plan_direction(
             trigger["side"],
             trade_plan["entry"],
@@ -255,6 +271,7 @@ def build_entry_trigger_payload(
                     "mode": mode or _mode_from_stack(stack),
                     "timeframes_used": stack,
                     "confirmation": confirmation,
+                    "scenario": scenario,
                     "trade_plan_validation": validation,
                 },
             ),
@@ -272,6 +289,7 @@ def build_entry_trigger_payload(
         "timing_stack": context.get("entry_stack") or [],
         "trigger": trigger,
         "confirmation": confirmation,
+        "scenario": scenario,
         "trade_plan": trade_plan,
         "decision_snapshot": None if trade_plan is None else {
             "id": getattr(decision_snapshot, "id", None),
@@ -388,7 +406,7 @@ def _resolve_entry_timing_stack(mode=None):
     if normalized_mode in ENTRY_TIMING_TIMEFRAME_MODES:
         return list(ENTRY_TIMING_TIMEFRAME_MODES[normalized_mode])
 
-    return ["15m", "5m"]
+    return []
 
 
 def _get_cached_watchlist_payloads(db, stack, stale_after_seconds):
@@ -1291,7 +1309,15 @@ def _watchlist_priority_key(item):
         2,
     )
     side_priority = 0 if item.get("side") in WATCHLIST_SIDES else 1
-    score = abs(item.get("score_5m") or 0)
+    score = abs(
+        item.get("entry_score")
+        or item.get("score_1h")
+        or item.get("score_4h")
+        or item.get("score_1d")
+        or item.get("score_15m")
+        or item.get("score_5m")
+        or 0
+    )
 
     return (
         status_priority,
@@ -1381,6 +1407,8 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
             "mode": payload.get("mode"),
             "entry_timeframe": lower.get("timeframe"),
             "timeframe_stack": payload.get("timeframes_used"),
+            "scenario": payload.get("scenario"),
+            "contradiction": (payload.get("confirmation") or {}).get("contradiction"),
             "regime": (
                 lower.get("component_scores", {})
                 .get("regime", {})
@@ -1429,6 +1457,8 @@ def _watchlist_row(payload, risk=None):
         item["timeframe"]: item
         for item in payload["timeframes"]
     }
+    timeframe_stack = payload.get("timeframes_used") or []
+    entry_timeframe = timeframe_stack[0] if timeframe_stack else None
     trade_plan = payload["trade_plan"] or {}
     trigger = payload["trigger"]
     confirmation = payload["confirmation"]
@@ -1467,6 +1497,9 @@ def _watchlist_row(payload, risk=None):
         "risk_is_usable": None if not risk else risk.get("is_usable"),
         "risk_reason": None if not risk else risk.get("reason"),
         "risk_validation_errors": [] if not risk else (risk.get("validation_errors") or []),
+        "entry_timeframe": entry_timeframe,
+        "entry_bias": _timeframe_value(timeframes, entry_timeframe, "bias"),
+        "entry_score": _timeframe_value(timeframes, entry_timeframe, "score"),
         "bias_5m": _timeframe_value(timeframes, "5m", "bias"),
         "bias_15m": _timeframe_value(timeframes, "15m", "bias"),
         "bias_1h": _timeframe_value(timeframes, "1h", "bias"),
@@ -1571,7 +1604,7 @@ def _watchlist_risk_payload(risk, stale_after_seconds):
     )
     freshness = freshness_status(risk.created_at, stale_after_seconds)
     is_usable = validation["is_valid"] and not freshness["is_stale"]
-    reason = _risk_reason_text(risk)
+    reason = _watchlist_risk_reason_text(risk)
 
     return {
         "symbol": risk.symbol,

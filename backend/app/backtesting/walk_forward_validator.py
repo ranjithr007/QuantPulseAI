@@ -2,6 +2,9 @@ from collections import Counter
 from dataclasses import asdict
 from dataclasses import dataclass
 from itertools import product
+from math import sqrt
+from statistics import mean
+from statistics import pstdev
 
 from app.backtesting.backtest_engine import ENGINE_VERSION
 from app.backtesting.backtest_engine import chronological_candles
@@ -19,6 +22,7 @@ PHASE2_WALK_FORWARD_DAYS = {
 }
 PHASE2_OFFICIAL_TIMEFRAMES = {"1h", "4h", "1d"}
 PHASE2_SUPPORTING_TIMEFRAMES = {"5m", "15m"}
+MIN_ANNUALIZED_SHARPE_TRADES = 30
 TIMEFRAME_MINUTES = {
     "1m": 1,
     "5m": 5,
@@ -69,6 +73,8 @@ def run_walk_forward(
     fee_bps=4,
     slippage_bps=2,
     backtest_runner=run_backtest,
+    strategy_name="DIRECTIONAL_REENTRY_BASELINE",
+    strategy_metadata=None,
 ):
     side = str(signal or "").upper()
     if side not in {"LONG", "SHORT"}:
@@ -93,6 +99,8 @@ def run_walk_forward(
             minimum_candles,
             initial_capital,
             timeframe=timeframe,
+            strategy_name=strategy_name,
+            strategy_metadata=strategy_metadata,
         )
 
     folds = []
@@ -106,6 +114,9 @@ def run_walk_forward(
     oos_capital = float(initial_capital)
     total_test_candles = 0
     weighted_exposure = 0
+    gate_evaluated = 0
+    gate_signal_counts = Counter()
+    gate_rejection_counts = Counter()
     test_start = config.train_size
 
     while test_start + config.test_size <= len(ordered):
@@ -140,6 +151,10 @@ def run_walk_forward(
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
         )
+        decision_summary = oos_result.get("decision_summary") or {}
+        gate_evaluated += int(decision_summary.get("evaluated") or 0)
+        gate_signal_counts.update(decision_summary.get("signals") or {})
+        gate_rejection_counts.update(decision_summary.get("rejections") or {})
         fold_number = len(folds) + 1
         fold_trades = [
             {**trade, "fold": fold_number}
@@ -206,7 +221,8 @@ def run_walk_forward(
         "engine_version": WALK_FORWARD_VERSION,
         "backtest_engine_version": ENGINE_VERSION,
         "validation_status": "VALID" if not insufficient_folds else "LIMITED_TRAINING_TRADES",
-        "strategy": "DIRECTIONAL_REENTRY_BASELINE",
+        "strategy": strategy_name,
+        "strategy_metadata": dict(strategy_metadata or {}),
         "signal": side,
         "candle_count": len(ordered),
         "fold_count": len(folds),
@@ -220,6 +236,17 @@ def run_walk_forward(
                 weighted_exposure / total_test_candles if total_test_candles else 0,
                 2,
             ),
+            "gate_diagnostics": {
+                "evaluated_decisions": gate_evaluated,
+                "signals": dict(sorted(gate_signal_counts.items())),
+                "rejections": dict(sorted(gate_rejection_counts.items())),
+            },
+            "annualized_sharpe": _annualized_trade_horizon_sharpe(
+                all_oos_trades,
+                timeframe,
+            ),
+            "annualized_sharpe_method": "TRADE_RETURN_SHARPE_ANNUALIZED_BY_AVERAGE_CANDLE_HOLD",
+            "annualized_sharpe_min_trade_sample": MIN_ANNUALIZED_SHARPE_TRADES,
         },
         "robustness": {
             "profitable_folds": profitable_folds,
@@ -370,16 +397,65 @@ def _compact_result(result):
         "initial_capital",
         "final_capital",
         "exposure_percent",
+        "decision_summary",
+        "annualized_sharpe",
+        "annualized_sharpe_method",
     )
-    return {key: result.get(key) for key in keys}
+    compact = {key: result.get(key) for key in keys}
+    if compact.get("decision_summary") is None:
+        compact.pop("decision_summary", None)
+    return compact
 
 
-def _insufficient_data_result(side, config, candidates, candle_count, required, initial_capital, timeframe=None):
+def _annualized_trade_horizon_sharpe(trades, timeframe):
+    """Annualize trade returns using the average candle holding period.
+
+    This is a trade-horizon estimate, not a replacement for a full
+    mark-to-market daily Sharpe series.
+    """
+    returns = []
+    durations = []
+    for trade in list(trades or []):
+        try:
+            value = float(trade.get("pnl_percent"))
+            duration = float(trade.get("duration_candles"))
+        except (TypeError, ValueError):
+            continue
+        if duration <= 0:
+            continue
+        returns.append(value)
+        durations.append(duration)
+
+    if len(returns) < MIN_ANNUALIZED_SHARPE_TRADES or not durations:
+        return None
+    deviation = pstdev(returns)
+    if deviation == 0:
+        return 0.0
+    minutes = TIMEFRAME_MINUTES.get(str(timeframe or "").lower())
+    if not minutes:
+        return None
+    periods_per_year = (365 * 24 * 60) / minutes
+    trades_per_year = periods_per_year / max(mean(durations), 1.0)
+    return round((mean(returns) / deviation) * sqrt(trades_per_year), 4)
+
+
+def _insufficient_data_result(
+    side,
+    config,
+    candidates,
+    candle_count,
+    required,
+    initial_capital,
+    timeframe=None,
+    strategy_name="DIRECTIONAL_REENTRY_BASELINE",
+    strategy_metadata=None,
+):
     return {
         "engine_version": WALK_FORWARD_VERSION,
         "backtest_engine_version": ENGINE_VERSION,
         "validation_status": "INSUFFICIENT_DATA",
-        "strategy": "DIRECTIONAL_REENTRY_BASELINE",
+        "strategy": strategy_name,
+        "strategy_metadata": dict(strategy_metadata or {}),
         "signal": side,
         "candle_count": candle_count,
         "required_candle_count": required,

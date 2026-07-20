@@ -24,6 +24,7 @@ import {
 } from "./dashboardTransforms";
 
 const LIVE_SNAPSHOT_REFRESH_MS = 10_000;
+const OFFICIAL_PAPER_ENTRY_TIMEFRAMES = new Set(["1h", "4h", "1d"]);
 
 function createInitialDashboardData() {
   return {
@@ -124,6 +125,16 @@ function normalizeWatchlistPayload(watchlist) {
 
 function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
   const paperTradeBundle = overviewByKey.paperTradeBundle || {};
+  const officialOpenTrades = scopePaperTrades(paperTradeBundle.openTrades?.records);
+  const officialClosedTrades = scopePaperTrades(paperTradeBundle.closedTrades?.records);
+  const officialPerformance = buildScopedPaperPerformance(
+    paperTradeBundle.performance,
+    officialOpenTrades,
+    officialClosedTrades
+  );
+  const hasPaperTradePayload = Boolean(
+    paperTradeBundle.openTrades || paperTradeBundle.closedTrades
+  );
   const signalBatch = overviewByKey.signalBatch?.records_by_symbol || {};
   return {
     ...current,
@@ -138,9 +149,9 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
     ),
     watchlist: normalizeWatchlistPayload(overviewByKey.watchlist || current.watchlist),
     pipeline: overviewByKey.pipeline || current.pipeline,
-    performance: paperTradeBundle.performance || current.performance,
-    openTrades: paperTradeBundle.openTrades?.records || current.openTrades,
-    closedTrades: paperTradeBundle.closedTrades?.records || current.closedTrades,
+    performance: officialPerformance || current.performance,
+    openTrades: hasPaperTradePayload ? officialOpenTrades : current.openTrades,
+    closedTrades: hasPaperTradePayload ? officialClosedTrades : current.closedTrades,
     selected: {
       ...current.selected,
       signal:
@@ -161,6 +172,37 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
       autoDecision: overviewByKey.riskBundle?.autoDecision || current.selected.autoDecision || null,
     },
     lastRefresh: new Date(),
+  };
+}
+
+function scopePaperTrades(records) {
+  return (records || []).filter((trade) =>
+    OFFICIAL_PAPER_ENTRY_TIMEFRAMES.has(String(trade?.entry_timeframe || "").trim())
+  );
+}
+
+function buildScopedPaperPerformance(performance, openTrades, closedTrades) {
+  if (!performance && !openTrades.length && !closedTrades.length) return null;
+
+  const returns = closedTrades.map((trade) => Number(trade?.pnl_percent || 0));
+  const wins = returns.filter((value) => value > 0).length;
+  const losses = returns.filter((value) => value < 0).length;
+  const totalPnl = returns.reduce((sum, value) => sum + value, 0);
+  const totalTrades = openTrades.length + closedTrades.length;
+
+  return {
+    ...(performance || {}),
+    total_trades: totalTrades,
+    open_trades: openTrades.length,
+    closed_trades: closedTrades.length,
+    wins,
+    losses,
+    long_trades: closedTrades.filter((trade) => trade?.side === "LONG").length,
+    short_trades: closedTrades.filter((trade) => trade?.side === "SHORT").length,
+    win_rate: closedTrades.length ? (wins / closedTrades.length) * 100 : 0,
+    average_pnl_percent: closedTrades.length ? totalPnl / closedTrades.length : 0,
+    total_pnl_percent: totalPnl,
+    closedTrades,
   };
 }
 

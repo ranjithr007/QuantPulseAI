@@ -3,8 +3,8 @@ from app.intelligence.multi_timeframe_engine import BULLISH_BIASES
 
 LONG_PERMISSIONS = {"LONG_ALLOWED", "LONG_ONLY"}
 SHORT_PERMISSIONS = {"SHORT_ALLOWED", "SHORT_ONLY"}
-LONG_READY_5M_BIASES = {"LONG", "WEAK_LONG", "NEUTRAL"}
-SHORT_READY_5M_BIASES = {"SHORT", "WEAK_SHORT", "NEUTRAL"}
+LONG_READY_ENTRY_BIASES = {"LONG", "WEAK_LONG", "NEUTRAL"}
+SHORT_READY_ENTRY_BIASES = {"SHORT", "WEAK_SHORT", "NEUTRAL"}
 LONG_ORDERFLOW_CONFIRMATION = "BUYERS_CONTROL"
 SHORT_ORDERFLOW_CONFIRMATION = "SELLERS_CONTROL"
 CONFIDENCE_WINDOWS = {
@@ -35,7 +35,7 @@ def build_trade_setup_decision(confirmation, timeframes):
         return _directional_setup(
             side="LONG",
             lower=lower,
-            ready_biases=LONG_READY_5M_BIASES,
+            ready_biases=LONG_READY_ENTRY_BIASES,
             wait_reason=f"Waiting for {lower['timeframe']} pullback to stabilize before long setup",
             confidence_window=confidence_window,
         )
@@ -44,7 +44,7 @@ def build_trade_setup_decision(confirmation, timeframes):
         return _directional_setup(
             side="SHORT",
             lower=lower,
-            ready_biases=SHORT_READY_5M_BIASES,
+            ready_biases=SHORT_READY_ENTRY_BIASES,
             wait_reason=f"Waiting for {lower['timeframe']} bounce to stabilize before short setup",
             confidence_window=confidence_window,
         )
@@ -102,7 +102,7 @@ def _directional_setup(side, lower, ready_biases, wait_reason, confidence_window
         return {
             "status": "BLOCKED",
             "side": None,
-            "reason": "5m signal data is missing",
+            "reason": "Entry timeframe signal data is missing",
             "confidence_window": confidence_window,
         }
 
@@ -124,11 +124,11 @@ def _directional_setup(side, lower, ready_biases, wait_reason, confidence_window
 
 def _directional_trigger_conditions(side, permission, lower, confidence_window, stack_confidence, timing_timeframes):
     if side == "LONG":
-        ready_biases = LONG_READY_5M_BIASES
+        ready_biases = LONG_READY_ENTRY_BIASES
         permissions = LONG_PERMISSIONS
         orderflow_message = f"{lower['timeframe']} orderflow should show buyers control"
     else:
-        ready_biases = SHORT_READY_5M_BIASES
+        ready_biases = SHORT_READY_ENTRY_BIASES
         permissions = SHORT_PERMISSIONS
         orderflow_message = f"{lower['timeframe']} orderflow should show sellers control"
 

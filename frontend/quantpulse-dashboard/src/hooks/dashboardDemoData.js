@@ -334,8 +334,8 @@ function buildDemoMultiTimeframe(signal) {
     trade_permission: signal.signal === "SHORT" ? "SHORT_ALLOWED" : signal.signal === "WAIT" ? "WAIT" : "LONG_ONLY",
     timeframes_used: ["1h", "4h", "1d"],
     prediction_stack: ["1h", "4h", "1d"],
-    entry_stack: ["15m", "5m"],
-    timing_stack: ["15m", "5m"],
+    entry_stack: [],
+    timing_stack: [],
     confirmation: {
       overall_bias: signal.bias,
       trade_permission: signal.signal === "SHORT" ? "SHORT_ALLOWED" : signal.signal === "WAIT" ? "WAIT" : "LONG_ONLY",
@@ -361,8 +361,8 @@ function buildDemoTradeSetup(signal) {
     trade_plan_validation: { is_valid: signal.signal !== "WAIT", errors: [] },
     timeframes: [],
     prediction_stack: ["1h", "4h", "1d"],
-    entry_stack: ["15m", "5m"],
-    timing_stack: ["15m", "5m"],
+    entry_stack: [],
+    timing_stack: [],
   };
 }
 
@@ -374,9 +374,9 @@ function buildDemoEntryTrigger(signal) {
     trigger: {
       status: signal.signal === "WAIT" ? "WAIT" : "READY",
       side,
-      reason: signal.signal === "WAIT" ? "Waiting for 5m confirmation" : `${side} entry trigger is ready`,
+      reason: signal.signal === "WAIT" ? "Waiting for higher-timeframe alignment" : `${side} entry trigger is ready`,
       conditions: [
-        { name: "five_minute_bias", passed: signal.signal !== "WAIT" },
+        { name: "entry_timeframe_bias", passed: signal.signal !== "WAIT" },
         { name: "orderflow_confirmation", passed: signal.signal !== "WAIT" },
       ],
     },
@@ -385,8 +385,8 @@ function buildDemoEntryTrigger(signal) {
     trade_plan_validation: { is_valid: signal.signal !== "WAIT", errors: [] },
     timeframes: [],
     prediction_stack: ["1h", "4h", "1d"],
-    entry_stack: ["15m", "5m"],
-    timing_stack: ["15m", "5m"],
+    entry_stack: [],
+    timing_stack: [],
   };
 }
 

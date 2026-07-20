@@ -45,7 +45,7 @@ def get_market_candles(
 def refresh_market_candles(
     symbol: str,
     timeframe: str = Query(...),
-    limit: int = Query(default=500, ge=50, le=1500),
+    limit: int = Query(default=500, ge=50, le=15000),
     replace_existing: bool = Query(default=False),
 ):
     db = SessionLocal()
@@ -70,7 +70,7 @@ def refresh_market_candles(
 @router.post("/refresh-candles/bulk")
 def refresh_market_candles_bulk(
     timeframe: str = Query(...),
-    limit: int = Query(default=500, ge=50, le=1500),
+    limit: int = Query(default=500, ge=50, le=15000),
     replace_existing: bool = Query(default=False),
     symbols: str | None = Query(default=None),
 ):
@@ -123,7 +123,7 @@ def refresh_market_candles_bulk(
 
 @router.post("/refresh-candles/stack")
 def refresh_market_candles_stack(
-    limit: int = Query(default=500, ge=50, le=1500),
+    limit: int = Query(default=500, ge=50, le=15000),
     replace_existing: bool = Query(default=False),
     symbols: str | None = Query(default=None),
 ):

@@ -5,6 +5,8 @@ from app.api.v1.derivatives_api import build_derivatives_payload
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.measurement import MeasurementGates
+from app.paper_trading.measurement import attach_regime_outcome_context
+from app.paper_trading.measurement import attach_scenario_context
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.paper_trading.validation_policy import build_architecture_paper_gate
@@ -107,6 +109,8 @@ def get_paper_trade_measurement(
     try:
         normalized_symbol = symbol.upper() if symbol else None
         trades = PaperTradeRepository().all_trades(db, symbol=normalized_symbol)
+        attach_scenario_context(db, trades)
+        attach_regime_outcome_context(db, trades)
         report = build_measurement_report(
             trades,
             gates=MeasurementGates(

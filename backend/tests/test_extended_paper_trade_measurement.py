@@ -80,6 +80,66 @@ def test_profitable_history_passes_only_with_sufficient_evidence():
     assert report["cohorts"]["confidence_band"][0]["value"] == "80_PLUS"
 
 
+def test_scenario_accuracy_uses_persisted_primary_label_and_net_result():
+    winning_long = trade(1.2, side="LONG")
+    winning_long.scenario_type = "BULLISH_CONTINUATION"
+    losing_short = trade(-0.8, side="SHORT")
+    losing_short.scenario_type = "BULLISH_CONTINUATION"
+
+    report = build_measurement_report(
+        [winning_long, losing_short],
+        gates=gates(min_closed_trades=1),
+        as_of=AS_OF,
+    )
+
+    assert report["scenario_accuracy"] == {
+        "status": "CALCULATED",
+        "evaluated_trades": 2,
+        "correct": 1,
+        "incorrect": 1,
+        "accuracy_percent": 50.0,
+        "by_scenario": [
+            {
+                "scenario_type": "BULLISH_CONTINUATION",
+                "evaluated_trades": 2,
+                "correct": 1,
+                "incorrect": 1,
+                "accuracy_percent": 50.0,
+            }
+        ],
+        "note": "Accuracy uses persisted primary scenario labels and closed net PnL.",
+    }
+
+
+def test_regime_accuracy_compares_entry_label_with_close_observation():
+    matching = trade(1.0, regime="TRENDING_BULL")
+    matching.realized_regime = "TRENDING_BULL"
+    changed = trade(1.0, regime="TRENDING_BULL")
+    changed.realized_regime = "RANGE_NEUTRAL"
+
+    report = build_measurement_report(
+        [matching, changed],
+        gates=gates(min_closed_trades=1),
+        as_of=AS_OF,
+    )
+
+    assert report["regime_accuracy"]["status"] == "CALCULATED"
+    assert report["regime_accuracy"]["evaluated_trades"] == 2
+    assert report["regime_accuracy"]["accuracy_percent"] == 50.0
+    assert report["regime_accuracy"]["confusion_pairs"] == [
+        {
+            "predicted_regime": "TRENDING_BULL",
+            "realized_regime": "RANGE_NEUTRAL",
+            "count": 1,
+        },
+        {
+            "predicted_regime": "TRENDING_BULL",
+            "realized_regime": "TRENDING_BULL",
+            "count": 1,
+        },
+    ]
+
+
 def test_good_early_results_remain_insufficient_until_sample_and_duration_gates():
     report = build_measurement_report(
         [trade(3, opened_days_ago=3), trade(2, opened_days_ago=2)],

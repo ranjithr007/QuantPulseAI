@@ -102,7 +102,7 @@ export default function AutoTradingPage({
         <div className="mt-3">
           <Phase2ValidationBadge
             symbol={view.symbol}
-            timeframe={view.timeframe || "15m"}
+            timeframe={view.timeframe || "1h"}
             signalType={selectedDetail.signalType}
           />
         </div>

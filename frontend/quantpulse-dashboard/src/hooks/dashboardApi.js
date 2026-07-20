@@ -112,7 +112,7 @@ export async function loadRiskBundle({ view, auto, signal }) {
   return response || null;
 }
 
-export async function loadBacktestSummary({ symbol, signalSide, timeframe = "15m", signal }) {
+export async function loadBacktestSummary({ symbol, signalSide, timeframe = "1h", signal }) {
   const response = await requestJson(
     "/backtest/filtered-summary",
     {
@@ -126,7 +126,7 @@ export async function loadBacktestSummary({ symbol, signalSide, timeframe = "15m
   return response || null;
 }
 
-export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "15m", signal }) {
+export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "1h", signal }) {
   const response = await requestJson(
     "/backtest/walk-forward",
     {
@@ -142,7 +142,18 @@ export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "
   return response || null;
 }
 
-export async function loadPhase2ValidationReport({ symbol, signalSide, timeframe = "15m", signal }) {
+export async function loadPaperTradeMeasurement({ symbol, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/measurement",
+    { symbol },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
+export async function loadPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", signal }) {
   const response = await requestJson(
     "/backtest/phase2-report",
     {
@@ -158,7 +169,7 @@ export async function loadPhase2ValidationReport({ symbol, signalSide, timeframe
   return response || null;
 }
 
-export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "15m", signal }) {
+export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", signal }) {
   const response = await requestJson(
     "/backtest/phase2-report/export",
     {

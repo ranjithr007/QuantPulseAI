@@ -1,0 +1,242 @@
+{
+  "saved_at": "2026-07-20T04:25:29.900816",
+  "scope": {
+    "symbol": "DOGEUSDT",
+    "timeframe": "1h",
+    "signal": "LONG"
+  },
+  "report": {
+    "report_version": "phase2_validation_report_v1",
+    "generated_at": "2026-07-20T04:25:29.896188",
+    "overall_status": "INSUFFICIENT_EVIDENCE",
+    "scope": {
+      "symbol": "DOGEUSDT",
+      "timeframe": "1h",
+      "signal": "LONG"
+    },
+    "walk_forward": {
+      "validation_status": "INSUFFICIENT_DATA",
+      "fold_count": 0,
+      "contract": {
+        "contract_version": "phase2_proof_of_edge_v1",
+        "timeframe": "1h",
+        "timeframe_status": "OFFICIAL",
+        "official_timeframes": [
+          "1d",
+          "1h",
+          "4h"
+        ],
+        "supporting_timeframes": [
+          "15m",
+          "5m"
+        ],
+        "target_windows_days": {
+          "train_window_days": 180,
+          "test_window_days": 60,
+          "step_days": 60,
+          "minimum_folds": 6
+        },
+        "derived_candle_windows": {
+          "train_size": 4320,
+          "test_size": 1440,
+          "step_size": 1440,
+          "minimum_fold_candles": 12960
+        },
+        "required_candle_count_for_minimum_folds": 12960,
+        "actual_fold_count": 0,
+        "minimum_fold_requirement": 6,
+        "contract_status": "INSUFFICIENT_EVIDENCE",
+        "configuration_matches_contract": true,
+        "issues": [
+          "minimum_fold_requirement_not_met",
+          "insufficient_history_for_phase2_fold_requirement"
+        ]
+      }
+    },
+    "derived_metrics": {
+      "out_of_sample_total_trades": 0,
+      "out_of_sample_total_return_percent": null,
+      "out_of_sample_profit_factor": null,
+      "out_of_sample_win_rate": null,
+      "out_of_sample_max_drawdown_percent": null,
+      "out_of_sample_payoff_ratio": null,
+      "trade_return_sharpe": null
+    },
+    "architecture_gate": {
+      "status": "INSUFFICIENT_EVIDENCE",
+      "passed_checks": 0,
+      "unavailable_checks": 4,
+      "insufficient_evidence_checks": 7,
+      "checks": [
+        {
+          "name": "walk_forward_contract_alignment",
+          "status": "INSUFFICIENT_EVIDENCE",
+          "actual": "INSUFFICIENT_EVIDENCE",
+          "threshold": "PASS",
+          "comparison": "required",
+          "note": "minimum_fold_requirement_not_met, insufficient_history_for_phase2_fold_requirement"
+        },
+        {
+          "name": "minimum_fold_count",
+          "status": "INSUFFICIENT_EVIDENCE",
+          "actual": 0,
+          "threshold": 6,
+          "comparison": "minimum",
+          "note": null
+        },
+        {
+          "name": "out_of_sample_win_rate",
+          "status": "INSUFFICIENT_EVIDENCE",
+          "actual": null,
+          "threshold": 45.0,
+          "comparison": "minimum",
+          "note": "Metric is unavailable in the current report payload."
+        },
+        {
+          "name": "out_of_sample_average_reward_risk",
+          "status": "INSUFFICIENT_EVIDENCE",
+          "actual": null,
+          "threshold": 1.5,
+          "comparison": "minimum",
+          "note": "Metric is unavailable in the current report payload."
+        },
+        {
+          "name": "out_of_sample_profit_factor",
+          "status": "INSUFFICIENT_EVIDENCE",
+          "actual": null,
+          "threshold": 1.3,
+          "comparison": "minimum",
+          "note": "Metric is unavailable in the current report payload."
+        },
+        {
+          "name": "out_of_sample_max_drawdown",
+          "status": "INSUFFICIENT_EVIDENCE",
+          "actual": null,
+          "threshold": 20.0,
+          "comparison": "maximum",
+          "note": "Metric is unavailable in the current report payload."
+        },
+        {
+          "name": "out_of_sample_annualized_sharpe",
+          "status": "NOT_STARTED",
+          "actual": null,
+          "threshold": 1.0,
+          "comparison": "minimum",
+          "note": "Annualized Sharpe is not yet produced by the current walk-forward runtime. Trade-return Sharpe is available for reference only."
+        },
+        {
+          "name": "regime_accuracy",
+          "status": "NOT_STARTED",
+          "actual": null,
+          "threshold": 65.0,
+          "comparison": "minimum",
+          "note": "Regime accuracy reporting is not yet attached to the Phase 2 validation report."
+        },
+        {
+          "name": "primary_scenario_accuracy",
+          "status": "NOT_STARTED",
+          "actual": null,
+          "threshold": 55.0,
+          "comparison": "minimum",
+          "note": "Scenario calibration and accuracy reporting are not yet attached to the Phase 2 validation report."
+        },
+        {
+          "name": "positive_edge_in_primary_regime_groups",
+          "status": "NOT_STARTED",
+          "actual": null,
+          "threshold": 5,
+          "comparison": "minimum",
+          "note": "Regime-group attribution is not yet available in the current report artifact."
+        },
+        {
+          "name": "auditable_paper_days",
+          "status": "INSUFFICIENT_EVIDENCE",
+          "actual": null,
+          "threshold": 90,
+          "comparison": "minimum",
+          "note": "Paper-trading evidence is not attached to this walk-forward-only report yet."
+        }
+      ]
+    },
+    "blocked_by": [
+      "walk_forward_contract_alignment",
+      "minimum_fold_count",
+      "out_of_sample_win_rate",
+      "out_of_sample_average_reward_risk",
+      "out_of_sample_profit_factor",
+      "out_of_sample_max_drawdown",
+      "out_of_sample_annualized_sharpe",
+      "regime_accuracy",
+      "primary_scenario_accuracy",
+      "positive_edge_in_primary_regime_groups",
+      "auditable_paper_days"
+    ],
+    "next_action": "Align the walk-forward run with the official Phase 2 timeframe and fold contract before interpreting edge results."
+  },
+  "walk_forward_result": {
+    "engine_version": "walk_forward_v1",
+    "backtest_engine_version": "backtester_v2",
+    "validation_status": "INSUFFICIENT_DATA",
+    "strategy": "DIRECTIONAL_REENTRY_BASELINE",
+    "signal": "LONG",
+    "candle_count": 882,
+    "required_candle_count": 5760,
+    "fold_count": 0,
+    "folds": [],
+    "out_of_sample": {
+      "total_trades": 0,
+      "trades": [],
+      "equity_curve": [
+        {
+          "label": "START",
+          "equity": 10000.0
+        }
+      ]
+    },
+    "configuration": {
+      "train_size": 4320,
+      "test_size": 1440,
+      "step_size": 1440,
+      "mode": "EXPANDING",
+      "min_train_trades": 1,
+      "candidate_count": 16
+    },
+    "validation_contract": {
+      "contract_version": "phase2_proof_of_edge_v1",
+      "timeframe": "1h",
+      "timeframe_status": "OFFICIAL",
+      "official_timeframes": [
+        "1d",
+        "1h",
+        "4h"
+      ],
+      "supporting_timeframes": [
+        "15m",
+        "5m"
+      ],
+      "target_windows_days": {
+        "train_window_days": 180,
+        "test_window_days": 60,
+        "step_days": 60,
+        "minimum_folds": 6
+      },
+      "derived_candle_windows": {
+        "train_size": 4320,
+        "test_size": 1440,
+        "step_size": 1440,
+        "minimum_fold_candles": 12960
+      },
+      "required_candle_count_for_minimum_folds": 12960,
+      "actual_fold_count": 0,
+      "minimum_fold_requirement": 6,
+      "contract_status": "INSUFFICIENT_EVIDENCE",
+      "configuration_matches_contract": true,
+      "issues": [
+        "minimum_fold_requirement_not_met",
+        "insufficient_history_for_phase2_fold_requirement"
+      ]
+    },
+    "symbol": "DOGEUSDT",
+    "timeframe": "1h"
+  }
+}

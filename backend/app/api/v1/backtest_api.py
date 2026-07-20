@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.backtesting.phase2_validation_artifacts import load_phase2_validation_artifact
 from app.backtesting.phase2_validation_artifacts import list_phase2_validation_artifacts
@@ -10,9 +11,16 @@ from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.backtesting.walk_forward_validator import PHASE2_WALK_FORWARD_DAYS
 from app.backtesting.walk_forward_validator import minimum_candles_for_folds
 from app.backtesting.walk_forward_validator import phase2_walk_forward_defaults
+from app.database.sqlserver import SessionLocal
+from app.paper_trading.measurement import build_measurement_report
+from app.paper_trading.measurement import attach_regime_outcome_context
+from app.paper_trading.measurement import attach_scenario_context
+from app.repositories.paper_trade_repository import PaperTradeRepository
 
 
 router = APIRouter(prefix="/backtest", tags=["Backtesting"])
+MAX_WALK_FORWARD_CANDLES = 20000
+WALK_FORWARD_STRATEGIES = "^(SIGNAL_GATED|BASELINE|RESEARCH_CALIBRATION)$"
 
 
 @router.get("/filtered-summary")
@@ -57,7 +65,7 @@ def walk_forward_validation(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
     timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
-    limit: int | None = Query(default=None, ge=3, le=10000),
+    limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
     train_size: int | None = Query(default=None, ge=2, le=60000),
     test_size: int | None = Query(default=None, ge=1, le=30000),
     step_size: int | None = Query(default=None, ge=1, le=30000),
@@ -69,6 +77,7 @@ def walk_forward_validation(
     position_size_percent: float = Query(default=100, gt=0, le=100),
     fee_bps: float = Query(default=4, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
+    strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
 ):
     resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
 
@@ -93,6 +102,7 @@ def walk_forward_validation(
             position_size_percent=position_size_percent,
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
+            strategy=strategy,
         ),
     }
 
@@ -102,7 +112,7 @@ def phase2_validation_report(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
     timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
-    limit: int | None = Query(default=None, ge=3, le=10000),
+    limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
     train_size: int | None = Query(default=None, ge=2, le=60000),
     test_size: int | None = Query(default=None, ge=1, le=30000),
     step_size: int | None = Query(default=None, ge=1, le=30000),
@@ -114,6 +124,7 @@ def phase2_validation_report(
     position_size_percent: float = Query(default=100, gt=0, le=100),
     fee_bps: float = Query(default=4, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
+    strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
 ):
     resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
     result = execute_walk_forward(
@@ -132,7 +143,9 @@ def phase2_validation_report(
         position_size_percent=position_size_percent,
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
+        strategy=strategy,
     )
+    paper_measurement = _load_paper_measurement(symbol)
     return {
         "source": "phase2_validation_report_v1",
         "symbol": symbol,
@@ -144,6 +157,7 @@ def phase2_validation_report(
             symbol=symbol,
             timeframe=timeframe,
             signal=signal,
+            paper_measurement=paper_measurement,
         ),
     }
 
@@ -153,7 +167,7 @@ def export_phase2_validation_report(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
     timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
-    limit: int | None = Query(default=None, ge=3, le=10000),
+    limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
     train_size: int | None = Query(default=None, ge=2, le=60000),
     test_size: int | None = Query(default=None, ge=1, le=30000),
     step_size: int | None = Query(default=None, ge=1, le=30000),
@@ -165,6 +179,7 @@ def export_phase2_validation_report(
     position_size_percent: float = Query(default=100, gt=0, le=100),
     fee_bps: float = Query(default=4, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
+    strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
 ):
     resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
     result = execute_walk_forward(
@@ -183,12 +198,14 @@ def export_phase2_validation_report(
         position_size_percent=position_size_percent,
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
+        strategy=strategy,
     )
     report = build_phase2_validation_report(
         result,
         symbol=symbol,
         timeframe=timeframe,
         signal=signal,
+        paper_measurement=_load_paper_measurement(symbol),
     )
     artifact = persist_phase2_validation_artifact(
         report,
@@ -298,6 +315,9 @@ def backtest_summary(
 
 
 def _parse_grid(value, name):
+    # Route functions are also invoked directly by tests/internal callers,
+    # where FastAPI has not replaced Query defaults with their raw values.
+    value = _query_default(value)
     try:
         values = [float(item.strip()) for item in str(value).split(",") if item.strip()]
     except ValueError as exc:
@@ -310,6 +330,12 @@ def _parse_grid(value, name):
 
 
 def _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size):
+    # Route functions are also called directly by unit tests and internal jobs;
+    # unwrap FastAPI Query defaults when dependency injection is not involved.
+    limit = _query_default(limit)
+    train_size = _query_default(train_size)
+    test_size = _query_default(test_size)
+    step_size = _query_default(step_size)
     timeframe_key = str(timeframe or "").strip()
     if timeframe_key in PHASE2_OFFICIAL_TIMEFRAMES:
         defaults = phase2_walk_forward_defaults(timeframe_key)
@@ -337,8 +363,8 @@ def _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size,
             status_code=422,
             detail="step_size must be at least test_size to prevent overlapping test folds",
         )
-    if resolved_limit > 10000:
-        resolved_limit = 10000
+    if resolved_limit > MAX_WALK_FORWARD_CANDLES:
+        resolved_limit = MAX_WALK_FORWARD_CANDLES
 
     return {
         "limit": resolved_limit,
@@ -346,3 +372,40 @@ def _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size,
         "test_size": resolved_test,
         "step_size": resolved_step,
     }
+
+
+def _query_default(value):
+    return getattr(value, "default", value)
+
+
+def _load_paper_measurement(symbol):
+    """Attach read-only paper evidence to Phase 2 reports when available."""
+    db = SessionLocal()
+    try:
+        trades = PaperTradeRepository().all_trades(db, symbol=str(symbol or "").upper())
+        attach_scenario_context(db, trades)
+        attach_regime_outcome_context(db, trades)
+        # Phase 2 evidence is scoped to the official entry stack. Legacy 5m/
+        # 15m trades remain visible in the paper-trade ledger but cannot be
+        # used to claim evidence for the current 1h/4h/1d strategy.
+        trades = [
+            trade
+            for trade in trades
+            if str(getattr(trade, "entry_timeframe", "") or "").strip() in PHASE2_OFFICIAL_TIMEFRAMES
+        ]
+        report = build_measurement_report(trades)
+        report["evidence_scope"] = {
+            "market": "FUTURES",
+            "mode": "intraday",
+            "entry_timeframes": sorted(PHASE2_OFFICIAL_TIMEFRAMES),
+            "excluded_legacy_timeframes": ["5m", "15m"],
+        }
+        return report
+    except SQLAlchemyError:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        db.close()

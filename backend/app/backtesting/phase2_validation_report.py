@@ -29,6 +29,7 @@ def build_phase2_validation_report(
     signal,
     thresholds=None,
     as_of=None,
+    paper_measurement=None,
 ):
     thresholds = thresholds or DEFAULT_PHASE2_THRESHOLDS
     result = dict(walk_forward_result or {})
@@ -37,6 +38,14 @@ def build_phase2_validation_report(
     oos_trades = list(oos.get("trades") or [])
     payoff_ratio = _payoff_ratio(oos_trades)
     trade_return_sharpe = oos.get("sharpe_ratio")
+    annualized_sharpe = oos.get("annualized_sharpe")
+    regime_attribution = _regime_group_attribution(oos_trades)
+    paper_report = dict(paper_measurement or {})
+    paper_overall = dict(paper_report.get("overall") or {})
+    paper_scenario_accuracy = dict(paper_report.get("scenario_accuracy") or {})
+    paper_regime_accuracy = dict(paper_report.get("regime_accuracy") or {})
+    paper_status = paper_report.get("status")
+    paper_days = paper_overall.get("observation_days")
 
     gate_checks = [
         _gate_check(
@@ -80,45 +89,72 @@ def build_phase2_validation_report(
             thresholds.max_drawdown_percent,
             "maximum",
         ),
-        _gate_check(
-            "out_of_sample_annualized_sharpe",
-            "NOT_STARTED",
-            None,
-            thresholds.out_of_sample_annualized_sharpe,
-            "minimum",
-            note="Annualized Sharpe is not yet produced by the current walk-forward runtime. Trade-return Sharpe is available for reference only.",
+        (
+            _metric_gate_check(
+                "out_of_sample_annualized_sharpe",
+                annualized_sharpe,
+                thresholds.out_of_sample_annualized_sharpe,
+                "minimum",
+            )
+            if "annualized_sharpe" in oos
+            else _gate_check(
+                "out_of_sample_annualized_sharpe",
+                "NOT_STARTED",
+                None,
+                thresholds.out_of_sample_annualized_sharpe,
+                "minimum",
+                note="Annualized Sharpe is not yet produced by the current walk-forward runtime. Trade-return Sharpe is available for reference only.",
+            )
         ),
-        _gate_check(
-            "regime_accuracy",
-            "NOT_STARTED",
-            None,
+        _regime_accuracy_gate_check(
+            paper_regime_accuracy,
             thresholds.regime_accuracy_percent,
-            "minimum",
-            note="Regime accuracy reporting is not yet attached to the Phase 2 validation report.",
         ),
-        _gate_check(
-            "primary_scenario_accuracy",
-            "NOT_STARTED",
-            None,
+        _scenario_accuracy_gate_check(
+            paper_scenario_accuracy,
             thresholds.primary_scenario_accuracy_percent,
-            "minimum",
-            note="Scenario calibration and accuracy reporting are not yet attached to the Phase 2 validation report.",
         ),
         _gate_check(
             "positive_edge_in_primary_regime_groups",
-            "NOT_STARTED",
-            None,
+            "PASS"
+            if regime_attribution["positive_edge_group_count"] >= thresholds.positive_regime_group_minimum
+            else "FAIL"
+            if regime_attribution["available_group_count"] > 0
+            else "NOT_STARTED",
+            regime_attribution["positive_edge_group_count"],
             thresholds.positive_regime_group_minimum,
             "minimum",
-            note="Regime-group attribution is not yet available in the current report artifact.",
+            note=(
+                None
+                if regime_attribution["available_group_count"] > 0
+                else "Regime-group attribution is not available because no out-of-sample trades have regime labels."
+            ),
         ),
         _gate_check(
             "auditable_paper_days",
-            "INSUFFICIENT_EVIDENCE",
-            None,
+            "PASS"
+            if paper_days is not None and float(paper_days) >= thresholds.paper_days_minimum
+            else "INSUFFICIENT_EVIDENCE",
+            _round_or_none(paper_days, 4),
             thresholds.paper_days_minimum,
             "minimum",
-            note="Paper-trading evidence is not attached to this walk-forward-only report yet.",
+            note=(
+                None
+                if paper_days is not None and float(paper_days) >= thresholds.paper_days_minimum
+                else "Paper-trading evidence is missing or below the minimum observation period."
+            ),
+        ),
+        _gate_check(
+            "paper_trade_measurement_gate",
+            "PASS" if paper_status == "PASS" else "FAIL" if paper_status else "INSUFFICIENT_EVIDENCE",
+            paper_status,
+            "PASS",
+            "required",
+            note=(
+                None
+                if paper_status == "PASS"
+                else "Paper-trade measurement is not attached or does not meet its performance policy."
+            ),
         ),
     ]
 
@@ -137,6 +173,9 @@ def build_phase2_validation_report(
         },
         "walk_forward": {
             "validation_status": result.get("validation_status"),
+            "strategy": result.get("strategy"),
+            "strategy_metadata": result.get("strategy_metadata") or {},
+            "gate_diagnostics": (result.get("out_of_sample") or {}).get("gate_diagnostics") or {},
             "fold_count": int(result.get("fold_count") or 0),
             "contract": contract,
         },
@@ -148,7 +187,10 @@ def build_phase2_validation_report(
             "out_of_sample_max_drawdown_percent": _round_or_none(oos.get("max_drawdown_percent"), 4),
             "out_of_sample_payoff_ratio": payoff_ratio,
             "trade_return_sharpe": _round_or_none(trade_return_sharpe, 4),
+            "out_of_sample_annualized_sharpe": _round_or_none(annualized_sharpe, 4),
         },
+        "paper_evidence": _paper_evidence_summary(paper_report),
+        "regime_attribution": regime_attribution,
         "architecture_gate": {
             "status": architecture_gate_status,
             "passed_checks": sum(1 for check in gate_checks if check["status"] == "PASS"),
@@ -181,6 +223,124 @@ def _metric_gate_check(name, actual, threshold, comparison):
         threshold,
         comparison,
     )
+
+
+def _paper_evidence_summary(report):
+    if not report:
+        return {
+            "status": None,
+            "measurement_version": None,
+            "evidence_scope": {},
+            "overall": {},
+            "scenario_accuracy": {},
+            "regime_accuracy": {},
+        }
+    overall = dict(report.get("overall") or {})
+    fields = (
+        "closed_trades",
+        "observation_days",
+        "win_rate",
+        "payoff_ratio",
+        "profit_factor",
+        "expectancy_percent",
+        "compounded_return_percent",
+        "max_drawdown_percent",
+    )
+    return {
+        "status": report.get("status"),
+        "measurement_version": report.get("measurement_version"),
+        "evidence_scope": report.get("evidence_scope") or {},
+        "overall": {field: overall.get(field) for field in fields},
+        "scenario_accuracy": report.get("scenario_accuracy") or {},
+        "regime_accuracy": report.get("regime_accuracy") or {},
+    }
+
+
+def _scenario_accuracy_gate_check(accuracy, threshold):
+    status = accuracy.get("status")
+    actual = accuracy.get("accuracy_percent")
+    if status == "CALCULATED" and actual is not None:
+        return _metric_gate_check(
+            "primary_scenario_accuracy",
+            actual,
+            threshold,
+            "minimum",
+        )
+    return _gate_check(
+        "primary_scenario_accuracy",
+        "NOT_STARTED" if status in (None, "NOT_STARTED") else "INSUFFICIENT_EVIDENCE",
+        actual,
+        threshold,
+        "minimum",
+        note=(
+            "No closed paper trades contain a persisted scenario label."
+            if status in (None, "NOT_STARTED")
+            else "Scenario accuracy is present but not measurable."
+        ),
+    )
+
+
+def _regime_accuracy_gate_check(accuracy, threshold):
+    status = accuracy.get("status")
+    actual = accuracy.get("accuracy_percent")
+    if status == "CALCULATED" and actual is not None:
+        return _metric_gate_check(
+            "regime_accuracy",
+            actual,
+            threshold,
+            "minimum",
+        )
+    return _gate_check(
+        "regime_accuracy",
+        "NOT_STARTED" if status in (None, "NOT_STARTED") else "INSUFFICIENT_EVIDENCE",
+        actual,
+        threshold,
+        "minimum",
+        note=(
+            "No closed paper trades have a persisted regime observation at close."
+            if status in (None, "NOT_STARTED")
+            else "Regime accuracy is present but not measurable."
+        ),
+    )
+
+
+def _regime_group_attribution(trades):
+    groups = {}
+    for trade in list(trades or []):
+        regime = str(trade.get("regime") or "UNKNOWN")
+        groups.setdefault(regime, []).append(trade)
+
+    records = []
+    for regime, regime_trades in sorted(groups.items()):
+        returns = [
+            float(trade.get("pnl_percent"))
+            for trade in regime_trades
+            if trade.get("pnl_percent") is not None
+        ]
+        wins = [value for value in returns if value > 0]
+        losses = [abs(value) for value in returns if value < 0]
+        gross_profit = sum(wins)
+        gross_loss = sum(losses)
+        profit_factor = round(gross_profit / gross_loss, 4) if gross_loss else None
+        total_return = round(sum(returns), 4)
+        records.append(
+            {
+                "regime": regime,
+                "trades": len(returns),
+                "wins": len(wins),
+                "losses": len(losses),
+                "win_rate": round((len(wins) / len(returns)) * 100, 4) if returns else 0.0,
+                "profit_factor": profit_factor,
+                "total_return_percent": total_return,
+                "positive_edge": bool(returns and total_return > 0 and (profit_factor is None or profit_factor >= 1.0)),
+            }
+        )
+
+    return {
+        "available_group_count": len(records),
+        "positive_edge_group_count": sum(1 for item in records if item["positive_edge"]),
+        "groups": records,
+    }
 
 
 def _gate_check(name, status, actual, threshold, comparison, note=None):

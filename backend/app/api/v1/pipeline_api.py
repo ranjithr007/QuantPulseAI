@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query
 
 from app.api.v1.paper_trade_api import build_paper_trade_candidates
 from app.api.v1.signals_api import build_signal_watchlist_payload
+from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.database.models.risk_decision import RiskDecision
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.paper_trade_performance import paper_trade_performance
@@ -45,7 +46,7 @@ def get_pipeline_status(
         )
         trade_repo = TradePlanRepository()
         paper_repo = PaperTradeRepository()
-        open_trade_plans = trade_repo.get_open_trades(db)
+        open_trade_plans = _official_trade_plans(trade_repo.get_open_trades(db))
         risk_count = db.query(RiskDecision).count()
         latest_risk = (
             db.query(RiskDecision)
@@ -62,7 +63,7 @@ def get_pipeline_status(
             for item in candidates
             if item["eligible"]
         ]
-        paper_trades = paper_repo.all_trades(db)
+        paper_trades = _official_paper_trades(paper_repo.all_trades(db))
         open_paper_trades = [
             trade
             for trade in paper_trades
@@ -92,6 +93,7 @@ def get_pipeline_status(
             "source": "pipeline_status",
             "mode": mode,
             "timeframes": watchlist["timeframes"],
+            "paper_evidence_scope": _paper_evidence_scope(),
             "status": _pipeline_status(stages),
             "blockers": _pipeline_blockers(stages),
             "stages": stages,
@@ -124,8 +126,8 @@ def get_pipeline_performance(
     try:
         trade_repo = TradePlanRepository()
         paper_repo = PaperTradeRepository()
-        open_trade_plans = trade_repo.get_open_trades(db)
-        paper_trades = paper_repo.all_trades(db)
+        open_trade_plans = _official_trade_plans(trade_repo.get_open_trades(db))
+        paper_trades = _official_paper_trades(paper_repo.all_trades(db))
 
         def _watchlist():
             return build_signal_watchlist_payload(
@@ -141,7 +143,7 @@ def get_pipeline_performance(
             )
 
         def _trade_plans():
-            return trade_repo.get_open_trades(db)
+            return open_trade_plans
 
         def _risk():
             latest_risk = (
@@ -162,7 +164,7 @@ def get_pipeline_performance(
             )
 
         def _paper_trades():
-            return paper_repo.all_trades(db)
+            return paper_trades
 
         def _performance():
             return paper_trade_performance(paper_trades)
@@ -185,6 +187,7 @@ def get_pipeline_performance(
             "mode": mode,
             "stale_after_seconds": stale_after_seconds,
             "sample_size": sample_size,
+            "paper_evidence_scope": _paper_evidence_scope(),
             "stages": stage_report["stages"],
             "budget_summary": _budget_summary(stage_report["stages"]),
         }
@@ -215,6 +218,33 @@ def _watchlist_stage(watchlist):
         "long": summary["long"],
         "short": summary["short"],
         "has_ready": summary["ready"] > 0,
+    }
+
+
+def _official_trade_plans(trades):
+    return [
+        trade
+        for trade in (trades or [])
+        if str(getattr(trade, "entry_timeframe", "") or "").strip()
+        in PHASE2_OFFICIAL_TIMEFRAMES
+    ]
+
+
+def _official_paper_trades(trades):
+    return [
+        trade
+        for trade in (trades or [])
+        if str(getattr(trade, "entry_timeframe", "") or "").strip()
+        in PHASE2_OFFICIAL_TIMEFRAMES
+    ]
+
+
+def _paper_evidence_scope():
+    return {
+        "market": "FUTURES",
+        "mode": "intraday",
+        "entry_timeframes": sorted(PHASE2_OFFICIAL_TIMEFRAMES),
+        "excluded_legacy_timeframes": ["5m", "15m"],
     }
 
 

@@ -26,6 +26,30 @@ SHORT_REGIMES = {
     "HIGH_VOLATILITY_BREAKDOWN",
     "LIQUIDITY_GRAB_BEARISH",
 }
+GATE_PROFILES = {
+    "STRICT": {
+        "long_trend_score": 65,
+        "long_momentum_score": 60,
+        "long_final_score": 70,
+        "long_regime_required": True,
+        "short_trend_score": 35,
+        "short_momentum_score": 40,
+        "short_final_score": 40,
+        "short_regime_required": True,
+    },
+    # Research-only profile. It measures signal coverage under a directional
+    # filter without changing the production STRICT gate.
+    "RESEARCH_RELAXED": {
+        "long_trend_score": 55,
+        "long_momentum_score": 50,
+        "long_final_score": 60,
+        "long_regime_required": False,
+        "short_trend_score": 45,
+        "short_momentum_score": 50,
+        "short_final_score": 45,
+        "short_regime_required": False,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -71,6 +95,7 @@ def run_filtered_replay(
     warmup_candles=50,
     fee_bps=4,
     slippage_bps=2,
+    gate_profile="STRICT",
 ):
     requested_side = str(side or "").upper()
     if requested_side not in {"LONG", "SHORT"}:
@@ -87,6 +112,9 @@ def run_filtered_replay(
         fee_bps=float(fee_bps),
         slippage_bps=float(slippage_bps),
     )
+    gate_profile_key = str(gate_profile or "STRICT").upper()
+    if gate_profile_key not in GATE_PROFILES:
+        raise ValueError(f"gate_profile must be one of {sorted(GATE_PROFILES)}")
     ordered = chronological_candles(candles)
     capital = config.initial_capital
     trades = []
@@ -106,6 +134,7 @@ def run_filtered_replay(
             requested_side,
             config.min_confidence,
             feature_resolver=feature_resolver,
+            gate_profile=gate_profile_key,
         )
         decision_counts[decision["signal"]] += 1
         feature_source_counts[decision["feature_source"]] += 1
@@ -281,6 +310,7 @@ def run_filtered_replay(
         "eligibility_divergence": _eligibility_divergence_summary(rejection_counts),
         "assumptions": {
             **asdict(config),
+            "gate_profile": gate_profile_key,
             "entry_timing": "NEXT_CANDLE_OPEN",
             "intrabar_collision": "STOP_FIRST",
             "position_policy": "ONE_AT_A_TIME",
@@ -293,7 +323,14 @@ def run_filtered_replay(
     }
 
 
-def build_candle_decision(candles, requested_side, min_confidence, *, feature_resolver=None):
+def build_candle_decision(
+    candles,
+    requested_side,
+    min_confidence,
+    *,
+    feature_resolver=None,
+    gate_profile="STRICT",
+):
     feature_contract = None
     feature_source = "CANDLE_RECONSTRUCTION"
     point_in_time_flags = {}
@@ -330,28 +367,31 @@ def build_candle_decision(candles, requested_side, min_confidence, *, feature_re
     directional_strength = final_score if requested_side == "LONG" else 100 - final_score
     confidence = round((directional_strength + regime["confidence"]) / 2, 2)
     blocked = []
+    profile = GATE_PROFILES.get(str(gate_profile or "STRICT").upper())
+    if profile is None:
+        raise ValueError(f"gate_profile must be one of {sorted(GATE_PROFILES)}")
 
     if atr <= 0:
         blocked.append("ATR_UNAVAILABLE")
     if confidence < min_confidence:
         blocked.append("CONFIDENCE_BELOW_THRESHOLD")
     if requested_side == "LONG":
-        if trend != "BULLISH" or trend_score < 65:
+        if trend_score < profile["long_trend_score"]:
             blocked.append("TREND_NOT_BULLISH")
-        if momentum_score < 60:
+        if momentum_score < profile["long_momentum_score"]:
             blocked.append("MOMENTUM_NOT_BULLISH")
-        if final_score <= 70:
+        if final_score <= profile["long_final_score"]:
             blocked.append("FEATURE_SIGNAL_NOT_LONG")
-        if regime["regime"] not in LONG_REGIMES:
+        if profile["long_regime_required"] and regime["regime"] not in LONG_REGIMES:
             blocked.append("REGIME_NOT_BULLISH")
     else:
-        if trend != "BEARISH" or trend_score > 35:
+        if trend_score > profile["short_trend_score"]:
             blocked.append("TREND_NOT_BEARISH")
-        if momentum_score > 40:
+        if momentum_score > profile["short_momentum_score"]:
             blocked.append("MOMENTUM_NOT_BEARISH")
-        if final_score >= 40:
+        if final_score >= profile["short_final_score"]:
             blocked.append("FEATURE_SIGNAL_NOT_SHORT")
-        if regime["regime"] not in SHORT_REGIMES:
+        if profile["short_regime_required"] and regime["regime"] not in SHORT_REGIMES:
             blocked.append("REGIME_NOT_BEARISH")
 
     return {

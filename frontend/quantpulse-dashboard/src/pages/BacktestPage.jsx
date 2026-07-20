@@ -169,7 +169,7 @@ export default function BacktestPage({
         const backtestResult = await loadBacktestSummary({
           symbol: view.symbol,
           signalSide,
-          timeframe: view.timeframe || "15m",
+          timeframe: view.timeframe || "1h",
           signal: controller.signal,
         });
 
@@ -239,18 +239,18 @@ export default function BacktestPage({
           loadWalkForwardSummary({
             symbol: view.symbol,
             signalSide,
-            timeframe: view.timeframe || "15m",
+            timeframe: view.timeframe || "1h",
             signal: controller.signal,
           }),
           loadPhase2ValidationReport({
             symbol: view.symbol,
             signalSide,
-            timeframe: view.timeframe || "15m",
+            timeframe: view.timeframe || "1h",
             signal: controller.signal,
           }),
           loadPhase2ValidationHistory({
             symbol: view.symbol,
-            timeframe: view.timeframe || "15m",
+            timeframe: view.timeframe || "1h",
             signalSide,
             limit: 8,
             signal: controller.signal,
@@ -326,7 +326,7 @@ export default function BacktestPage({
       const response = await exportPhase2ValidationReport({
         symbol: view.symbol,
         signalSide,
-        timeframe: view.timeframe || "15m",
+        timeframe: view.timeframe || "1h",
         signal: controller.signal,
       });
       setPhase2ExportResult(response?.artifact || null);
@@ -389,7 +389,7 @@ export default function BacktestPage({
               <div className="text-sm font-medium text-white">Filtered strategy replay</div>
               <div className="text-xs text-slate-500">
                 {signalSide
-                  ? `${view.symbol} ${signalSide} candle-regime filter on ${view.timeframe || "15m"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`
+                  ? `${view.symbol} ${signalSide} candle-regime filter on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`
                   : "Choose a BUY or SELL signal on the dashboard to run the engine summary."}
               </div>
             </div>
@@ -543,7 +543,7 @@ export default function BacktestPage({
               <div className="text-sm font-medium text-white">Walk-forward validation</div>
               <div className="text-xs text-slate-500">
                 {signalSide
-                  ? `${view.symbol} ${signalSide} out-of-sample validation on ${view.timeframe || "15m"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`
+                  ? `${view.symbol} ${signalSide} out-of-sample validation on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`
                   : "Choose a BUY or SELL signal on the dashboard to run walk-forward validation."}
               </div>
             </div>

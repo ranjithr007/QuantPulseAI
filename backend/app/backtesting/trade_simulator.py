@@ -1,3 +1,5 @@
+from bisect import bisect_right
+
 from app.database.sqlserver import SessionLocal
 
 from app.repositories.candle_repository import get_latest_candles
@@ -7,6 +9,8 @@ from app.backtesting.filtered_replay_engine import run_filtered_replay
 from app.backtesting.walk_forward_validator import run_walk_forward
 from app.features.point_in_time_feature_service import build_point_in_time_bundle
 from app.features.point_in_time_feature_service import build_features_as_of
+from app.features.point_in_time_feature_service import build_feature_snapshot
+from app.utils.freshness import normalize_timestamp_to_utc
 
 def execute_backtest(
     symbol,
@@ -144,10 +148,70 @@ def execute_walk_forward(
     position_size_percent=100,
     fee_bps=4,
     slippage_bps=2,
+    strategy="SIGNAL_GATED",
+    min_confidence=70,
+    cooldown_candles=3,
 ):
     db = SessionLocal()
     try:
         candles = get_latest_candles(db, symbol, timeframe, limit)
+        # FastAPI supplies a raw string at runtime, while direct internal
+        # callers may pass the Query default object unchanged.
+        strategy_key = str(getattr(strategy, "default", strategy) or "SIGNAL_GATED").upper()
+        if strategy_key not in {"SIGNAL_GATED", "BASELINE", "RESEARCH_CALIBRATION"}:
+            raise ValueError("strategy must be SIGNAL_GATED, BASELINE, or RESEARCH_CALIBRATION")
+
+        if strategy_key in {"SIGNAL_GATED", "RESEARCH_CALIBRATION"}:
+            is_research = strategy_key == "RESEARCH_CALIBRATION"
+            gate_profile = "RESEARCH_RELAXED" if is_research else "STRICT"
+            effective_min_confidence = 60 if is_research else min_confidence
+            feature_resolver = _build_in_memory_feature_resolver(
+                symbol,
+                timeframe,
+                candles,
+            )
+
+            def backtest_runner(items, side, **options):
+                return run_filtered_replay(
+                    items,
+                    side,
+                    feature_resolver=feature_resolver,
+                    initial_capital=options["initial_capital"],
+                    position_size_percent=options["position_size_percent"],
+                    min_confidence=effective_min_confidence,
+                    stop_atr_multiple=options["stop_percent"],
+                    target_atr_multiple=options["target_percent"],
+                    cooldown_candles=cooldown_candles,
+                    fee_bps=options["fee_bps"],
+                    slippage_bps=options["slippage_bps"],
+                    gate_profile=gate_profile,
+                )
+
+            strategy_name = (
+                "CANDLE_RECONSTRUCTED_RESEARCH_GATE_V1"
+                if is_research
+                else "CANDLE_RECONSTRUCTED_REGIME_FILTER_V1"
+            )
+            strategy_metadata = {
+                "mode": "RESEARCH_CALIBRATION" if is_research else "SIGNAL_GATED",
+                "feature_source": "IN_MEMORY_POINT_IN_TIME_CANDLE_RECONSTRUCTION",
+                "min_confidence": float(effective_min_confidence),
+                "cooldown_candles": int(cooldown_candles),
+                "gate_profile": gate_profile,
+                "production_eligible": not is_research,
+                "stop_parameter_model": "ATR_MULTIPLE",
+                "target_parameter_model": "ATR_MULTIPLE",
+            }
+        else:
+            backtest_runner = run_backtest
+            strategy_name = "DIRECTIONAL_REENTRY_BASELINE"
+            strategy_metadata = {
+                "mode": "BASELINE",
+                "feature_source": "NONE",
+                "stop_parameter_model": "PERCENT",
+                "target_parameter_model": "PERCENT",
+            }
+
         result = run_walk_forward(
             candles,
             signal,
@@ -163,8 +227,58 @@ def execute_walk_forward(
             position_size_percent=position_size_percent,
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
+            backtest_runner=backtest_runner,
+            strategy_name=strategy_name,
+            strategy_metadata=strategy_metadata,
         )
         result.update({"symbol": symbol, "timeframe": timeframe})
         return result
     finally:
         db.close()
+
+
+def _build_in_memory_feature_resolver(symbol, timeframe, candles, history_limit=300):
+    """Build point-in-time features once per candle without per-candle DB queries."""
+    ordered = sorted(
+        [candle for candle in (candles or []) if getattr(candle, "candle_time", None) is not None],
+        key=lambda candle: normalize_timestamp_to_utc(candle.candle_time),
+    )
+    timestamps = [normalize_timestamp_to_utc(candle.candle_time) for candle in ordered]
+    cache = {}
+
+    def resolve(as_of_timestamp):
+        normalized_as_of = normalize_timestamp_to_utc(as_of_timestamp)
+        if normalized_as_of is None:
+            return None
+        cache_key = normalized_as_of.isoformat()
+        if cache_key in cache:
+            return cache[cache_key]
+
+        end_index = bisect_right(timestamps, normalized_as_of)
+        if end_index <= 0:
+            cache[cache_key] = None
+            return None
+
+        history = ordered[max(0, end_index - history_limit):end_index]
+        feature_contract = build_feature_snapshot(
+            symbol,
+            timeframe,
+            history,
+            source_timestamp=as_of_timestamp,
+            effective_timestamp=as_of_timestamp,
+        )
+        result = {
+            **feature_contract,
+            "_point_in_time": {
+                "feature_source": "RECONSTRUCTED_FROM_CLOSED_CANDLES",
+                "feature_snapshot_found": False,
+                "decision_snapshot_found": False,
+                "thesis_snapshot_found": False,
+                "feature_leakage_status": "PASS",
+                "thesis_leakage_status": "PARTIAL",
+            },
+        }
+        cache[cache_key] = result
+        return result
+
+    return resolve

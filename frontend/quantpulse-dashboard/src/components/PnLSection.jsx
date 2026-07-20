@@ -59,7 +59,11 @@ export default function PnLSection({
   const entryBand = entryTrigger?.confidence_window || tradeSetup?.confidence_window || null;
   const stackConfidence = entryTrigger?.stack_confidence ?? selectedDetail?.multiTimeframe?.confirmation?.stack_confidence ?? null;
   const predictionStack = selectedDetail?.predictionStack?.length ? selectedDetail.predictionStack.join(" / ") : selectedDetail?.multiTimeframe?.prediction_stack?.join(" / ") || "1h / 4h / 1d";
-  const timingStack = selectedDetail?.timingStack?.length ? selectedDetail.timingStack.join(" / ") : selectedDetail?.multiTimeframe?.timing_stack?.join(" / ") || selectedDetail?.multiTimeframe?.entry_stack?.join(" / ") || "15m / 5m";
+  const timingStack = selectedDetail?.timingStack?.length
+    ? selectedDetail.timingStack.join(" / ")
+    : selectedDetail?.multiTimeframe?.timing_stack?.join(" / ")
+      || selectedDetail?.multiTimeframe?.entry_stack?.join(" / ")
+      || "No lower-timeframe timing layer";
   const executionReason = entryTrigger?.reason || tradeSetup?.reason || "No execution reason available";
   const executionState = entryTrigger?.status || tradeSetup?.status || null;
   const eligibilityState = deriveSelectedEligibilityState({
@@ -80,6 +84,7 @@ export default function PnLSection({
           <div>
             <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">PnL Dashboard</div>
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Trade performance</h2>
+            <div className="mt-1 text-xs text-slate-500">Futures paper evidence · official entry stack 1h / 4h / 1d</div>
           </div>
         </div>
 
