@@ -56,6 +56,20 @@ function createInitialDashboardData() {
   };
 }
 
+function preferCurrentComputedRisk(currentRisk, incomingRisk, symbol) {
+  const normalizedSymbol = String(symbol || "").trim().toUpperCase();
+  const currentSymbol = String(currentRisk?.symbol || "").trim().toUpperCase();
+
+  if (
+    currentRisk?.source === "computed_current" &&
+    currentSymbol === normalizedSymbol
+  ) {
+    return currentRisk;
+  }
+
+  return incomingRisk || null;
+}
+
 function mergeSelectedBundleData(current, view, bundle) {
   return {
     ...current,
@@ -70,7 +84,11 @@ function mergeSelectedBundleData(current, view, bundle) {
       candles: bundle?.candles || null,
       orderflow: bundle?.orderflow || null,
       smc: bundle?.smc || null,
-      risk: bundle?.risk || null,
+      risk: preferCurrentComputedRisk(
+        current.selected.risk,
+        bundle?.risk,
+        view.symbol
+      ),
       autoDecision: bundle?.autoDecision || null,
       aiScores: bundle?.aiScores || null,
       derivatives: bundle?.derivatives || null,
