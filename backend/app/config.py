@@ -46,6 +46,13 @@ class Settings:
             self.environment == "production",
         )
         self.admin_api_key = os.getenv("QUANTPULSE_ADMIN_API_KEY", "").strip()
+        self.require_app_auth = _env_bool("QUANTPULSE_REQUIRE_APP_AUTH", False)
+        self.app_username = os.getenv("QUANTPULSE_APP_USERNAME", "").strip()
+        self.app_password_hash = os.getenv("QUANTPULSE_APP_PASSWORD_HASH", "").strip()
+        self.app_session_secret = os.getenv("QUANTPULSE_APP_SESSION_SECRET", "").strip()
+        self.app_session_ttl_seconds = int(
+            os.getenv("QUANTPULSE_APP_SESSION_TTL_SECONDS", "43200")
+        )
         self.rate_limit_enabled = _env_bool(
             "QUANTPULSE_RATE_LIMIT_ENABLED",
             self.environment == "production",
@@ -87,6 +94,19 @@ class Settings:
                 "QUANTPULSE_RATE_LIMIT_PER_MINUTE and "
                 "QUANTPULSE_ADMIN_RATE_LIMIT_PER_MINUTE must be positive integers."
             )
+        if self.require_app_auth:
+            if not self.app_username:
+                raise RuntimeError("QUANTPULSE_APP_USERNAME is required when app authentication is enabled.")
+            if not self.app_password_hash.startswith("pbkdf2_sha256$"):
+                raise RuntimeError(
+                    "QUANTPULSE_APP_PASSWORD_HASH must be a pbkdf2_sha256 hash when app authentication is enabled."
+                )
+            if len(self.app_session_secret) < 32:
+                raise RuntimeError(
+                    "QUANTPULSE_APP_SESSION_SECRET must contain at least 32 characters when app authentication is enabled."
+                )
+            if self.app_session_ttl_seconds < 300:
+                raise RuntimeError("QUANTPULSE_APP_SESSION_TTL_SECONDS must be at least 300 seconds.")
 
 
 def _env_bool(name: str, default: bool) -> bool:

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import "./styles.css";
 import DashboardHeader from "./components/DashboardHeader";
+import AuthGate from "./components/AuthGate";
 import useDashboardData from "./hooks/useDashboardData";
 import { executePaperTradeCandidates, loadAutomationSettings, persistReadyWatchlistSetups, saveAutomationEmergencyStop, saveAutomationSettings } from "./hooks/dashboardApi";
 
@@ -146,12 +147,14 @@ function buildPageUrl(page, view) {
 function App() {
   return (
     <BrowserRouter>
-      <DashboardApp />
+      <AuthGate>
+        {({ username, onLogout }) => <DashboardApp username={username} onLogout={onLogout} />}
+      </AuthGate>
     </BrowserRouter>
   );
 }
 
-function DashboardApp() {
+function DashboardApp({ username, onLogout }) {
   const location = useLocation();
   const navigate = useNavigate();
   const routeView = useMemo(() => getViewFromLocation(location.pathname, location.search), [location.pathname, location.search]);
@@ -443,6 +446,8 @@ function DashboardLayout({
         signalRows={signalRows}
         setView={setView}
         setTick={setTick}
+        username={username}
+        onLogout={onLogout}
       />
 
       <main className="space-y-6 pb-24 lg:ml-72 lg:pb-8">

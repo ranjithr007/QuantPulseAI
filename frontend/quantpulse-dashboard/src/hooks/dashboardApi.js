@@ -478,6 +478,7 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
   try {
     response = await fetch(url, {
       method,
+      credentials: "include",
       headers: {
         Accept: "application/json",
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -491,6 +492,9 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
+    if (response.status === 401) {
+      window.dispatchEvent(new Event("quantpulse:unauthorized"));
+    }
     throw new Error(`${url.pathname} returned ${response.status}${text ? ` - ${text}` : ""}`);
   }
 
