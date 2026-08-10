@@ -5,13 +5,15 @@ from app.collectors.Bybit.candle_collector import (
     CandleCollector as BybitCandleCollector,
 )
 
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
+from app.market_data.incremental_fetch import plan_incremental_fetch
+from app.market_data.quality import analyze_candle_sequence
 from app.repositories.market_repository import MarketRepository
 from app.repositories.symbol_repository import SymbolRepository
-from app.utils.freshness import normalize_timestamp_to_utc
 from app.utils.network_resilience import classify_network_error
 from app.utils.network_resilience import is_transient_network_error
 
-TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
 
 
 def run_market_job():
@@ -42,15 +44,40 @@ def run_market_job():
                 source = "BINANCE_FUTURES"
                 latest_candle = None
                 try:
-                    last_time = repo.get_last_candle_time(
+                    latest_candle_cursor = repo.get_collection_cursor(
                         db,
                         symbol_name,
                         timeframe,
                     )
+                    fetch_plan = plan_incremental_fetch(
+                        latest_candle_cursor,
+                        timeframe,
+                    )
+                    if not fetch_plan.should_fetch:
+                        results.append(
+                            {
+                                "symbol": symbol_name,
+                                "timeframe": timeframe,
+                                "source": source,
+                                "fetched": 0,
+                                "saved": 0,
+                                "skipped": 0,
+                                "fetch_plan": fetch_plan.as_dict(),
+                                "quality": {
+                                    "status": "NOT_DUE",
+                                    "issues": [],
+                                },
+                                "last_saved_candle": None,
+                            }
+                        )
+                        continue
 
                     candles = collector.get_candles(
                         symbol_name,
                         interval=timeframe,
+                        limit=fetch_plan.limit,
+                        start_time_ms=fetch_plan.start_time_ms,
+                        end_time_ms=fetch_plan.end_time_ms,
                     )
 
                     if not candles:
@@ -59,31 +86,34 @@ def run_market_job():
                         candles = fallback_collector.get_candles(
                             symbol_name,
                             interval=timeframe,
+                            limit=fetch_plan.limit,
+                            start_time_ms=fetch_plan.start_time_ms,
+                            end_time_ms=fetch_plan.end_time_ms,
                         )
 
                     candles = candles or []
 
+                    if not candles:
+                        total_failed += 1
+                        results.append(
+                            {
+                                "symbol": symbol_name,
+                                "timeframe": timeframe,
+                                "source": source,
+                                "status": "FAILED",
+                                "fetched": 0,
+                                "saved": 0,
+                                "skipped": 0,
+                                "fetch_plan": fetch_plan.as_dict(),
+                                "error": "NO_CANDLES_FROM_AVAILABLE_SOURCES",
+                            }
+                        )
+                        continue
+
                     fetched_count = len(candles)
                     total_fetched += fetched_count
 
-                    last_time_ms = None
-
-                    if last_time:
-                        last_time_utc = normalize_timestamp_to_utc(last_time)
-                        last_time_ms = int(last_time_utc.timestamp() * 1000)
-
                     for candle in candles:
-                        candle_open_time_ms = candle.get("open_time_ms")
-
-                        if (
-                            last_time_ms is not None
-                            and candle_open_time_ms is not None
-                            and candle_open_time_ms <= last_time_ms
-                        ):
-                            skipped_count += 1
-                            total_skipped += 1
-                            continue
-
                         inserted = repo.save_candle(db, candle)
                         if inserted:
                             saved_count += 1
@@ -100,6 +130,12 @@ def run_market_job():
                         "fetched": fetched_count,
                         "saved": saved_count,
                         "skipped": skipped_count,
+                        "fetch_plan": fetch_plan.as_dict(),
+                        "quality": analyze_candle_sequence(
+                            candles,
+                            timeframe,
+                            allow_trailing_provisional=True,
+                        ),
                         "last_saved_candle": (
                             {
                                 "open_time_ms": latest_candle.get("open_time_ms"),
@@ -167,11 +203,13 @@ def run_market_job():
 
         return {
             "source": "market_collector",
+            "status": "FAILED" if total_failed else "COMPLETED",
             "active_symbols": len(symbols),
             "timeframes": len(TIMEFRAMES),
             "processed_combinations": len(results),
             "total_fetched": total_fetched,
             "total_saved": total_saved,
+            "rows_written": total_saved,
             "total_skipped": total_skipped,
             "total_failed": total_failed,
             "results": results,
@@ -191,6 +229,7 @@ def run_market_job():
             "error": error_message,
             "total_fetched": total_fetched,
             "total_saved": total_saved,
+            "rows_written": total_saved,
             "total_skipped": total_skipped,
             "total_failed": total_failed + 1,
             "results": results,

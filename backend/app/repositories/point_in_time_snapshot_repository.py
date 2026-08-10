@@ -36,6 +36,11 @@ def save_feature_snapshot(db, snapshot):
     _ensure_snapshot_tables(db)
     existing = _get_existing_feature_snapshot(db, snapshot)
     if existing is not None:
+        generation_id = snapshot.get("data_generation_id")
+        if generation_id and existing.data_generation_id != generation_id:
+            existing.data_generation_id = generation_id
+            existing.snapshot_json = _snapshot_json(snapshot)
+            commit_or_rollback(db)
         return existing
 
     record = FeatureSnapshot(
@@ -45,6 +50,7 @@ def save_feature_snapshot(db, snapshot):
         effective_timestamp=_to_naive_utc(snapshot["effective_timestamp"]),
         feature_version=snapshot["feature_version"],
         quality_state=snapshot["quality_state"],
+        data_generation_id=snapshot.get("data_generation_id"),
         snapshot_json=_snapshot_json(snapshot),
         created_at=datetime.utcnow(),
     )
@@ -65,6 +71,11 @@ def save_decision_snapshot(db, snapshot):
     _ensure_snapshot_tables(db)
     existing = _get_existing_decision_snapshot(db, snapshot)
     if existing is not None:
+        generation_id = snapshot.get("data_generation_id")
+        if generation_id and existing.data_generation_id != generation_id:
+            existing.data_generation_id = generation_id
+            existing.snapshot_json = _snapshot_json(snapshot)
+            commit_or_rollback(db)
         return existing
 
     record = DecisionSnapshot(
@@ -79,6 +90,7 @@ def save_decision_snapshot(db, snapshot):
         confidence=snapshot.get("confidence"),
         regime=snapshot.get("regime"),
         thesis_id=snapshot.get("thesis_id"),
+        data_generation_id=snapshot.get("data_generation_id"),
         snapshot_json=_snapshot_json(snapshot),
         created_at=datetime.utcnow(),
     )
@@ -129,6 +141,34 @@ def get_decision_snapshot_as_of(db, symbol, timeframe, as_of_timestamp, decision
         DecisionSnapshot.effective_timestamp.desc(),
         DecisionSnapshot.id.desc(),
     ).first()
+
+
+def list_decision_snapshots(
+    db,
+    *,
+    decision_version=None,
+    symbol=None,
+    created_after=None,
+    limit=10000,
+):
+    _ensure_snapshot_tables(db)
+    query = db.query(DecisionSnapshot)
+
+    if decision_version:
+        query = query.filter(DecisionSnapshot.decision_version == decision_version)
+    if symbol:
+        query = query.filter(DecisionSnapshot.symbol == symbol)
+    if created_after:
+        query = query.filter(DecisionSnapshot.created_at >= _to_naive_utc(created_after))
+
+    return (
+        query.order_by(
+            DecisionSnapshot.created_at.desc(),
+            DecisionSnapshot.id.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
 
 
 def _get_existing_feature_snapshot(db, snapshot):

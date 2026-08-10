@@ -3,6 +3,7 @@ from datetime import datetime
 
 from app.database.models.automation_settings import AutomationSetting
 from app.database.models.automation_settings import AutomationSettingsAudit
+from app.governance.evidence_policy import r0_runtime_policy
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 
@@ -137,6 +138,7 @@ def automation_settings_payload(row):
         "liveExecutionEnabled": False,
         "version": int(row.version or 1),
         "updatedAt": row.updated_at,
+        "governance": r0_runtime_policy(),
     }
 
 

@@ -56,6 +56,7 @@ class RiskRepository:
                 "source_timestamp": data.get("source_timestamp"),
                 "effective_timestamp": data.get("effective_timestamp"),
                 "reason": data.get("reason"),
+                "data_generation_id": data.get("data_generation_id"),
             }
 
             for column_name, value in optional_fields.items():
@@ -84,9 +85,7 @@ class RiskRepository:
                     commit=False,
                 )
 
-            persist_decision_snapshot(
-                db,
-                build_decision_snapshot(
+            decision_snapshot = build_decision_snapshot(
                     data["symbol"],
                     data.get("timeframe") or "5m",
                     decision=data.get("decision"),
@@ -130,8 +129,9 @@ class RiskRepository:
                         ),
                         "trade_plan_id": data.get("trade_plan_id"),
                     },
-                ),
             )
+            decision_snapshot["data_generation_id"] = data.get("data_generation_id")
+            persist_decision_snapshot(db, decision_snapshot)
 
             db.flush()
 

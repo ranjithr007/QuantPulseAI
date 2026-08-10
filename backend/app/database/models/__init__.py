@@ -1,4 +1,3 @@
-from socket import fromshare
 from .symbols import Symbol
 
 from .market_candles import MarketCandle
@@ -8,6 +7,8 @@ from .ai_signals import AISignal
 
 from .funding_rates import FundingRate
 from .open_interest import OpenInterest
+from .futures_mark_prices import FuturesMarkPrice
+from .futures_margin_brackets import FuturesMarginBracket
 
 from .liquidations import Liquidation
 
@@ -44,3 +45,4 @@ from .risk_signal import RiskSignal
 from .risk_decision import RiskDecision
 from .paper_trade import PaperTrade
 from .automation_settings import AutomationSetting, AutomationSettingsAudit
+from .pipeline_runs import PipelineRun, JobRun

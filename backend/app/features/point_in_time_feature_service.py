@@ -223,10 +223,12 @@ def build_point_in_time_leakage_diagnostics(
 def build_features_as_of(db, symbol, timeframe, as_of_timestamp, *, limit=200):
     snapshot = get_feature_snapshot_as_of(db, symbol, timeframe, as_of_timestamp)
     if snapshot is not None:
+        snapshot_json = getattr(snapshot, "snapshot_json", None)
         try:
-            return json.loads(snapshot.snapshot_json)
+            if isinstance(snapshot_json, (str, bytes, bytearray)):
+                return json.loads(snapshot_json)
         except (TypeError, ValueError, AttributeError):
-            return None
+            pass
 
     candles = get_candles_as_of(db, symbol, timeframe, as_of_timestamp, limit=limit)
     if not candles:

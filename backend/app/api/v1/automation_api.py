@@ -8,6 +8,7 @@ from app.repositories.automation_settings_repository import list_automation_audi
 from app.repositories.automation_settings_repository import set_emergency_stop
 from app.repositories.automation_settings_repository import update_automation_settings
 from app.utils.network_resilience import summarize_network_error
+from app.contracts.control import AutomationEnvelope
 
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
@@ -40,7 +41,7 @@ def _automation_error_payload(operation: str, exc: Exception):
     }
 
 
-@router.get("/settings")
+@router.get("/settings", response_model=AutomationEnvelope)
 def read_automation_settings():
     db = SessionLocal()
     try:
@@ -55,7 +56,7 @@ def read_automation_settings():
         db.close()
 
 
-@router.put("/settings")
+@router.put("/settings", response_model=AutomationEnvelope)
 def write_automation_settings(
     payload: AutomationSettingsUpdate,
     actor: str = Query(default="local_ui", max_length=80),
@@ -75,7 +76,7 @@ def write_automation_settings(
         db.close()
 
 
-@router.post("/emergency-stop")
+@router.post("/emergency-stop", response_model=AutomationEnvelope)
 def write_emergency_stop(
     payload: EmergencyStopUpdate,
     actor: str = Query(default="local_ui", max_length=80),
@@ -95,7 +96,7 @@ def write_emergency_stop(
         db.close()
 
 
-@router.get("/audit")
+@router.get("/audit", response_model=AutomationEnvelope)
 def read_automation_audit(limit: int = Query(default=50, ge=1, le=200)):
     db = SessionLocal()
     try:

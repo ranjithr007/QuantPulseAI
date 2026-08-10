@@ -1,7 +1,19 @@
-from fastapi import APIRouter, Query
+import json
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Body, Query
 from sqlalchemy.exc import SQLAlchemyError
+from app.contracts.bundle import PaperTradeBundleResponse
+from app.contracts.control import PaperTradeExecutionResponse
 
 from app.api.v1.derivatives_api import build_derivatives_payload
+from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
+from app.backtesting.walk_forward_validator import PHASE2_VALIDATION_CONTRACT_VERSION
+from app.backtesting.walk_forward_validator import is_phase2_official_timeframe
+from app.database.models.paper_trade import PaperTrade
+from app.database.models.risk_decision import RiskDecision
+from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.measurement import MeasurementGates
@@ -12,13 +24,21 @@ from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.paper_trading.validation_policy import build_architecture_paper_gate
 from app.risk.risk_engine import RiskEngine
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.data_quality_event_repository import DataQualityEventRepository
+from app.repositories.point_in_time_snapshot_repository import list_decision_snapshots
 from app.repositories.risk_repository import RiskRepository
+from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
 from app.utils.freshness import freshness_status
 
 
 router = APIRouter(prefix="/paper-trade", tags=["Paper Trade"])
 risk_engine = RiskEngine()
+PHASE2_OPPORTUNITY_DECISION_VERSION = "phase2_opportunity_ledger_v1"
+PHASE2_RECOVERY_EVENT_SOURCE = "phase2_supervisor"
+PHASE2_RECOVERY_EVENT_CATEGORY = "OPPORTUNITY_COVERAGE_RECOVERY"
+PHASE2_CHECKPOINT_EVENT_SOURCE = "phase2_daily_checkpoint"
+PHASE2_CHECKPOINT_EVENT_CATEGORY = "PHASE2_DAILY_EVIDENCE"
 
 
 def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
@@ -108,7 +128,9 @@ def get_paper_trade_measurement(
 
     try:
         normalized_symbol = symbol.upper() if symbol else None
-        trades = PaperTradeRepository().all_trades(db, symbol=normalized_symbol)
+        trades = _official_timeframe_records(
+            PaperTradeRepository().all_trades(db, symbol=normalized_symbol)
+        )
         attach_scenario_context(db, trades)
         attach_regime_outcome_context(db, trades)
         report = build_measurement_report(
@@ -123,6 +145,7 @@ def get_paper_trade_measurement(
                 min_cohort_closed_trades=min_cohort_closed_trades,
             ),
         )
+        report["evidence_scope"] = _phase2_evidence_scope()
         return {
             "source": "extended_paper_trade_measurement",
             "symbol_filter": normalized_symbol,
@@ -139,7 +162,345 @@ def get_paper_trade_measurement(
         db.close()
 
 
-@router.get("/bundle")
+@router.get("/opportunities")
+def get_phase2_opportunity_accounting(
+    symbol: str | None = Query(default=None),
+    since_hours: int = Query(default=24, ge=1, le=2160),
+    scheduler_grace_minutes: int = Query(default=15, ge=0, le=120),
+    limit: int = Query(default=10000, ge=1, le=100000),
+):
+    db = SessionLocal()
+
+    try:
+        normalized_symbol = symbol.upper() if symbol else None
+        created_after = datetime.utcnow() - timedelta(hours=since_hours)
+        records = list_decision_snapshots(
+            db,
+            decision_version=PHASE2_OPPORTUNITY_DECISION_VERSION,
+            symbol=normalized_symbol,
+            created_after=created_after,
+            limit=limit,
+        )
+        expected_symbols = (
+            [normalized_symbol]
+            if normalized_symbol
+            else [
+                item.symbol
+                for item in SymbolRepository().get_active_symbols(db)
+            ]
+        )
+        return _phase2_opportunity_report(
+            records,
+            normalized_symbol,
+            since_hours,
+            limit,
+            expected_symbols,
+            scheduler_grace_minutes,
+        )
+    except SQLAlchemyError:
+        return {
+            "source": "phase2_opportunity_accounting",
+            "status": "UNAVAILABLE",
+            "symbol_filter": symbol.upper() if symbol else None,
+            "detail": "Opportunity accounting is unavailable because the database is not reachable.",
+        }
+    finally:
+        db.close()
+
+
+@router.get("/lifecycle-funnel")
+def get_phase2_lifecycle_funnel(
+    symbol: str | None = Query(default=None),
+    since_hours: int = Query(default=24, ge=1, le=2160),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    """Expose the live Phase 2 path without manufacturing execution events."""
+    db = SessionLocal()
+    normalized_symbol = symbol.upper() if symbol else None
+    cutoff = datetime.utcnow() - timedelta(hours=since_hours)
+
+    try:
+        opportunity_records = list_decision_snapshots(
+            db,
+            decision_version=PHASE2_OPPORTUNITY_DECISION_VERSION,
+            symbol=normalized_symbol,
+            created_after=cutoff,
+            limit=100000,
+        )
+        expected_symbols = (
+            [normalized_symbol]
+            if normalized_symbol
+            else [item.symbol for item in SymbolRepository().get_active_symbols(db)]
+        )
+        opportunity = _phase2_opportunity_report(
+            opportunity_records,
+            normalized_symbol,
+            since_hours,
+            100000,
+            expected_symbols,
+            15,
+        )
+
+        plan_query = db.query(TradePlan).filter(TradePlan.created_at >= cutoff)
+        trade_query = db.query(PaperTrade).filter(PaperTrade.created_at >= cutoff)
+        if normalized_symbol:
+            plan_query = plan_query.filter(TradePlan.symbol == normalized_symbol)
+            trade_query = trade_query.filter(PaperTrade.symbol == normalized_symbol)
+
+        plans = _official_timeframe_records(plan_query.all())
+        paper_trades = _official_timeframe_records(trade_query.all())
+        _, candidates = build_paper_trade_candidates(
+            db,
+            normalized_symbol,
+            stale_after_seconds,
+        )
+        approved_candidates = [
+            item
+            for item in candidates
+            if (item.get("risk_decision") or {}).get("decision") == "APPROVE"
+        ]
+        eligible_candidates = [item for item in candidates if item.get("eligible")]
+        candidate_blocks = Counter(
+            reason
+            for item in candidates
+            for reason in item.get("blocked_reasons") or []
+        )
+
+        open_trades = [item for item in paper_trades if item.status == "OPEN"]
+        closed_trades = [item for item in paper_trades if item.status == "CLOSED"]
+        status, next_action = _phase2_lifecycle_state(
+            opportunity,
+            plans,
+            approved_candidates,
+            eligible_candidates,
+            open_trades,
+        )
+        return {
+            "source": "phase2_paper_trade_lifecycle_funnel",
+            "status": status,
+            "next_action": next_action,
+            "symbol_filter": normalized_symbol,
+            "window_hours": since_hours,
+            "evidence_scope": _phase2_evidence_scope(),
+            "coverage": opportunity.get("coverage"),
+            "stages": [
+                {"key": "evaluated", "label": "Evaluated", "count": opportunity.get("total_evaluations", 0)},
+                {
+                    "key": "ready",
+                    "label": "Current READY",
+                    "count": opportunity.get("actionable_ready_count", 0),
+                },
+                {"key": "queued", "label": "Queued plans", "count": len(plans)},
+                {"key": "risk_approved", "label": "Risk approved", "count": len(approved_candidates)},
+                {"key": "executor_ready", "label": "Executor ready", "count": len(eligible_candidates)},
+                {"key": "open", "label": "Open trades", "count": len(open_trades)},
+                {"key": "closed", "label": "Closed trades", "count": len(closed_trades)},
+            ],
+            "current": {
+                "actionable_ready": opportunity.get("actionable_ready_count", 0),
+                "open_plans": sum(1 for item in plans if item.status == "OPEN"),
+                "candidate_count": len(candidates),
+                "eligible_candidates": len(eligible_candidates),
+                "open_trades": len(open_trades),
+            },
+            "blockers": {
+                "opportunity": opportunity.get("by_block_reason") or {},
+                "executor": dict(candidate_blocks.most_common()),
+            },
+        }
+    except SQLAlchemyError:
+        return {
+            "source": "phase2_paper_trade_lifecycle_funnel",
+            "status": "UNAVAILABLE",
+            "next_action": "Restore canonical SQL Server evidence storage.",
+            "symbol_filter": normalized_symbol,
+            "window_hours": since_hours,
+            "stages": [],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/rolling-validation")
+def get_phase2_rolling_validation(
+    symbol: str | None = Query(default=None),
+):
+    db = SessionLocal()
+    normalized_symbol = symbol.upper() if symbol else None
+
+    try:
+        return {
+            "source": "phase2_rolling_paper_validation",
+            "status": "OK",
+            "symbol_filter": normalized_symbol,
+            "evidence_scope": _phase2_evidence_scope(),
+            "windows": [
+                _build_phase2_rolling_window(db, normalized_symbol, days)
+                for days in (7, 30)
+            ],
+        }
+    except SQLAlchemyError:
+        return {
+            "source": "phase2_rolling_paper_validation",
+            "status": "UNAVAILABLE",
+            "symbol_filter": normalized_symbol,
+            "windows": [],
+        }
+    finally:
+        db.close()
+
+
+@router.post("/recovery-events")
+def record_phase2_recovery_event(payload: dict = Body(...)):
+    db = SessionLocal()
+
+    try:
+        status = str(payload.get("status") or "UNKNOWN").upper()[:20]
+        blocked = status in {"UNRESOLVED", "RETRY_FAILED"}
+        severity = "error" if blocked else "info" if status == "RECOVERED" else "warning"
+        records = DataQualityEventRepository().record_events(
+            db,
+            [
+                {
+                    "symbol": "SYSTEM",
+                    "timeframe": "1h",
+                    "source": PHASE2_RECOVERY_EVENT_SOURCE,
+                    "category": PHASE2_RECOVERY_EVENT_CATEGORY,
+                    "severity": severity,
+                    "status": status,
+                    "blocked": blocked,
+                    "reason": payload.get("reason") or "Phase 2 coverage recovery event",
+                    "details": {
+                        "gap_signature": payload.get("gap_signature"),
+                        "missing_before": payload.get("missing_before"),
+                        "missing_after": payload.get("missing_after"),
+                        "repair_action": payload.get("repair_action"),
+                        "error": payload.get("error"),
+                    },
+                    "observed_at": payload.get("observed_at"),
+                    "effective_at": payload.get("effective_at") or payload.get("observed_at"),
+                }
+            ],
+        )
+        return {
+            "source": "phase2_recovery_history",
+            "status": "RECORDED",
+            "record": records[0] if records else None,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/recovery-events")
+def get_phase2_recovery_events(
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    db = SessionLocal()
+
+    try:
+        records = DataQualityEventRepository().list_events(
+            db,
+            source=PHASE2_RECOVERY_EVENT_SOURCE,
+            category=PHASE2_RECOVERY_EVENT_CATEGORY,
+            limit=limit,
+        )
+        outcomes = Counter(item["status"] for item in records)
+        return {
+            "source": "phase2_recovery_history",
+            "status": "OK",
+            "count": len(records),
+            "summary": {
+                "attempts": outcomes.get("ATTEMPTED", 0),
+                "recovered": outcomes.get("RECOVERED", 0),
+                "unresolved": outcomes.get("UNRESOLVED", 0),
+                "retry_failed": outcomes.get("RETRY_FAILED", 0),
+                "by_outcome": dict(outcomes),
+            },
+            "latest": records[0] if records else None,
+            "records": records,
+        }
+    finally:
+        db.close()
+
+
+@router.post("/evidence-checkpoints")
+def create_phase2_evidence_checkpoint(payload: dict = Body(default={})):
+    db = SessionLocal()
+
+    try:
+        checkpoint_date = str(
+            payload.get("checkpoint_date") or datetime.utcnow().date().isoformat()
+        )[:10]
+        event_repo = DataQualityEventRepository()
+        existing = _find_phase2_checkpoint(
+            event_repo.list_events(
+                db,
+                source=PHASE2_CHECKPOINT_EVENT_SOURCE,
+                category=PHASE2_CHECKPOINT_EVENT_CATEGORY,
+                limit=500,
+            ),
+            checkpoint_date,
+        )
+        if existing:
+            return {
+                "source": "phase2_daily_evidence_checkpoint",
+                "status": "EXISTS",
+                "record": existing,
+            }
+
+        checkpoint = _build_phase2_evidence_checkpoint(db, checkpoint_date)
+        records = event_repo.record_events(
+            db,
+            [
+                {
+                    "symbol": "SYSTEM",
+                    "timeframe": "1d",
+                    "source": PHASE2_CHECKPOINT_EVENT_SOURCE,
+                    "category": PHASE2_CHECKPOINT_EVENT_CATEGORY,
+                    "severity": "error" if checkpoint["status"] == "ATTENTION" else "info",
+                    "status": checkpoint["status"],
+                    "blocked": checkpoint["status"] == "ATTENTION",
+                    "reason": checkpoint["reason"],
+                    "details": checkpoint,
+                    "observed_at": payload.get("observed_at"),
+                    "effective_at": payload.get("observed_at"),
+                }
+            ],
+        )
+        return {
+            "source": "phase2_daily_evidence_checkpoint",
+            "status": "RECORDED",
+            "record": records[0] if records else None,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/evidence-checkpoints")
+def get_phase2_evidence_checkpoints(
+    limit: int = Query(default=30, ge=1, le=365),
+):
+    db = SessionLocal()
+
+    try:
+        records = DataQualityEventRepository().list_events(
+            db,
+            source=PHASE2_CHECKPOINT_EVENT_SOURCE,
+            category=PHASE2_CHECKPOINT_EVENT_CATEGORY,
+            limit=limit,
+        )
+        return {
+            "source": "phase2_daily_evidence_checkpoint",
+            "status": "OK",
+            "count": len(records),
+            "latest": records[0] if records else None,
+            "records": records,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/bundle", response_model=PaperTradeBundleResponse)
 def get_paper_trade_bundle(symbol: str | None = Query(default=None)):
     db = SessionLocal()
 
@@ -263,7 +624,7 @@ def get_paper_trade_fill_model(
     }
 
 
-@router.post("/execute-candidates")
+@router.post("/execute-candidates", response_model=PaperTradeExecutionResponse)
 def execute_paper_trade_candidates(
     symbol: str | None = Query(default=None),
     stale_after_seconds: int = Query(default=900, ge=1),
@@ -357,7 +718,9 @@ def build_paper_trade_candidates(
 ):
     trade_repo = TradePlanRepository()
     risk_repo = RiskRepository()
-    trades = trades if trades is not None else trade_repo.get_open_trades(db)
+    trades = _official_timeframe_records(
+        trades if trades is not None else trade_repo.get_open_trades(db)
+    )
 
     if symbol:
         normalized_symbol = symbol.upper()
@@ -394,6 +757,457 @@ def build_paper_trade_candidates(
     return normalized_symbol, records
 
 
+def _official_timeframe_records(records):
+    return [
+        record
+        for record in (records or [])
+        if is_phase2_official_timeframe(getattr(record, "entry_timeframe", None))
+    ]
+
+
+def _phase2_evidence_scope():
+    return {
+        "market": "FUTURES",
+        "mode": "intraday",
+        "entry_timeframes": sorted(PHASE2_OFFICIAL_TIMEFRAMES),
+        "excluded_legacy_timeframes": ["5m", "15m"],
+    }
+
+
+def _phase2_lifecycle_state(
+    opportunity,
+    plans,
+    approved_candidates,
+    eligible_candidates,
+    open_trades,
+):
+    coverage = opportunity.get("coverage") or {}
+    if coverage.get("status") == "GAPS_DETECTED":
+        return "COVERAGE_GAP", "Recover missing scheduled opportunity evaluations."
+    if open_trades:
+        return "MONITORING", "Monitor open paper trades through deterministic exit handling."
+    if eligible_candidates:
+        return "EXECUTOR_READY", "Run the paper executor; candidate passed all current gates."
+    if approved_candidates:
+        return "EXECUTOR_BLOCKED", "Resolve the candidate-level executor blockers."
+    if plans:
+        return "RISK_PENDING", "Wait for or repair the matching risk decision."
+    if opportunity.get("actionable_ready_count", 0) > 0:
+        return "QUEUE_PENDING", "Persist the live READY setup as an official trade plan."
+    return (
+        "WAITING_FOR_READY",
+        "Continue scheduled 1h/4h/1d evaluation until a setup is READY.",
+    )
+
+
+def _build_phase2_rolling_window(db, symbol, days):
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    opportunity_records = list_decision_snapshots(
+        db,
+        decision_version=PHASE2_OPPORTUNITY_DECISION_VERSION,
+        symbol=symbol,
+        created_after=cutoff,
+        limit=100000,
+    )
+    expected_symbols = (
+        [symbol]
+        if symbol
+        else [item.symbol for item in SymbolRepository().get_active_symbols(db)]
+    )
+    opportunity = _phase2_opportunity_report(
+        opportunity_records,
+        symbol,
+        days * 24,
+        100000,
+        expected_symbols,
+        15,
+    )
+
+    plan_query = db.query(TradePlan).filter(TradePlan.created_at >= cutoff)
+    risk_query = db.query(RiskDecision).filter(RiskDecision.created_at >= cutoff)
+    trade_query = db.query(PaperTrade).filter(PaperTrade.created_at >= cutoff)
+    if symbol:
+        plan_query = plan_query.filter(TradePlan.symbol == symbol)
+        risk_query = risk_query.filter(RiskDecision.symbol == symbol)
+        trade_query = trade_query.filter(PaperTrade.symbol == symbol)
+
+    plans = _official_timeframe_records(plan_query.all())
+    risks = risk_query.all()
+    trades = _official_timeframe_records(trade_query.all())
+    approved_plan_count = sum(
+        1
+        for plan in plans
+        if any(_risk_approves_plan(risk, plan) for risk in risks)
+    )
+    attach_scenario_context(db, trades)
+    attach_regime_outcome_context(db, trades)
+    measurement = build_measurement_report(trades)
+    overall = measurement["overall"]
+    evaluated = opportunity.get("total_evaluations", 0)
+    ready = opportunity.get("ready_count", 0)
+    queued = len(plans)
+    executed = len(trades)
+    closed = overall.get("closed_trades", 0)
+
+    return {
+        "days": days,
+        "start_at": cutoff,
+        "status": measurement.get("status"),
+        "coverage": _rolling_coverage_summary(opportunity.get("coverage")),
+        "stages": {
+            "evaluated": evaluated,
+            "ready": ready,
+            "queued": queued,
+            "risk_approved": approved_plan_count,
+            "executed": executed,
+            "closed": closed,
+        },
+        "conversion": {
+            "ready_rate_percent": _conversion_percent(ready, evaluated),
+            "ready_to_queue_percent": _conversion_percent(queued, ready),
+            "queue_to_risk_approval_percent": _conversion_percent(
+                approved_plan_count,
+                queued,
+            ),
+            "risk_approval_to_execution_percent": _conversion_percent(
+                executed,
+                approved_plan_count,
+            ),
+            "execution_to_close_percent": _conversion_percent(closed, executed),
+        },
+        "performance": overall,
+        "cohorts": measurement.get("cohorts"),
+    }
+
+
+def _risk_approves_plan(risk, plan):
+    return (
+        risk.decision == "APPROVE"
+        and risk.signal == plan.side
+        and risk.symbol == plan.symbol
+        and (risk.created_at is None or plan.created_at is None or risk.created_at >= plan.created_at)
+        and _same_price(risk.entry_price, plan.entry_price)
+        and _same_price(risk.stop_loss, plan.stop_loss)
+        and _same_price(risk.target1, plan.target1)
+    )
+
+
+def _conversion_percent(numerator, denominator):
+    return round((numerator / denominator) * 100, 2) if denominator else None
+
+
+def _rolling_coverage_summary(coverage):
+    if not coverage:
+        return None
+    return {
+        key: coverage.get(key)
+        for key in (
+            "status",
+            "coverage_percent",
+            "expected_evaluations",
+            "recorded_evaluations",
+            "missing_evaluations",
+            "first_expected_candle",
+            "latest_expected_candle",
+        )
+    }
+
+
+def _phase2_opportunity_report(
+    records,
+    symbol_filter,
+    since_hours,
+    limit,
+    expected_symbols,
+    scheduler_grace_minutes,
+):
+    decisions = Counter()
+    block_reasons = Counter()
+    symbols = Counter()
+    timeframes = Counter()
+    latest = []
+
+    for record in records:
+        try:
+            snapshot = json.loads(record.snapshot_json or "{}")
+        except (TypeError, ValueError):
+            snapshot = {}
+
+        decision = (record.decision or "UNKNOWN").upper()
+        decisions[decision] += 1
+        symbols[record.symbol] += 1
+        timeframes[record.timeframe] += 1
+        context = snapshot.get("context") or {}
+        failed_conditions = context.get("failed_conditions") or []
+        trigger = snapshot.get("signal") or {}
+        accounting_reasons = [
+            reason
+            for reason in failed_conditions
+            if reason
+        ]
+        if decision != "READY" and not accounting_reasons:
+            trigger_reason = context.get("trigger_reason") or trigger.get("reason")
+            if trigger_reason:
+                accounting_reasons.append(trigger_reason)
+        block_reasons.update(accounting_reasons)
+        latest.append(
+            {
+                "id": record.id,
+                "symbol": record.symbol,
+                "timeframe": record.timeframe,
+                "decision": decision,
+                "confidence": record.confidence,
+                "regime": record.regime,
+                "quality_state": record.quality_state,
+                "trigger_reason": context.get("trigger_reason") or trigger.get("reason"),
+                "failed_conditions": failed_conditions,
+                "effective_timestamp": record.effective_timestamp,
+                "recorded_at": record.created_at,
+            }
+        )
+
+    total = len(records)
+    ready_count = decisions.get("READY", 0)
+    coverage = _phase2_opportunity_coverage(
+        records,
+        expected_symbols,
+        scheduler_grace_minutes,
+    )
+    latest_expected_slot = coverage.get("latest_expected_candle")
+    actionable_ready_count = sum(
+        1
+        for record in records
+        if (record.decision or "").upper() == "READY"
+        and record.effective_timestamp == latest_expected_slot
+    )
+    return {
+        "source": "phase2_opportunity_accounting",
+        "status": "OK",
+        "decision_version": PHASE2_OPPORTUNITY_DECISION_VERSION,
+        "evidence_scope": _phase2_evidence_scope(),
+        "symbol_filter": symbol_filter,
+        "window_hours": since_hours,
+        "limit": limit,
+        "coverage": coverage,
+        "total_evaluations": total,
+        "ready_count": ready_count,
+        "actionable_ready_count": actionable_ready_count,
+        "blocked_count": total - ready_count,
+        "ready_rate_percent": round((ready_count / total) * 100, 2) if total else 0,
+        "by_decision": dict(decisions),
+        "by_block_reason": dict(block_reasons.most_common()),
+        "by_symbol": dict(symbols),
+        "by_entry_timeframe": dict(timeframes),
+        "latest": latest[:100],
+    }
+
+
+def _phase2_opportunity_coverage(
+    records,
+    expected_symbols,
+    scheduler_grace_minutes,
+):
+    expected_symbols = sorted(set(expected_symbols or []))
+    eligible_records = [
+        record
+        for record in records
+        if record.timeframe == "1h"
+        and record.effective_timestamp is not None
+        and record.symbol in expected_symbols
+    ]
+
+    base = {
+        "scope": "ACTIVE_FUTURES_SYMBOLS_X_CLOSED_1H_CANDLES",
+        "scheduler_grace_minutes": scheduler_grace_minutes,
+        "expected_symbols": expected_symbols,
+        "expected_symbol_count": len(expected_symbols),
+    }
+    if not expected_symbols:
+        return {
+            **base,
+            "status": "NO_ACTIVE_SYMBOLS",
+            "coverage_percent": 0,
+            "expected_evaluations": 0,
+            "recorded_evaluations": 0,
+            "missing_evaluations": 0,
+            "missing": [],
+        }
+    if not eligible_records:
+        return {
+            **base,
+            "status": "NOT_STARTED",
+            "coverage_percent": 0,
+            "expected_evaluations": 0,
+            "recorded_evaluations": 0,
+            "missing_evaluations": 0,
+            "missing": [],
+        }
+
+    first_slot = min(record.effective_timestamp for record in eligible_records)
+    grace_cutoff = datetime.utcnow() - timedelta(minutes=scheduler_grace_minutes)
+    latest_eligible_slot = (
+        grace_cutoff.replace(minute=0, second=0, microsecond=0)
+        - timedelta(hours=1)
+    )
+    if latest_eligible_slot < first_slot:
+        return {
+            **base,
+            "status": "WAITING_FOR_GRACE_PERIOD",
+            "coverage_percent": 100,
+            "first_expected_candle": first_slot,
+            "latest_expected_candle": None,
+            "expected_evaluations": 0,
+            "recorded_evaluations": 0,
+            "missing_evaluations": 0,
+            "missing": [],
+        }
+
+    expected_slots = []
+    current_slot = first_slot
+    while current_slot <= latest_eligible_slot:
+        expected_slots.append(current_slot)
+        current_slot += timedelta(hours=1)
+
+    observed_by_slot = defaultdict(set)
+    for record in eligible_records:
+        observed_by_slot[record.effective_timestamp].add(record.symbol)
+
+    missing = []
+    recorded_evaluations = 0
+    for slot in expected_slots:
+        observed_symbols = observed_by_slot.get(slot, set())
+        recorded_evaluations += len(observed_symbols.intersection(expected_symbols))
+        missing_symbols = [
+            symbol
+            for symbol in expected_symbols
+            if symbol not in observed_symbols
+        ]
+        if missing_symbols:
+            missing.append(
+                {
+                    "effective_timestamp": slot,
+                    "symbols": missing_symbols,
+                    "missing_count": len(missing_symbols),
+                }
+            )
+
+    expected_evaluations = len(expected_slots) * len(expected_symbols)
+    missing_evaluations = max(0, expected_evaluations - recorded_evaluations)
+    coverage_percent = (
+        round((recorded_evaluations / expected_evaluations) * 100, 2)
+        if expected_evaluations
+        else 100
+    )
+    return {
+        **base,
+        "status": "COMPLETE" if missing_evaluations == 0 else "GAPS_DETECTED",
+        "coverage_percent": coverage_percent,
+        "first_expected_candle": first_slot,
+        "latest_expected_candle": latest_eligible_slot,
+        "expected_candle_count": len(expected_slots),
+        "expected_evaluations": expected_evaluations,
+        "recorded_evaluations": recorded_evaluations,
+        "missing_evaluations": missing_evaluations,
+        "missing": missing[:100],
+    }
+
+
+def _find_phase2_checkpoint(records, checkpoint_date):
+    return next(
+        (
+            record
+            for record in records
+            if (record.get("details") or {}).get("checkpoint_date") == checkpoint_date
+        ),
+        None,
+    )
+
+
+def _build_phase2_evidence_checkpoint(db, checkpoint_date):
+    created_after = datetime.utcnow() - timedelta(hours=24)
+    opportunity_records = list_decision_snapshots(
+        db,
+        decision_version=PHASE2_OPPORTUNITY_DECISION_VERSION,
+        created_after=created_after,
+        limit=10000,
+    )
+    expected_symbols = [
+        item.symbol
+        for item in SymbolRepository().get_active_symbols(db)
+    ]
+    opportunity = _phase2_opportunity_report(
+        opportunity_records,
+        None,
+        24,
+        10000,
+        expected_symbols,
+        15,
+    )
+
+    recovery_records = DataQualityEventRepository().list_events(
+        db,
+        source=PHASE2_RECOVERY_EVENT_SOURCE,
+        category=PHASE2_RECOVERY_EVENT_CATEGORY,
+        limit=500,
+    )
+    recovery_outcomes = Counter(item["status"] for item in recovery_records)
+
+    trades = _official_timeframe_records(PaperTradeRepository().all_trades(db))
+    attach_scenario_context(db, trades)
+    attach_regime_outcome_context(db, trades)
+    measurement = build_measurement_report(trades, gates=MeasurementGates())
+    overall = measurement.get("overall") or {}
+    coverage = opportunity.get("coverage") or {}
+
+    if coverage.get("status") == "GAPS_DETECTED" or measurement.get("status") == "FAIL":
+        status = "ATTENTION"
+        reason = "Phase 2 evidence requires attention."
+    elif measurement.get("status") == "PASS" and coverage.get("status") == "COMPLETE":
+        status = "PASS"
+        reason = "Phase 2 daily evidence meets current promotion gates."
+    else:
+        status = "PENDING"
+        reason = "Phase 2 evidence is accumulating and has not reached promotion depth."
+
+    return {
+        "checkpoint_date": checkpoint_date,
+        "status": status,
+        "reason": reason,
+        "generated_at": datetime.utcnow(),
+        "evidence_scope": _phase2_evidence_scope(),
+        "opportunity": {
+            "total_evaluations": opportunity.get("total_evaluations", 0),
+            "ready_count": opportunity.get("ready_count", 0),
+            "blocked_count": opportunity.get("blocked_count", 0),
+            "ready_rate_percent": opportunity.get("ready_rate_percent", 0),
+            "by_block_reason": opportunity.get("by_block_reason") or {},
+            "coverage": coverage,
+        },
+        "recovery": {
+            "event_count": len(recovery_records),
+            "attempts": recovery_outcomes.get("ATTEMPTED", 0),
+            "recovered": recovery_outcomes.get("RECOVERED", 0),
+            "unresolved": recovery_outcomes.get("UNRESOLVED", 0),
+            "retry_failed": recovery_outcomes.get("RETRY_FAILED", 0),
+            "latest": recovery_records[0] if recovery_records else None,
+        },
+        "measurement": {
+            "status": measurement.get("status"),
+            "closed_trades": overall.get("closed_trades", 0),
+            "observation_days": overall.get("observation_days", 0),
+            "wins": overall.get("wins", 0),
+            "losses": overall.get("losses", 0),
+            "win_rate": overall.get("win_rate", 0),
+            "profit_factor": overall.get("profit_factor"),
+            "expectancy_percent": overall.get("expectancy_percent", 0),
+            "compounded_return_percent": overall.get("compounded_return_percent", 0),
+            "max_drawdown_percent": overall.get("max_drawdown_percent", 0),
+            "payoff_ratio": overall.get("payoff_ratio"),
+            "evaluation": measurement.get("evaluation") or {},
+        },
+    }
+
+
 def _paper_trade_payload(paper_trade, fill_profile=None):
     payload = {
         "id": paper_trade.id,
@@ -414,6 +1228,49 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "entry_timeframe": paper_trade.entry_timeframe,
         "timeframe_stack": paper_trade.timeframe_stack,
         "regime": paper_trade.regime,
+        "data_generation_id": getattr(paper_trade, "data_generation_id", None),
+        "validation_contract_version": getattr(
+            paper_trade,
+            "validation_contract_version",
+            None,
+        ),
+        "fill_model_version": getattr(paper_trade, "fill_model_version", None),
+        "planned_entry_price": getattr(paper_trade, "planned_entry_price", None),
+        "entry_slippage_percent": getattr(
+            paper_trade,
+            "entry_slippage_percent",
+            None,
+        ),
+        "exit_slippage_percent": getattr(
+            paper_trade,
+            "exit_slippage_percent",
+            None,
+        ),
+        "funding_rate_snapshot": getattr(
+            paper_trade,
+            "funding_rate_snapshot",
+            None,
+        ),
+        "funding_event_count": getattr(
+            paper_trade,
+            "funding_event_count",
+            None,
+        ),
+        "funding_cost_percent": getattr(
+            paper_trade,
+            "funding_cost_percent",
+            None,
+        ),
+        "open_interest_snapshot": getattr(
+            paper_trade,
+            "open_interest_snapshot",
+            None,
+        ),
+        "open_interest_change_percent": getattr(
+            paper_trade,
+            "open_interest_change_percent",
+            None,
+        ),
         "fee_bps": paper_trade.fee_bps,
         "fees_percent": paper_trade.fees_percent,
         "gross_pnl_percent": paper_trade.gross_pnl_percent,
@@ -461,6 +1318,7 @@ def _paper_trade_candidate(trade, risk, stale_after_seconds, derivatives=None):
         "side": trade.side,
         "eligible": not blocked_reasons,
         "blocked_reasons": blocked_reasons,
+        "validation_contract_version": PHASE2_VALIDATION_CONTRACT_VERSION,
         "trade_plan": _trade_plan_payload(trade),
         "risk_decision": risk_payload,
         "fill_profile": fill_profile,
@@ -484,6 +1342,7 @@ def _trade_plan_payload(trade):
         "entry_timeframe": getattr(trade, "entry_timeframe", None),
         "timeframe_stack": getattr(trade, "timeframe_stack", None),
         "regime": getattr(trade, "regime", None),
+        "data_generation_id": getattr(trade, "data_generation_id", None),
         "created_at": trade.created_at,
     }
 
@@ -558,6 +1417,11 @@ def _market_context_payload(symbol=None, derivatives=None):
         "market_type": "FUTURES",
         "instrument_type": "PERPETUAL",
         "venue": "BINANCE_FUTURES",
+        "fundingRate": (derivatives or {}).get("latest_funding_rate"),
+        "openInterest": (derivatives or {}).get("latest_open_interest"),
+        "openInterestChangePercent": (derivatives or {}).get(
+            "latest_open_interest_change_pct"
+        ),
         "fundingAvailable": funding_available,
         "openInterestAvailable": open_interest_available,
         "isReady": funding_available and open_interest_available,

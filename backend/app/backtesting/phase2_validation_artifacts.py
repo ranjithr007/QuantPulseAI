@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from app.governance.evidence_policy import govern_phase2_report
+
 
 def persist_phase2_validation_artifact(report, walk_forward_result, *, symbol, timeframe, signal, as_of=None):
     timestamp = _artifact_timestamp(as_of)
@@ -12,18 +14,23 @@ def persist_phase2_validation_artifact(report, walk_forward_result, *, symbol, t
     json_path = output_dir / f"{base_name}.json"
     md_path = output_dir / f"{base_name}.md"
 
+    saved_at = _as_datetime(as_of).isoformat()
+    governed_report = govern_phase2_report(report, recorded_at=saved_at)
     payload = {
-        "saved_at": _as_datetime(as_of).isoformat(),
+        "saved_at": saved_at,
         "scope": {
             "symbol": symbol,
             "timeframe": timeframe,
             "signal": signal,
         },
-        "report": report,
+        "report": governed_report,
         "walk_forward_result": walk_forward_result,
     }
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    md_path.write_text(_markdown_summary(report, symbol, timeframe, signal), encoding="utf-8")
+    md_path.write_text(
+        _markdown_summary(governed_report, symbol, timeframe, signal),
+        encoding="utf-8",
+    )
 
     return {
         "artifact_id": base_name,
@@ -33,8 +40,12 @@ def persist_phase2_validation_artifact(report, walk_forward_result, *, symbol, t
         "json_path": str(json_path),
         "markdown_path": str(md_path),
         "scope": payload["scope"],
-        "overall_status": dict(report or {}).get("overall_status"),
-        "architecture_gate_status": dict((report or {}).get("architecture_gate") or {}).get("status"),
+        "overall_status": governed_report.get("overall_status"),
+        "architecture_gate_status": dict(
+            governed_report.get("architecture_gate") or {}
+        ).get("status"),
+        "evidence_status": governed_report.get("evidence_status"),
+        "promotion_allowed": False,
     }
 
 
@@ -182,7 +193,14 @@ def _as_datetime(value):
 
 def _read_payload(json_path):
     try:
-        return json.loads(Path(json_path).read_text(encoding="utf-8"))
+        payload = json.loads(Path(json_path).read_text(encoding="utf-8"))
+        return {
+            **payload,
+            "report": govern_phase2_report(
+                payload.get("report") or {},
+                recorded_at=payload.get("saved_at"),
+            ),
+        }
     except (OSError, ValueError, TypeError):
         return None
 
@@ -197,6 +215,9 @@ def _history_record(json_path, payload):
         "scope": scope,
         "overall_status": report.get("overall_status"),
         "architecture_gate_status": dict(report.get("architecture_gate") or {}).get("status"),
+        "evidence_status": report.get("evidence_status"),
+        "promotion_allowed": report.get("promotion_allowed", False),
+        "promotion_status": report.get("promotion_status", "BLOCKED_R0"),
         "json_path": str(json_path),
         "markdown_path": str(markdown_path),
         "exists": Path(json_path).exists(),

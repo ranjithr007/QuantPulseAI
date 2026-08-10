@@ -4,6 +4,7 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+from app.utils.freshness import candle_freshness_timestamp
 from app.utils.freshness import freshness_status
 from app.utils.freshness import normalize_timestamp_to_utc
 
@@ -47,6 +48,20 @@ class Phase0FreshnessTests(unittest.TestCase):
         self.assertTrue(status["is_future"])
         self.assertGreater(status["future_by_seconds"], 60)
         self.assertEqual(status["data_age_seconds"], 0)
+
+    def test_candle_freshness_uses_close_boundary(self):
+        open_time = datetime.now(timezone.utc) - timedelta(minutes=83)
+        close_time = open_time + timedelta(hours=1)
+        candle = {
+            "candle_time": open_time,
+            "close_time": close_time,
+        }
+
+        timestamp = candle_freshness_timestamp(candle)
+        status = freshness_status(timestamp, stale_after_seconds=65 * 60)
+
+        self.assertEqual(timestamp, close_time)
+        self.assertFalse(status["is_stale"])
 
     def test_normalize_timestamp_to_utc_handles_aware_values(self):
         timestamp = datetime.now(timezone.utc)

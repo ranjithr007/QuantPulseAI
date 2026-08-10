@@ -19,6 +19,7 @@ import AdvancedTradingViewPanel from "./signal-details/AdvancedTradingViewPanel"
 import InfoLine from "./signal-details/InfoLine";
 import ProgressLine from "./signal-details/ProgressLine";
 import SignalQualityPanel from "./signal-details/SignalQualityPanel";
+import SignalValidationPanel from "./signal-details/SignalValidationPanel";
 import VolumePanel from "./signal-details/VolumePanel";
 import Pill from "./ui/Pill";
 import {
@@ -154,7 +155,10 @@ export default function SignalDetailsSection({
 
             <div className="grid gap-2.5 xl:grid-cols-2">
               <VolumePanel volumeSeries={volumeSeries} />
-              <SignalQualityPanel breakdown={selectedDetail.breakdown || []} />
+              <div className="space-y-2.5">
+                <SignalQualityPanel breakdown={selectedDetail.breakdown || []} />
+                <SignalValidationPanel checks={selectedDetail.validationBreakdown || []} />
+              </div>
             </div>
           </div>
 

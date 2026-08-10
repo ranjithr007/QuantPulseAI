@@ -2,15 +2,9 @@ from dataclasses import dataclass
 from importlib import import_module
 
 DEFAULT_JOB_IDS = [
-    "market",
-    "feature",
-    "regime",
-    "orderflow",
-    "smc",
-    "watchlist_persist",
-    "risk",
-    "paper_trade_execute",
-    "paper_trade_monitor",
+    "deterministic_pipeline",
+    "derivative",
+    "candle_completeness",
 ]
 
 
@@ -233,6 +227,16 @@ JOB_DEFINITIONS = {
         trigger="interval",
         seconds=120,
     ),
+    "deterministic_pipeline": SchedulerJobDefinition(
+        id="deterministic_pipeline",
+        name="Deterministic dependency-aware pipeline",
+        module="app.jobs.deterministic_pipeline_job",
+        function="run_deterministic_pipeline_job",
+        trigger="interval",
+        seconds=120,
+        max_instances=1,
+        coalesce=True,
+    ),
     "memory": SchedulerJobDefinition(
         id="memory",
         name="AI memory",
@@ -249,6 +253,16 @@ JOB_DEFINITIONS = {
         trigger="interval",
         minutes=1,
         max_instances=2,
+    ),
+    "candle_completeness": SchedulerJobDefinition(
+        id="candle_completeness",
+        name="Candle completeness monitor",
+        module="app.jobs.candle_completeness_job",
+        function="run_candle_completeness_job",
+        trigger="interval",
+        minutes=15,
+        max_instances=1,
+        coalesce=True,
     ),
 }
 

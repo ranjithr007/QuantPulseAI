@@ -5,7 +5,7 @@ from app.database.sqlserver import SessionLocal
 from app.engines.technical_engine import TechnicalEngine
 from app.engines.volatility_engine import VolatilityEngine
 from app.repositories.candle_repository import get_latest_candles
-from app.utils.freshness import freshness_status
+from app.utils.freshness import candle_freshness_timestamp, freshness_status
 
 
 router = APIRouter(prefix="/indicators", tags=["Indicators"])
@@ -21,7 +21,7 @@ def get_indicators(
     db = SessionLocal()
 
     try:
-        candles = list(reversed(get_latest_candles(db, symbol, timeframe, limit)))
+        candles = get_latest_candles(db, symbol, timeframe, limit)
 
         if not candles:
             return {
@@ -39,7 +39,10 @@ def get_indicators(
             "count": len(candles),
             "latest_close": latest.close_price,
             "latest_candle_time": latest.candle_time,
-            "freshness": freshness_status(latest.candle_time, stale_after_seconds),
+            "freshness": freshness_status(
+                candle_freshness_timestamp(latest),
+                stale_after_seconds,
+            ),
             "technical": TechnicalEngine().analyze(candles),
             "volatility": VolatilityEngine().analyze(candles),
         }

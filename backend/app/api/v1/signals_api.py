@@ -1,8 +1,19 @@
 import copy
 import threading
 import time
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
+from app.backtesting.point_in_time_intelligence import build_candle_intelligence_as_of
+from app.backtesting.replay_contract import build_point_in_time_stack
+from app.contracts.signals import SignalBatchResponse, SignalResponse
+from app.contracts.specialized import (
+    FrozenDecisionEvaluationRequest,
+    FrozenDecisionEvaluationResponse,
+    SymbolContextResponse,
+)
+from app.services.decision_evaluation_service import evaluate_frozen_decision
 
 from app.database.models.market_candles import MarketCandle
 from app.database.sqlserver import SessionLocal
@@ -16,6 +27,7 @@ from app.intelligence.scenario_engine import build_scenario_plan
 from app.intelligence.trade_setup_engine import build_entry_trigger_decision
 from app.intelligence.trade_setup_engine import build_trade_setup_decision
 from app.repositories.ai_signal_repository import AISignalRepository
+from app.repositories.candle_repository import get_candles_as_of
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.intelligence_repository import get_ai_inputs
@@ -30,7 +42,7 @@ from app.features.point_in_time_feature_service import persist_decision_snapshot
 from app.trading.trade_plan_engine import build_trade_plan
 from app.observability.performance_budget import LatencyBudget
 from app.observability.performance_budget import build_stage_latency_report
-from app.utils.freshness import freshness_status
+from app.utils.freshness import candle_freshness_timestamp, freshness_status
 from app.utils.freshness import stale_after_seconds_for_timeframe
 from app.utils.signal_validation import validate_trade_plan_direction
 
@@ -63,9 +75,26 @@ WATCHLIST_PERMISSION_PRIORITY = {
 }
 WATCHLIST_CACHE_TTL_SECONDS = 15.0
 WATCHLIST_LATENCY_BUDGET = LatencyBudget(p50_ms=250.0, p95_ms=750.0, p99_ms=1500.0)
+PHASE2_OPPORTUNITY_DECISION_VERSION = "phase2_opportunity_ledger_v1"
 _watchlist_payload_cache = {}
 _watchlist_cache_key_locks = {}
 _watchlist_cache_guard = threading.Lock()
+
+
+@router.post(
+    "/evaluate-frozen",
+    response_model=FrozenDecisionEvaluationResponse,
+)
+def evaluate_frozen_signal_decision(payload: FrozenDecisionEvaluationRequest):
+    """Evaluate an immutable context without reading mutable live state."""
+    return evaluate_frozen_decision(
+        payload.symbol,
+        payload.timeframe,
+        payload.intelligence,
+        payload.derivatives,
+        capital=payload.capital,
+        risk_percent=payload.risk_percent,
+    )
 
 
 def build_multi_timeframe_signal_payload(
@@ -640,14 +669,15 @@ def persist_ready_watchlist_setups_for_stack(
         records = []
 
         for payload in payloads:
-            records.append(
-                _persist_ready_watchlist_payload(
-                    db,
-                    trade_repo,
-                    payload,
-                    normalized_side,
-                )
+            opportunity_snapshot = _persist_phase2_opportunity_snapshot(db, payload)
+            record = _persist_ready_watchlist_payload(
+                db,
+                trade_repo,
+                payload,
+                normalized_side,
             )
+            record["opportunity_snapshot"] = opportunity_snapshot
+            records.append(record)
 
         saved = [
             item
@@ -670,6 +700,11 @@ def persist_ready_watchlist_setups_for_stack(
             "total_count": len(records),
             "saved_count": len(saved),
             "skipped_count": len(skipped),
+            "opportunity_snapshot_count": sum(
+                1
+                for item in records
+                if (item.get("opportunity_snapshot") or {}).get("persisted")
+            ),
             "saved": saved,
             "skipped": skipped,
             "cache": cache,
@@ -679,7 +714,65 @@ def persist_ready_watchlist_setups_for_stack(
         db.close()
 
 
-@router.get("/batch")
+@router.post("/watchlist/recover-opportunity-gaps")
+def recover_watchlist_opportunity_gaps(
+    payload: dict = Body(...),
+):
+    """Reconstruct bounded, missed 1h evaluations from final candles only."""
+    missing = list(payload.get("missing") or [])
+    if not missing:
+        return {
+            "source": "phase2_opportunity_gap_recovery",
+            "status": "NO_GAPS",
+            "attempted_count": 0,
+            "persisted_count": 0,
+            "records": [],
+        }
+    if len(missing) > 48:
+        raise HTTPException(status_code=400, detail="At most 48 hourly gaps may be recovered")
+
+    db = SessionLocal()
+    try:
+        active_symbols = {
+            item.symbol
+            for item in SymbolRepository().get_active_symbols(db)
+        }
+        records = []
+        for gap in missing:
+            slot = _parse_opportunity_gap_timestamp(gap.get("effective_timestamp"))
+            symbols = sorted(set(gap.get("symbols") or []))
+            for symbol in symbols:
+                if symbol not in active_symbols:
+                    records.append(
+                        {
+                            "symbol": symbol,
+                            "effective_timestamp": slot,
+                            "persisted": False,
+                            "reason": "inactive_symbol",
+                        }
+                    )
+                    continue
+                records.append(
+                    _reconstruct_phase2_opportunity_snapshot(
+                        db,
+                        symbol,
+                        slot,
+                    )
+                )
+
+        persisted_count = sum(1 for item in records if item.get("persisted"))
+        return {
+            "source": "phase2_opportunity_gap_recovery",
+            "status": "RECOVERED" if persisted_count == len(records) else "PARTIAL",
+            "attempted_count": len(records),
+            "persisted_count": persisted_count,
+            "records": records,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/batch", response_model=SignalBatchResponse)
 def get_signal_batch(
     symbols: str | None = Query(default=None),
     timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
@@ -706,7 +799,7 @@ def get_signal_batch(
         db.close()
 
 
-@router.get("/{symbol}/multi-timeframe")
+@router.get("/{symbol}/multi-timeframe", response_model=SymbolContextResponse)
 def get_multi_timeframe_signal(
     symbol: str,
     mode: str | None = Query(default=None),
@@ -732,7 +825,7 @@ def get_multi_timeframe_signal(
         db.close()
 
 
-@router.get("/{symbol}/trade-setup")
+@router.get("/{symbol}/trade-setup", response_model=SymbolContextResponse)
 def get_trade_setup(
     symbol: str,
     mode: str | None = Query(default=None),
@@ -758,7 +851,7 @@ def get_trade_setup(
         db.close()
 
 
-@router.get("/{symbol}/scenario")
+@router.get("/{symbol}/scenario", response_model=SymbolContextResponse)
 def get_scenario(
     symbol: str,
     mode: str | None = Query(default=None),
@@ -792,7 +885,7 @@ def get_scenario(
         db.close()
 
 
-@router.get("/{symbol}/contradiction")
+@router.get("/{symbol}/contradiction", response_model=SymbolContextResponse)
 def get_contradiction(
     symbol: str,
     timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
@@ -811,7 +904,7 @@ def get_contradiction(
         db.close()
 
 
-@router.get("/{symbol}/probability")
+@router.get("/{symbol}/probability", response_model=SymbolContextResponse)
 def get_probability(
     symbol: str,
     timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
@@ -890,7 +983,7 @@ def get_data_quality_ledger(
         db.close()
 
 
-@router.get("/{symbol}/entry-trigger")
+@router.get("/{symbol}/entry-trigger", response_model=SymbolContextResponse)
 def get_entry_trigger(
     symbol: str,
     mode: str | None = Query(default=None),
@@ -916,7 +1009,7 @@ def get_entry_trigger(
         db.close()
 
 
-@router.get("/{symbol}/diagnostics")
+@router.get("/{symbol}/diagnostics", response_model=SymbolContextResponse)
 def get_signal_diagnostics(
     symbol: str,
     timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
@@ -1057,7 +1150,10 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
         "scoring_profile": signal.get("scoring_profile"),
         "current_price": current_price,
         "candle_time": candle.candle_time,
-        "freshness": freshness_status(candle.candle_time, freshness_window),
+        "freshness": freshness_status(
+            candle_freshness_timestamp(candle),
+            freshness_window,
+        ),
         "trade_plan": trade_plan,
         "decision_snapshot": {
             "id": getattr(decision_snapshot, "id", None),
@@ -1112,7 +1208,7 @@ def build_signal_batch_payload(db, symbols, timeframe="5m", stale_after_seconds=
     }
 
 
-@router.get("/{symbol}")
+@router.get("/{symbol}", response_model=SignalResponse)
 def get_signal(
     symbol: str,
     timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
@@ -1377,7 +1473,17 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
         }
 
     replaced_trade_plan_id = None
-    existing_trade = trade_repo.get_open_trade(db, symbol, side)
+    get_open_trade = getattr(trade_repo, "get_open_trade", None)
+    if callable(get_open_trade):
+        existing_trade = get_open_trade(db, symbol, side)
+    else:
+        existing_trade = None
+        if trade_repo.has_open_trade(db, symbol, side):
+            return {
+                **base,
+                "action": "skipped_existing_open",
+                "message": "Open trade plan already exists for symbol and side",
+            }
     if existing_trade:
         if _trade_plan_matches_existing_trade(
             existing_trade,
@@ -1428,6 +1534,212 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
         "target2": trade.target2,
         "risk_reward": trade.risk_reward,
         "confidence": trade.confidence,
+    }
+
+
+def _persist_phase2_opportunity_snapshot(db, payload):
+    timeframes = payload.get("timeframes") or []
+    lower = timeframes[0] if timeframes else {}
+    source_timestamp = lower.get("candle_time")
+    timeframe = lower.get("timeframe")
+
+    if not source_timestamp or not timeframe:
+        return {
+            "persisted": False,
+            "reason": "missing_entry_timeframe_candle",
+        }
+
+    trigger = payload.get("trigger") or {}
+    confirmation = payload.get("confirmation") or {}
+    conditions = trigger.get("conditions") or []
+    quality_state = (
+        "OK"
+        if all(item.get("status") == "OK" for item in timeframes)
+        else "DEGRADED"
+    )
+    snapshot = build_decision_snapshot(
+        payload["symbol"],
+        timeframe,
+        decision=trigger.get("status") or "WAIT",
+        source_timestamp=source_timestamp,
+        effective_timestamp=source_timestamp,
+        quality_state=quality_state,
+        confidence=(
+            trigger.get("stack_confidence")
+            if trigger.get("stack_confidence") is not None
+            else confirmation.get("confidence")
+        ),
+        regime=confirmation.get("overall_bias"),
+        signal=trigger,
+        trade_plan=payload.get("trade_plan"),
+        context={
+            "audit_scope": "PHASE2_FUTURES_OPPORTUNITY",
+            "market": "FUTURES",
+            "mode": payload.get("mode"),
+            "timeframes_used": payload.get("timeframes_used"),
+            "timeframe_candles": {
+                item.get("timeframe"): item.get("candle_time")
+                for item in timeframes
+                if item.get("timeframe")
+            },
+            "confirmation": confirmation,
+            "scenario": payload.get("scenario"),
+            "trade_plan_validation": payload.get("trade_plan_validation"),
+            "trigger_reason": trigger.get("reason"),
+            "failed_conditions": [
+                item.get("name")
+                for item in conditions
+                if not item.get("passed")
+            ],
+            "opportunity_recovery": payload.get("opportunity_recovery"),
+        },
+    )
+    snapshot["decision_version"] = PHASE2_OPPORTUNITY_DECISION_VERSION
+    record = _persist_decision_snapshot_safe(db, snapshot)
+
+    return {
+        "persisted": record is not None,
+        "id": getattr(record, "id", None),
+        "decision_version": getattr(record, "decision_version", None),
+        "effective_timestamp": getattr(record, "effective_timestamp", None),
+    }
+
+
+def _parse_opportunity_gap_timestamp(value):
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid opportunity gap timestamp: {value}",
+            ) from exc
+    else:
+        raise HTTPException(status_code=400, detail="Gap effective_timestamp is required")
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed.replace(minute=0, second=0, microsecond=0)
+
+
+def _reconstruct_phase2_opportunity_snapshot(db, symbol, slot):
+    evaluation_cutoff = slot + timedelta(hours=1)
+    candles_by_timeframe = {
+        timeframe: get_candles_as_of(
+            db,
+            symbol,
+            timeframe,
+            evaluation_cutoff,
+            limit=300,
+        )
+        for timeframe in PREDICTION_TIMEFRAME_STACK
+    }
+    stack = build_point_in_time_stack(
+        symbol,
+        candles_by_timeframe,
+        evaluation_cutoff,
+        intelligence_builder=build_candle_intelligence_as_of,
+        history_limit=300,
+        minimum_history=50,
+    )
+    if stack.get("status") != "READY":
+        return {
+            "symbol": symbol,
+            "effective_timestamp": slot,
+            "persisted": False,
+            "reason": "insufficient_point_in_time_history",
+            "timeframes": [
+                {
+                    "timeframe": item.get("timeframe"),
+                    "candle_count": item.get("candle_count"),
+                    "required_candle_count": item.get("required_candle_count"),
+                }
+                for item in stack.get("timeframes") or []
+            ],
+        }
+
+    timeframes = [
+        _reconstructed_signal_diagnostics(item)
+        for item in stack["timeframes"]
+    ]
+    confirmation = combine_timeframe_signals(timeframes)
+    confirmation = {
+        **confirmation,
+        "prediction_stack": list(PREDICTION_TIMEFRAME_STACK),
+        "entry_stack": [],
+        "timing_stack": [],
+        "entry_timeframes": [],
+    }
+    trigger = build_entry_trigger_decision(confirmation, timeframes)
+    payload = {
+        "symbol": symbol,
+        "mode": "intraday",
+        "timeframes_used": list(PREDICTION_TIMEFRAME_STACK),
+        "timeframes": timeframes,
+        "confirmation": confirmation,
+        "trigger": trigger,
+        "scenario": build_scenario_plan(confirmation, timeframes),
+        "trade_plan": None,
+        "trade_plan_validation": None,
+        "opportunity_recovery": {
+            "method": "POINT_IN_TIME_FINAL_CANDLE_RECONSTRUCTION",
+            "evaluation_cutoff": evaluation_cutoff,
+            "leakage_status": "PASS",
+        },
+    }
+    result = _persist_phase2_opportunity_snapshot(db, payload)
+    return {
+        "symbol": symbol,
+        "effective_timestamp": slot,
+        **result,
+        "decision": trigger.get("status"),
+        "reason": trigger.get("reason"),
+    }
+
+
+def _reconstructed_signal_diagnostics(item):
+    intelligence = item.get("intelligence") or {}
+    feature = intelligence.get("feature") or {}
+    regime = intelligence.get("regime") or {}
+    orderflow = intelligence.get("orderflow") or {}
+    smc = intelligence.get("smc") or {}
+    orderflow_row = SimpleNamespace(**orderflow)
+    orderflow_row.FlowSignal = orderflow.get("signal")
+    smc_row = SimpleNamespace(**smc)
+    smc_row.smc_bias = smc.get("bias")
+    components = score_master_signal_components(
+        SimpleNamespace(**feature),
+        SimpleNamespace(**regime),
+        orderflow_row,
+        smc_row,
+    )
+    return {
+        "symbol": item.get("symbol"),
+        "timeframe": item.get("timeframe"),
+        "source": "point_in_time_gap_recovery",
+        "status": item.get("status"),
+        "data_scope": "timeframe",
+        "signal": item.get("signal"),
+        "bias": item.get("bias"),
+        "confidence": item.get("confidence"),
+        "score": item.get("score"),
+        "current_price": intelligence.get("current_price"),
+        "candle_time": item.get("last_candle_time"),
+        "freshness": {
+            "status": "HISTORICAL_RECONSTRUCTED",
+            "is_stale": False,
+        },
+        "component_scores": components,
+        "reasons": (intelligence.get("signal") or {}).get("reasons") or [],
+        "inputs": {
+            key: {
+                "status": "HISTORICAL_RECONSTRUCTED",
+                "is_stale": False,
+            }
+            for key in ("feature", "regime", "orderflow", "smc")
+        },
     }
 
 
@@ -1748,7 +2060,10 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
         "score": signal["score"],
         "current_price": float(candle.close_price),
         "candle_time": candle.candle_time,
-        "freshness": freshness_status(candle.candle_time, freshness_window),
+        "freshness": freshness_status(
+            candle_freshness_timestamp(candle),
+            freshness_window,
+        ),
         "component_scores": components,
         "reasons": signal["reasons"],
         "contradiction": build_contradiction_report(db, symbol, timeframe, freshness_window),

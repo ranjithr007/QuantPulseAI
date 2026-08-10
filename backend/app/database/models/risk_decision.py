@@ -35,4 +35,6 @@ class RiskDecision(Base):
 
     thesis_id = Column(Integer, nullable=True, index=True)
 
+    data_generation_id = Column(String(100), index=True, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)

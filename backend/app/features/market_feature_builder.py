@@ -1,24 +1,18 @@
-from app.database.models.market_candles import MarketCandle
 from app.database.models.funding_rates import FundingRate
 from app.database.models.open_interest import OpenInterest
+from app.repositories.candle_repository import get_latest_candles
 
 
 class MarketFeatureBuilder:
 
     def build(self, db, symbol):
 
-        candles = (
-            db.query(MarketCandle)
-            .filter(MarketCandle.symbol == symbol)
-            .order_by(MarketCandle.candle_time.desc())
-            .limit(2)
-            .all()
-        )
+        candles = get_latest_candles(db, symbol, "1h", limit=2)
 
         if len(candles) < 2:
             return None
-        latest = candles[0]
-        previous = candles[1]
+        latest = candles[-1]
+        previous = candles[-2]
         price_change = (
             (latest.close_price - previous.close_price) / previous.close_price
         ) * 100

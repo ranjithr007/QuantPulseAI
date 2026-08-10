@@ -15,7 +15,15 @@ class FusionService:
         self.repo = IntelligenceRepository()
         self.fusion_repository = FusionSignalRepository()
 
-    def generate(self, db, symbol, timeframe: str = "5m", stale_after_seconds: int = 900):
+    def generate(
+        self,
+        db,
+        symbol,
+        timeframe: str = "5m",
+        stale_after_seconds: int = 900,
+        *,
+        context=None,
+    ):
 
         feature = self.repo.get_latest_feature(db, symbol, timeframe)
         regime = self.repo.get_latest_regime(db, symbol, timeframe)
@@ -49,6 +57,8 @@ class FusionService:
 
         result = self.engine.analyze(data)
         result["timeframe"] = timeframe
+        if context is not None:
+            result["data_generation_id"] = context.generation_id
 
         # SAVE FUSION RESULT 
         saved_signal = self.fusion_repository.save(db, result)

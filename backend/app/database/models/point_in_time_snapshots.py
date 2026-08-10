@@ -24,6 +24,7 @@ class FeatureSnapshot(Base):
     effective_timestamp = Column(DateTime, index=True, nullable=False)
     feature_version = Column(String(40), nullable=False)
     quality_state = Column(String(20), nullable=False, default="UNKNOWN")
+    data_generation_id = Column(String(100), index=True, nullable=True)
     snapshot_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -52,5 +53,6 @@ class DecisionSnapshot(Base):
     confidence = Column(Float, nullable=True)
     regime = Column(String(50), nullable=True)
     thesis_id = Column(String(80), nullable=True)
+    data_generation_id = Column(String(100), index=True, nullable=True)
     snapshot_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

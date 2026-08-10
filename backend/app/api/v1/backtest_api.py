@@ -1,12 +1,22 @@
+import json
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy.exc import SQLAlchemyError
+from app.contracts.backtest import BacktestResponse
 
 from app.backtesting.phase2_validation_artifacts import load_phase2_validation_artifact
 from app.backtesting.phase2_validation_artifacts import list_phase2_validation_artifacts
 from app.backtesting.phase2_validation_artifacts import persist_phase2_validation_artifact
 from app.backtesting.phase2_validation_artifacts import summarize_phase2_validation_artifacts
 from app.backtesting.phase2_validation_report import build_phase2_validation_report
-from app.backtesting.trade_simulator import execute_backtest, execute_filtered_backtest, execute_walk_forward
+from app.backtesting.research_table_export import persist_cluster_research_tables
+from app.backtesting.strategy_family_research import build_r5_strategy_evidence
+from app.backtesting.trade_simulator import execute_backtest
+from app.backtesting.trade_simulator import execute_collision_sensitivity_backtest
+from app.backtesting.trade_simulator import execute_filtered_backtest
+from app.backtesting.trade_simulator import execute_portfolio_backtest
+from app.backtesting.trade_simulator import execute_walk_forward
 from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.backtesting.walk_forward_validator import PHASE2_WALK_FORWARD_DAYS
 from app.backtesting.walk_forward_validator import minimum_candles_for_folds
@@ -20,10 +30,13 @@ from app.repositories.paper_trade_repository import PaperTradeRepository
 
 router = APIRouter(prefix="/backtest", tags=["Backtesting"])
 MAX_WALK_FORWARD_CANDLES = 20000
-WALK_FORWARD_STRATEGIES = "^(SIGNAL_GATED|BASELINE|RESEARCH_CALIBRATION)$"
+WALK_FORWARD_STRATEGIES = (
+    "^(SIGNAL_GATED|BASELINE|RESEARCH_CALIBRATION|SHORT_EDGE_CALIBRATION|"
+    "BEAR_RALLY_EXHAUSTION|PROFIT_PROTECTION_RESEARCH)$"
+)
 
 
-@router.get("/filtered-summary")
+@router.get("/filtered-summary", response_model=BacktestResponse)
 def filtered_backtest_summary(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
@@ -37,7 +50,21 @@ def filtered_backtest_summary(
     cooldown_candles: int = Query(default=3, ge=0, le=100),
     fee_bps: float = Query(default=4, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
+    risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
+    target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
+    max_leverage: float = Query(default=1, ge=1, le=20),
+    max_open_positions: int = Query(default=20, ge=1, le=100),
+    max_gross_exposure_percent: float = Query(default=500, gt=0, le=2000),
+    initial_portfolio_json: str = Query(default="[]"),
+    collision_policy: str = Query(
+        default="STOP_FIRST",
+        pattern="^(STOP_FIRST|TARGET_FIRST|LOWER_TIMEFRAME_REQUIRED)$",
+    ),
 ):
+    _validate_sizing_authority(
+        risk_percent_per_trade,
+        target_trade_volatility_percent,
+    )
     return {
         "source": "filtered_backtest_summary_v2",
         "symbol": symbol,
@@ -56,11 +83,176 @@ def filtered_backtest_summary(
             cooldown_candles=cooldown_candles,
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
+            risk_percent_per_trade=risk_percent_per_trade,
+            target_trade_volatility_percent=target_trade_volatility_percent,
+            max_leverage=max_leverage,
+            max_open_positions=max_open_positions,
+            max_gross_exposure_percent=max_gross_exposure_percent,
+            initial_portfolio_positions=_parse_initial_portfolio(
+                initial_portfolio_json
+            ),
+            collision_policy=collision_policy,
         ),
     }
 
 
-@router.get("/walk-forward")
+@router.get("/portfolio-replay", response_model=BacktestResponse)
+def portfolio_replay_report(
+    symbols: str,
+    signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
+    timeframe: str = Query(default="1h", pattern="^(1h|4h|1d)$"),
+    limit: int = Query(default=500, ge=51, le=5000),
+    initial_capital: float = Query(default=10_000, gt=0),
+    position_size_percent: float = Query(default=25, gt=0, le=100),
+    min_confidence: float = Query(default=70, ge=0, le=100),
+    stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
+    target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
+    cooldown_candles: int = Query(default=3, ge=0, le=100),
+    fee_bps: float = Query(default=4, ge=0, le=1000),
+    slippage_bps: float = Query(default=2, ge=0, le=1000),
+    risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
+    target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
+    max_leverage: float = Query(default=1, ge=1, le=20),
+    max_open_positions: int = Query(default=5, ge=1, le=100),
+    max_gross_exposure_percent: float = Query(default=300, gt=0, le=2000),
+    max_cluster_exposure_percent: float = Query(default=150, gt=0, le=2000),
+    symbol_clusters_json: str = Query(default="{}"),
+    initial_portfolio_json: str = Query(default="[]"),
+    collision_policy: str = Query(
+        default="STOP_FIRST",
+        pattern="^(STOP_FIRST|TARGET_FIRST|LOWER_TIMEFRAME_REQUIRED)$",
+    ),
+):
+    _validate_sizing_authority(
+        risk_percent_per_trade,
+        target_trade_volatility_percent,
+    )
+    resolved_symbols = _parse_symbols(symbols)
+    return {
+        "source": "portfolio_replay_v1",
+        "timeframe": timeframe,
+        "signal": signal,
+        "result": execute_portfolio_backtest(
+            resolved_symbols,
+            timeframe,
+            signal,
+            limit=limit,
+            initial_capital=initial_capital,
+            position_size_percent=position_size_percent,
+            min_confidence=min_confidence,
+            stop_atr_multiple=stop_atr_multiple,
+            target_atr_multiple=target_atr_multiple,
+            cooldown_candles=cooldown_candles,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+            risk_percent_per_trade=risk_percent_per_trade,
+            target_trade_volatility_percent=target_trade_volatility_percent,
+            max_leverage=max_leverage,
+            max_open_positions=max_open_positions,
+            max_gross_exposure_percent=max_gross_exposure_percent,
+            max_cluster_exposure_percent=max_cluster_exposure_percent,
+            symbol_clusters=_parse_symbol_clusters(symbol_clusters_json),
+            initial_portfolio_positions=_parse_initial_portfolio(
+                initial_portfolio_json
+            ),
+            collision_policy=collision_policy,
+        ),
+    }
+
+
+@router.post("/portfolio-research-export")
+def export_portfolio_research_tables(payload: dict):
+    portfolio_result = dict(payload.get("result") or payload)
+    if portfolio_result.get("engine_version") != "portfolio_replay_v1":
+        raise HTTPException(
+            status_code=422,
+            detail="payload must contain a portfolio_replay_v1 result",
+        )
+    if not isinstance(portfolio_result.get("trades"), list):
+        raise HTTPException(
+            status_code=422,
+            detail="portfolio replay result must contain a trades array",
+        )
+    return {
+        "source": "portfolio_research_export_v1",
+        "artifact": persist_cluster_research_tables(portfolio_result),
+    }
+
+
+@router.post("/r5-strategy-evidence")
+def r5_strategy_evidence(payload: dict):
+    walk_forward_result = dict(payload.get("walk_forward_result") or {})
+    if walk_forward_result.get("engine_version") != "walk_forward_v1":
+        raise HTTPException(
+            status_code=422,
+            detail="walk_forward_result must contain a walk_forward_v1 result",
+        )
+    return {
+        "source": "r5_strategy_family_evidence_v1",
+        "result": build_r5_strategy_evidence(
+            walk_forward_result,
+            adverse_cost_result=payload.get("adverse_cost_result"),
+            prior_baseline=payload.get("prior_baseline"),
+        ),
+    }
+
+
+@router.get("/collision-sensitivity", response_model=BacktestResponse)
+def collision_sensitivity_report(
+    symbol: str,
+    signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
+    timeframe: str = Query(default="1h", pattern="^(1h|4h|1d)$"),
+    limit: int = Query(default=500, ge=51, le=5000),
+    initial_capital: float = Query(default=10_000, gt=0),
+    position_size_percent: float = Query(default=100, gt=0, le=100),
+    min_confidence: float = Query(default=70, ge=0, le=100),
+    stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
+    target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
+    cooldown_candles: int = Query(default=3, ge=0, le=100),
+    fee_bps: float = Query(default=4, ge=0, le=1000),
+    slippage_bps: float = Query(default=2, ge=0, le=1000),
+    risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
+    target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
+    max_leverage: float = Query(default=1, ge=1, le=20),
+    max_open_positions: int = Query(default=20, ge=1, le=100),
+    max_gross_exposure_percent: float = Query(default=500, gt=0, le=2000),
+    initial_portfolio_json: str = Query(default="[]"),
+):
+    _validate_sizing_authority(
+        risk_percent_per_trade,
+        target_trade_volatility_percent,
+    )
+    return {
+        "source": "collision_sensitivity_v1",
+        "symbol": symbol,
+        "signal": signal,
+        "timeframe": timeframe,
+        "result": execute_collision_sensitivity_backtest(
+            symbol,
+            timeframe,
+            signal,
+            limit=limit,
+            initial_capital=initial_capital,
+            position_size_percent=position_size_percent,
+            min_confidence=min_confidence,
+            stop_atr_multiple=stop_atr_multiple,
+            target_atr_multiple=target_atr_multiple,
+            cooldown_candles=cooldown_candles,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+            risk_percent_per_trade=risk_percent_per_trade,
+            target_trade_volatility_percent=target_trade_volatility_percent,
+            max_leverage=max_leverage,
+            max_open_positions=max_open_positions,
+            max_gross_exposure_percent=max_gross_exposure_percent,
+            initial_portfolio_positions=_parse_initial_portfolio(
+                initial_portfolio_json
+            ),
+        ),
+    }
+
+
+@router.get("/walk-forward", response_model=BacktestResponse)
 def walk_forward_validation(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
@@ -78,7 +270,23 @@ def walk_forward_validation(
     fee_bps: float = Query(default=4, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
+    risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
+    target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
+    max_leverage: float = Query(default=1, ge=1, le=20),
+    max_open_positions: int = Query(default=20, ge=1, le=100),
+    max_gross_exposure_percent: float = Query(default=500, gt=0, le=2000),
+    initial_portfolio_json: str = Query(default="[]"),
+    collision_policy: str = Query(
+        default="STOP_FIRST",
+        pattern="^(STOP_FIRST|TARGET_FIRST|LOWER_TIMEFRAME_REQUIRED)$",
+    ),
+    as_of: datetime | None = Query(default=None),
+    frozen_fold_parameters_json: str = Query(default="[]"),
 ):
+    _validate_sizing_authority(
+        risk_percent_per_trade,
+        target_trade_volatility_percent,
+    )
     resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
 
     return {
@@ -103,6 +311,17 @@ def walk_forward_validation(
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
             strategy=strategy,
+            risk_percent_per_trade=risk_percent_per_trade,
+            target_trade_volatility_percent=target_trade_volatility_percent,
+            max_leverage=max_leverage,
+            max_open_positions=max_open_positions,
+            max_gross_exposure_percent=max_gross_exposure_percent,
+            initial_portfolio_positions=_parse_initial_portfolio(
+                initial_portfolio_json
+            ),
+            collision_policy=collision_policy,
+            **_as_of_options(as_of),
+            **_frozen_fold_options(frozen_fold_parameters_json),
         ),
     }
 
@@ -125,6 +344,8 @@ def phase2_validation_report(
     fee_bps: float = Query(default=4, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
+    as_of: datetime | None = Query(default=None),
+    frozen_fold_parameters_json: str = Query(default="[]"),
 ):
     resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
     result = execute_walk_forward(
@@ -144,6 +365,8 @@ def phase2_validation_report(
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
         strategy=strategy,
+        **_as_of_options(as_of),
+        **_frozen_fold_options(frozen_fold_parameters_json),
     )
     paper_measurement = _load_paper_measurement(symbol)
     return {
@@ -180,6 +403,8 @@ def export_phase2_validation_report(
     fee_bps: float = Query(default=4, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
+    as_of: datetime | None = Query(default=None),
+    frozen_fold_parameters_json: str = Query(default="[]"),
 ):
     resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
     result = execute_walk_forward(
@@ -199,6 +424,8 @@ def export_phase2_validation_report(
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
         strategy=strategy,
+        **_as_of_options(as_of),
+        **_frozen_fold_options(frozen_fold_parameters_json),
     )
     report = build_phase2_validation_report(
         result,
@@ -278,7 +505,7 @@ def backtest(symbol: str, signal: str):
     return execute_backtest(symbol, "15m", None, signal)
 
 
-@router.get("/summary")
+@router.get("/summary", response_model=BacktestResponse)
 def backtest_summary(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
@@ -327,6 +554,143 @@ def _parse_grid(value, name):
     if len(values) > 20:
         raise HTTPException(status_code=422, detail=f"{name} cannot contain more than 20 values")
     return values
+
+
+def _validate_sizing_authority(
+    risk_percent_per_trade,
+    target_trade_volatility_percent,
+):
+    risk_percent_per_trade = _query_default(risk_percent_per_trade)
+    target_trade_volatility_percent = _query_default(
+        target_trade_volatility_percent
+    )
+    if (
+        risk_percent_per_trade is not None
+        and target_trade_volatility_percent is not None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "risk_percent_per_trade and target_trade_volatility_percent "
+                "are mutually exclusive"
+            ),
+        )
+
+
+def _parse_initial_portfolio(value):
+    value = _query_default(value)
+    try:
+        payload = json.loads(str(value or "[]"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="initial_portfolio_json must be valid JSON",
+        ) from exc
+    if not isinstance(payload, list) or any(
+        not isinstance(item, dict)
+        for item in payload
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="initial_portfolio_json must be a JSON array of positions",
+        )
+    return payload
+
+
+def _parse_symbols(value):
+    symbols = []
+    for raw_symbol in str(_query_default(value) or "").split(","):
+        symbol = raw_symbol.strip().upper()
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+    if len(symbols) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail="portfolio replay requires at least two unique symbols",
+        )
+    if len(symbols) > 20:
+        raise HTTPException(
+            status_code=422,
+            detail="portfolio replay supports at most 20 symbols",
+        )
+    return symbols
+
+
+def _parse_symbol_clusters(value):
+    value = _query_default(value)
+    try:
+        payload = json.loads(str(value or "{}"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="symbol_clusters_json must be valid JSON",
+        ) from exc
+    if not isinstance(payload, dict) or any(
+        not str(symbol).strip() or not str(cluster).strip()
+        for symbol, cluster in payload.items()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="symbol_clusters_json must be a JSON object of symbol to cluster",
+        )
+    return {
+        str(symbol).upper(): str(cluster)
+        for symbol, cluster in payload.items()
+    }
+
+
+def _as_of_options(value):
+    value = _query_default(value)
+    return {"as_of_timestamp": value} if value is not None else {}
+
+
+def _frozen_fold_options(value):
+    value = _query_default(value)
+    try:
+        payload = json.loads(str(value or "[]"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="frozen_fold_parameters_json must be valid JSON",
+        ) from exc
+    if not isinstance(payload, list):
+        raise HTTPException(
+            status_code=422,
+            detail="frozen_fold_parameters_json must be a JSON array",
+        )
+    normalized = []
+    for item in payload:
+        if not isinstance(item, dict) or {
+            "stop_percent",
+            "target_percent",
+        } - set(item):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "each frozen fold parameter requires stop_percent "
+                    "and target_percent"
+                ),
+            )
+        try:
+            stop = float(item["stop_percent"])
+            target = float(item["target_percent"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="frozen fold parameters must be numeric",
+            ) from exc
+        if stop <= 0 or target <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="frozen fold parameters must be greater than zero",
+            )
+        normalized.append(
+            {
+                "stop_percent": stop,
+                "target_percent": target,
+            }
+        )
+    return {"frozen_fold_parameters": normalized} if normalized else {}
 
 
 def _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size):

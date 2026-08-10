@@ -1,5 +1,8 @@
 from datetime import datetime
 
+from sqlalchemy import inspect, text
+
+from app.database.models.funding_rates import FundingRate
 from app.database.models.paper_trade import PaperTrade
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.repositories._db_utils import commit_or_rollback
@@ -12,7 +15,33 @@ class PaperTradeRepository:
         if not USING_SQLITE_FALLBACK:
             return
 
-        PaperTrade.__table__.create(bind=db.get_bind(), checkfirst=True)
+        engine = db.get_bind()
+        PaperTrade.__table__.create(bind=engine, checkfirst=True)
+        existing = {
+            column["name"]
+            for column in inspect(engine).get_columns(PaperTrade.__tablename__)
+        }
+        evidence_columns = {
+            "data_generation_id": "VARCHAR(100)",
+            "validation_contract_version": "VARCHAR(100)",
+            "fill_model_version": "VARCHAR(100)",
+            "planned_entry_price": "FLOAT",
+            "entry_slippage_percent": "FLOAT",
+            "exit_slippage_percent": "FLOAT",
+            "funding_rate_snapshot": "FLOAT",
+            "funding_event_count": "INTEGER",
+            "funding_cost_percent": "FLOAT",
+            "open_interest_snapshot": "FLOAT",
+            "open_interest_change_percent": "FLOAT",
+        }
+        for column, definition in evidence_columns.items():
+            if column not in existing:
+                db.execute(
+                    text(
+                        f"ALTER TABLE paper_trades ADD COLUMN {column} {definition}"
+                    )
+                )
+        db.commit()
 
     def get_open_trades(self, db):
         self.ensure_table(db)
@@ -71,6 +100,7 @@ class PaperTradeRepository:
         trade_plan = candidate["trade_plan"]
         risk = candidate["risk_decision"]
         fill_profile = candidate.get("fill_profile") or {}
+        market_context = candidate.get("market_context") or {}
         entry_price = fill_profile.get("entry_fill_price", trade_plan["entry_price"])
         risk_reward = fill_profile.get("effective_risk_reward", risk["risk_reward"])
         paper_trade = PaperTrade(
@@ -91,6 +121,19 @@ class PaperTradeRepository:
             entry_timeframe=trade_plan.get("entry_timeframe"),
             timeframe_stack=trade_plan.get("timeframe_stack"),
             regime=trade_plan.get("regime"),
+            data_generation_id=trade_plan.get("data_generation_id"),
+            validation_contract_version=candidate.get("validation_contract_version"),
+            fill_model_version=fill_profile.get("model"),
+            planned_entry_price=fill_profile.get(
+                "planned_entry_price",
+                trade_plan.get("entry_price"),
+            ),
+            entry_slippage_percent=fill_profile.get("entry_slippage_pct"),
+            funding_rate_snapshot=market_context.get("fundingRate"),
+            open_interest_snapshot=market_context.get("openInterest"),
+            open_interest_change_percent=market_context.get(
+                "openInterestChangePercent"
+            ),
             fee_bps=float(fill_profile.get("fee_bps", 4.0)),
             status="OPEN",
         )
@@ -111,10 +154,13 @@ class PaperTradeRepository:
 
         return paper_trade
 
-    def close_trade(self, db, trade, exit_price, result):
+    def close_trade(self, db, trade, exit_price, result, fill_profile=None):
+        closed_at = datetime.utcnow()
         trade.status = "CLOSED"
         trade.exit_price = exit_price
         trade.result = result
+        if fill_profile:
+            trade.exit_slippage_percent = fill_profile.get("exit_slippage_pct")
 
         if trade.side == "LONG":
             gross_pnl = ((exit_price - trade.entry_price) / trade.entry_price) * 100
@@ -123,10 +169,20 @@ class PaperTradeRepository:
 
         fee_bps = float(getattr(trade, "fee_bps", 4.0) or 0)
         fees_percent = (fee_bps * 2) / 100
+        funding_rates = self._funding_rates_during_trade(db, trade, closed_at)
+        funding_direction = 1 if trade.side == "LONG" else -1
+        funding_cost_percent = (
+            sum(funding_rates) * 100 * funding_direction
+        )
         trade.gross_pnl_percent = round(gross_pnl, 4)
         trade.fees_percent = round(fees_percent, 4)
-        trade.pnl_percent = round(gross_pnl - fees_percent, 4)
-        trade.closed_at = datetime.utcnow()
+        trade.funding_event_count = len(funding_rates)
+        trade.funding_cost_percent = round(funding_cost_percent, 6)
+        trade.pnl_percent = round(
+            gross_pnl - fees_percent - funding_cost_percent,
+            4,
+        )
+        trade.closed_at = closed_at
 
         if getattr(trade, "thesis_id", None):
             TradeThesisRepository().set_lifecycle_state(
@@ -141,3 +197,25 @@ class PaperTradeRepository:
         db.refresh(trade)
 
         return trade
+
+    @staticmethod
+    def _funding_rates_during_trade(db, trade, closed_at):
+        opened_at = getattr(trade, "opened_at", None)
+        if opened_at is None:
+            return []
+
+        rows = (
+            db.query(FundingRate)
+            .filter(FundingRate.symbol == trade.symbol)
+            .filter(FundingRate.funding_time > opened_at)
+            .filter(FundingRate.funding_time <= closed_at)
+            .order_by(FundingRate.funding_time.asc(), FundingRate.id.asc())
+            .all()
+        )
+        # The collector can observe the same exchange funding event more than
+        # once. Charge each exchange event once, keyed by its funding timestamp.
+        rates_by_event = {}
+        for row in rows:
+            if row.funding_time is not None and row.rate is not None:
+                rates_by_event[row.funding_time] = float(row.rate)
+        return list(rates_by_event.values())

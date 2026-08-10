@@ -27,6 +27,12 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertTrue(settings["locked"])
             self.assertEqual("PAPER", settings["executionMode"])
             self.assertFalse(settings["liveExecutionEnabled"])
+            self.assertFalse(settings["governance"]["promotion_enabled"])
+            self.assertFalse(settings["governance"]["ml_authority_enabled"])
+            self.assertEqual(
+                ["1h", "4h", "1d"],
+                settings["governance"]["official_entry_timeframes"],
+            )
             self.assertEqual(1, settings["version"])
 
     def test_settings_update_is_persisted_and_audited(self):

@@ -823,6 +823,14 @@ export default function BacktestPage({
 
           {phase2ReportError ? <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{phase2ReportError}</div> : null}
           {phase2ExportError ? <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{phase2ExportError}</div> : null}
+          {phase2Report?.promotion_allowed === false ? (
+            <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+              <div className="font-medium">R0 truth-repair lock · {phase2Report.evidence_status || "Research only"}</div>
+              <div className="mt-1 text-xs leading-5 text-amber-200/85">
+                Historical metrics remain visible for diagnosis, but this evidence cannot be promoted until canonical final candles and full replay parity are rebuilt.
+              </div>
+            </div>
+          ) : null}
           {phase2ExportResult ? (
             <div className="mt-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
               Saved Phase 2 artifact.
@@ -1781,6 +1789,10 @@ function isPhase2Unstable(item) {
 }
 
 function classifyPhase2SetupFamily(item) {
+  if (item?.promotion_allowed === false || String(item?.evidence_status || "").includes("INVALIDATED")) {
+    return { family: "PAPER_ONLY" };
+  }
+
   const overallStatus = String(item?.overall_status || "").toUpperCase();
   const gateStatus = String(item?.architecture_gate_status || "").toUpperCase();
   const sampleCount = safeNumber(item?.sample_count, 0);
@@ -1830,6 +1842,7 @@ function buildPromotionScorecard(report, walkForwardResult) {
   const profitableFoldPercent = safeNumber(walkForwardResult?.robustness?.profitable_fold_percent, null);
   const contractStatus = report?.walk_forward?.contract?.contract_status || "UNKNOWN";
   const gateStatus = report?.architecture_gate?.status || "UNKNOWN";
+  const promotionAllowed = report?.promotion_allowed !== false;
 
   const items = [
     buildPromotionItem({
@@ -1904,6 +1917,9 @@ function buildPromotionScorecard(report, walkForwardResult) {
   if (score >= 6.5 && contractStatus === "PASS" && foldCount >= minimumFolds && gateStatus === "PASS") {
     decision = "PROMOTION_CANDIDATE";
   }
+  if (!promotionAllowed) {
+    decision = "BLOCKED_R0";
+  }
 
   return {
     decision,
@@ -1911,7 +1927,9 @@ function buildPromotionScorecard(report, walkForwardResult) {
     maxScore,
     scoreLabel: `${score.toFixed(1)} / ${maxScore.toFixed(1)} points`,
     items,
-    summary: buildPromotionSummary({ decision, score, contractStatus, foldCount, minimumFolds, gateStatus }),
+    summary: !promotionAllowed
+      ? "R0 truth repair blocks promotion. Metrics remain diagnostic until canonical final candles and full point-in-time replay parity are regenerated."
+      : buildPromotionSummary({ decision, score, contractStatus, foldCount, minimumFolds, gateStatus }),
   };
 }
 
@@ -1962,8 +1980,17 @@ function buildPhase3EntryGate(report, walkForwardResult, promotionScorecard) {
   const gateStatus = String(report?.architecture_gate?.status || "UNKNOWN").toUpperCase();
   const overallStatus = String(report?.overall_status || "UNKNOWN").toUpperCase();
   const paperEvidenceAttached = !String(report?.next_action || "").toLowerCase().includes("paper");
+  const promotionAllowed = report?.promotion_allowed !== false;
 
   const checks = [
+    buildPhase3GateCheck({
+      key: "r0_evidence_governance",
+      label: "R0 evidence governance",
+      actualLabel: report?.promotion_status || (promotionAllowed ? "Allowed" : "Blocked"),
+      targetLabel: "Promotion allowed",
+      pass: promotionAllowed,
+      watch: false,
+    }),
     buildPhase3GateCheck({
       key: "promotion_score",
       label: "Promotion score",

@@ -49,6 +49,7 @@ def run_paper_trade_monitor_job():
                     trade,
                     decision["exit_price"],
                     decision["result"],
+                    fill_profile=decision.get("fill_profile"),
                 )
                 summary["closed"] += 1
 

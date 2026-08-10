@@ -10,15 +10,16 @@ from app.engines.smc_engine import SMCEngine
 from app.repositories._db_utils import safe_rollback
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 
-TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
+TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
 market_repo = MarketRepository()
 smc_repo = SMCRepository()
 
 engine = SMCEngine()
 
 
-def run_smc_job():
+def run_smc_job(*, context=None):
 
     print("Running SMC Engine...")
     db = SessionLocal()
@@ -37,6 +38,8 @@ def run_smc_job():
                     result["symbol"] = symbol
 
                     result["timeframe"] = tf
+                    if context is not None:
+                        result["data_generation_id"] = context.generation_id
 
                     smc_repo.save(db, result)
                     results.append(result)

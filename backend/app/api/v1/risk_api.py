@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
+from app.contracts.bundle import RiskBundleResponse
 
 from app.api.v1.derivatives_api import build_derivatives_payload
 from app.api.v1.paper_trade_api import build_paper_trade_bundle
@@ -158,7 +159,7 @@ def build_risk_payload(db, symbol, stale_after_seconds=900):
     }
 
 
-@router.get("/{symbol}/bundle")
+@router.get("/{symbol}/bundle", response_model=RiskBundleResponse)
 def get_risk_bundle(
     symbol: str,
     timeframe: str = Query(default="15m"),

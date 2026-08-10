@@ -2,8 +2,11 @@ import os
 
 import uvicorn
 
+from app.config import get_settings
+
 
 if __name__ == "__main__":
+    settings = get_settings()
     reload_enabled = os.getenv("QUANTPULSE_RELOAD", "false").strip().lower() in {
         "1",
         "true",
@@ -12,7 +15,7 @@ if __name__ == "__main__":
     }
     uvicorn.run(
         "app.main:app",
-        host="127.0.0.1",
-        port=8000,
+        host=settings.host,
+        port=settings.port,
         reload=reload_enabled,
     )

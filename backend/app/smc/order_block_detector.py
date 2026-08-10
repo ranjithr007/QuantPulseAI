@@ -1,7 +1,7 @@
 
 def detect_order_block(candles):
 
-    for c in candles[:20]:
+    for c in reversed(candles[-20:]):
 
         body = abs(c.close_price - c.open_price)
 

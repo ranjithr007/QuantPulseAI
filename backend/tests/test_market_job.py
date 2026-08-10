@@ -1,5 +1,7 @@
 import sys
 import types
+from datetime import datetime
+from datetime import timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -28,7 +30,7 @@ def test_market_job_continues_after_one_timeframe_failure():
         "app.jobs.market_job.SymbolRepository.get_active_symbols",
         return_value=[symbol],
     ), patch(
-        "app.jobs.market_job.MarketRepository.get_last_candle_time",
+        "app.jobs.market_job.MarketRepository.get_collection_cursor",
         return_value=None,
     ), patch(
         "app.jobs.market_job.CandleCollector.get_candles",
@@ -60,7 +62,7 @@ def test_market_job_uses_bybit_fallback_when_binance_returns_no_candles():
         "app.jobs.market_job.SymbolRepository.get_active_symbols",
         return_value=[symbol],
     ), patch(
-        "app.jobs.market_job.MarketRepository.get_last_candle_time",
+        "app.jobs.market_job.MarketRepository.get_collection_cursor",
         return_value=None,
     ), patch(
         "app.jobs.market_job.CandleCollector.get_candles",
@@ -99,7 +101,7 @@ def test_market_job_suppresses_transient_connection_errors():
         "app.jobs.market_job.BybitCandleCollector.get_candles",
         return_value=[],
     ), patch(
-        "app.jobs.market_job.MarketRepository.get_last_candle_time",
+        "app.jobs.market_job.MarketRepository.get_collection_cursor",
         return_value=None,
     ), patch(
         "app.jobs.market_job.MarketRepository.save_candle"
@@ -111,6 +113,76 @@ def test_market_job_suppresses_transient_connection_errors():
         for call in print_mock.call_args_list
     ]
     assert not any("Market job error" in message for message in error_messages)
+
+
+def test_market_job_reprocesses_latest_identity_so_forming_candle_can_finalize():
+    fake_db = make_fake_db()
+    symbol = SimpleNamespace(symbol="BTCUSDT")
+    candle = {
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "open_time_ms": 1_000,
+        "open": 1.0,
+        "high": 2.0,
+        "low": 0.5,
+        "close": 1.5,
+        "volume": 10.0,
+    }
+
+    with patch("app.jobs.market_job.SessionLocal", return_value=fake_db), patch(
+        "app.jobs.market_job.SymbolRepository.get_active_symbols",
+        return_value=[symbol],
+    ), patch("app.jobs.market_job.TIMEFRAMES", ["1h"]), patch(
+        "app.jobs.market_job.MarketRepository.get_collection_cursor",
+        return_value=SimpleNamespace(
+            open_time=datetime.now(timezone.utc).replace(
+                minute=0,
+                second=0,
+                microsecond=0,
+            ),
+            is_final=False,
+        ),
+    ), patch(
+        "app.jobs.market_job.CandleCollector.get_candles",
+        return_value=[candle],
+    ), patch(
+        "app.jobs.market_job.MarketRepository.save_candle",
+        return_value=True,
+    ) as save_candle:
+        result = run_market_job()
+
+    save_candle.assert_called_once_with(fake_db, candle)
+    assert result["status"] == "COMPLETED"
+    assert result["rows_written"] == 1
+
+
+def test_market_job_fails_when_all_sources_return_no_candles():
+    fake_db = make_fake_db()
+    symbol = SimpleNamespace(symbol="BTCUSDT")
+
+    with patch("app.jobs.market_job.SessionLocal", return_value=fake_db), patch(
+        "app.jobs.market_job.SymbolRepository.get_active_symbols",
+        return_value=[symbol],
+    ), patch("app.jobs.market_job.TIMEFRAMES", ["1h"]), patch(
+        "app.jobs.market_job.MarketRepository.get_collection_cursor",
+        return_value=None,
+    ), patch(
+        "app.jobs.market_job.CandleCollector.get_candles",
+        return_value=[],
+    ), patch(
+        "app.jobs.market_job.BybitCandleCollector.get_candles",
+        return_value=[],
+    ), patch(
+        "app.jobs.market_job.MarketRepository.save_candle"
+    ) as save_candle:
+        result = run_market_job()
+
+    assert result["status"] == "FAILED"
+    assert result["total_failed"] == 1
+    assert result["rows_written"] == 0
+    assert result["results"][0]["error"] == "NO_CANDLES_FROM_AVAILABLE_SOURCES"
+    save_candle.assert_not_called()
+
 
 def make_fake_db():
     return SimpleNamespace(

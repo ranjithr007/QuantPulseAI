@@ -10,6 +10,7 @@ from app.backtesting.backtest_engine import ENGINE_VERSION
 from app.backtesting.backtest_engine import chronological_candles
 from app.backtesting.backtest_engine import run_backtest
 from app.backtesting.performance_engine import calculate_performance
+from app.backtesting.replay_contract import build_replay_input_contract
 
 
 WALK_FORWARD_VERSION = "walk_forward_v1"
@@ -31,6 +32,10 @@ TIMEFRAME_MINUTES = {
     "4h": 240,
     "1d": 1440,
 }
+
+
+def is_phase2_official_timeframe(timeframe):
+    return str(timeframe or "").strip() in PHASE2_OFFICIAL_TIMEFRAMES
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,7 @@ def run_walk_forward(
     backtest_runner=run_backtest,
     strategy_name="DIRECTIONAL_REENTRY_BASELINE",
     strategy_metadata=None,
+    frozen_fold_parameters=None,
 ):
     side = str(signal or "").upper()
     if side not in {"LONG", "SHORT"}:
@@ -118,6 +124,7 @@ def run_walk_forward(
     gate_signal_counts = Counter()
     gate_rejection_counts = Counter()
     test_start = config.train_size
+    frozen_selections = list(frozen_fold_parameters or [])
 
     while test_start + config.test_size <= len(ordered):
         train_start = 0 if config.mode == "EXPANDING" else test_start - config.train_size
@@ -126,17 +133,33 @@ def run_walk_forward(
         train_candles = ordered[train_start:train_end]
         test_candles = ordered[test_start:test_end]
 
-        selected, leaderboard = _select_parameters(
-            train_candles,
-            side,
-            candidates,
-            config,
-            initial_capital,
-            position_size_percent,
-            fee_bps,
-            slippage_bps,
-            backtest_runner,
-        )
+        fold_number = len(folds) + 1
+        if frozen_selections:
+            selected, leaderboard = _evaluate_frozen_selection(
+                train_candles,
+                side,
+                candidates,
+                frozen_selections,
+                fold_number,
+                config,
+                initial_capital,
+                position_size_percent,
+                fee_bps,
+                slippage_bps,
+                backtest_runner,
+            )
+        else:
+            selected, leaderboard = _select_parameters(
+                train_candles,
+                side,
+                candidates,
+                config,
+                initial_capital,
+                position_size_percent,
+                fee_bps,
+                slippage_bps,
+                backtest_runner,
+            )
         # The last training candle supplies only the decision context needed to
         # enter at the first test candle's open. No test candle participates in
         # parameter selection.
@@ -155,7 +178,6 @@ def run_walk_forward(
         gate_evaluated += int(decision_summary.get("evaluated") or 0)
         gate_signal_counts.update(decision_summary.get("signals") or {})
         gate_rejection_counts.update(decision_summary.get("rejections") or {})
-        fold_number = len(folds) + 1
         fold_trades = [
             {**trade, "fold": fold_number}
             for trade in oos_result.get("trades", [])
@@ -213,7 +235,7 @@ def run_walk_forward(
         for fold in folds
     )
     insufficient_folds = sum(
-        fold["selection"]["status"] != "SELECTED"
+        fold["selection"]["status"] not in {"SELECTED", "FROZEN"}
         for fold in folds
     )
 
@@ -273,6 +295,12 @@ def run_walk_forward(
             "position_size_percent": float(position_size_percent),
             "fee_bps": float(fee_bps),
             "slippage_bps": float(slippage_bps),
+            "selection_mode": (
+                "FROZEN_FOLD_PARAMETERS"
+                if frozen_selections
+                else "TRAINING_GRID_SELECTION"
+            ),
+            "frozen_fold_parameters": frozen_selections,
         },
         "validation_contract": _phase2_validation_contract_summary(
             timeframe,
@@ -280,6 +308,7 @@ def run_walk_forward(
             len(folds),
             len(ordered),
         ),
+        "replay_contract": build_replay_input_contract(timeframe),
         "leakage_controls": {
             "parameter_selection": "TRAIN_ONLY",
             "test_policy": "FROZEN_PARAMETERS",
@@ -382,6 +411,62 @@ def _select_parameters(
     return selected, leaderboard
 
 
+def _evaluate_frozen_selection(
+    train_candles,
+    side,
+    candidates,
+    frozen_selections,
+    fold_number,
+    config,
+    initial_capital,
+    position_size_percent,
+    fee_bps,
+    slippage_bps,
+    backtest_runner,
+):
+    if fold_number > len(frozen_selections):
+        raise ValueError("frozen fold parameters do not cover every replay fold")
+    raw_selection = dict(frozen_selections[fold_number - 1])
+    selection = {
+        "stop_percent": float(raw_selection["stop_percent"]),
+        "target_percent": float(raw_selection["target_percent"]),
+    }
+    if selection not in candidates:
+        raise ValueError("frozen fold parameters must belong to the declared parameter grid")
+    result = backtest_runner(
+        train_candles,
+        side,
+        stop_percent=selection["stop_percent"],
+        target_percent=selection["target_percent"],
+        initial_capital=initial_capital,
+        position_size_percent=position_size_percent,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
+    total_trades = int(result.get("total_trades", 0))
+    train_return = float(result.get("total_return_percent", 0))
+    drawdown = float(result.get("max_drawdown_percent", 0))
+    selected = {
+        **selection,
+        "eligible": total_trades >= config.min_train_trades,
+        "status": "FROZEN",
+        "score": round(train_return - drawdown, 4),
+        "total_trades": total_trades,
+        "total_return_percent": round(train_return, 4),
+        "max_drawdown_percent": round(drawdown, 4),
+        "sharpe_ratio": float(result.get("sharpe_ratio", 0)),
+    }
+    return selected, [
+        {
+            "stop_percent": selection["stop_percent"],
+            "target_percent": selection["target_percent"],
+            "score": selected["score"],
+            "total_trades": total_trades,
+            "eligible": selected["eligible"],
+        }
+    ]
+
+
 def _compact_result(result):
     keys = (
         "total_trades",
@@ -476,6 +561,7 @@ def _insufficient_data_result(
             0,
             candle_count,
         ),
+        "replay_contract": build_replay_input_contract(timeframe),
     }
 
 

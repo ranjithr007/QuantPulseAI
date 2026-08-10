@@ -6,12 +6,13 @@ from app.database.models.open_interest import OpenInterest
 from app.database.sqlserver import SessionLocal
 from app.utils.freshness import freshness_status
 from app.utils.network_resilience import summarize_network_error
+from app.contracts.specialized import DerivativesResponse
 
 
 router = APIRouter(prefix="/derivatives", tags=["Derivatives"])
 
 
-@router.get("/{symbol}")
+@router.get("/{symbol}", response_model=DerivativesResponse)
 def get_derivatives(
     symbol: str,
     funding_limit: int = Query(default=30, ge=1, le=200),

@@ -40,6 +40,8 @@ class TradePlan(Base):
 
     thesis_id = Column(Integer, nullable=True, index=True)
 
+    data_generation_id = Column(String(100), index=True, nullable=True)
+
     status = Column(String(20), default="OPEN")
 
     exit_price = Column(Float, nullable=True)

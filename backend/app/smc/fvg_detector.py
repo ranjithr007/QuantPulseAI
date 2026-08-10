@@ -5,8 +5,8 @@ def detect_fvg(candles):
 
         return {"detected": False, "price": 0}
 
-    c1 = candles[2]
-    c3 = candles[0]
+    c1 = candles[-3]
+    c3 = candles[-1]
 
     if c1.high_price < c3.low_price:
 

@@ -5,6 +5,8 @@ from datetime import timezone
 from app.database.models.market_candles import MarketCandle
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories._db_utils import commit_or_rollback
+from app.utils.timeframes import candle_close_boundary_ms
+from sqlalchemy import true
 
 FUTURE_CANDLE_TOLERANCE_SECONDS = 60
 
@@ -12,45 +14,160 @@ FUTURE_CANDLE_TOLERANCE_SECONDS = 60
 class MarketRepository:
 
     def save_candle(self, db, candle):
-        candle_time = datetime.fromtimestamp(
-            candle["open_time_ms"] / 1000,
+        return self.upsert_candle(db, candle) in {
+            "INSERTED",
+            "UPDATED",
+            "FINALIZED",
+        }
+
+    def upsert_candle(self, db, candle, *, now=None, commit=True):
+        now_utc = now or datetime.now(timezone.utc)
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.replace(tzinfo=timezone.utc)
+
+        open_time = datetime.fromtimestamp(
+            int(candle["open_time_ms"]) / 1000,
             timezone.utc,
         ).replace(tzinfo=None)
-        candle_time_utc = candle_time.replace(tzinfo=timezone.utc)
-        max_usable_time = datetime.now(timezone.utc) + timedelta(
+        open_time_utc = open_time.replace(tzinfo=timezone.utc)
+        max_usable_time = now_utc + timedelta(
             seconds=FUTURE_CANDLE_TOLERANCE_SECONDS
         )
-        if candle_time_utc > max_usable_time:
-            return False
-        exists = (
+        if open_time_utc > max_usable_time or not _valid_ohlcv(candle):
+            return "REJECTED"
+
+        timeframe = str(candle["timeframe"])
+        close_time_ms = candle.get("close_time_ms")
+        if close_time_ms is None:
+            close_time_ms = candle_close_boundary_ms(
+                candle["open_time_ms"],
+                timeframe,
+            )
+        close_time = datetime.fromtimestamp(
+            int(close_time_ms) / 1000,
+            timezone.utc,
+        ).replace(tzinfo=None)
+        incoming_final = bool(
+            candle.get(
+                "is_final",
+                now_utc >= close_time.replace(tzinfo=timezone.utc),
+            )
+        )
+        venue = str(candle.get("venue") or "UNKNOWN").upper()
+        market_type = str(candle.get("market_type") or "FUTURES").upper()
+        source = str(candle.get("source") or "UNKNOWN")
+
+        existing = (
             db.query(MarketCandle)
             .filter(
                 MarketCandle.symbol == candle["symbol"],
-                MarketCandle.timeframe == candle["timeframe"],
-                MarketCandle.candle_time == candle_time,
+                MarketCandle.timeframe == timeframe,
+                MarketCandle.venue == venue,
+                MarketCandle.market_type == market_type,
+                MarketCandle.open_time == open_time,
             )
             .first()
         )
-        if exists:
-            return False
+        if existing:
+            if bool(existing.is_final):
+                return "UNCHANGED_FINAL"
+
+            if not _candle_changed(
+                existing,
+                candle,
+                close_time,
+                incoming_final,
+            ):
+                return "UNCHANGED_PROVISIONAL"
+
+            existing.open_price = candle["open"]
+            existing.high_price = candle["high"]
+            existing.low_price = candle["low"]
+            existing.close_price = candle["close"]
+            existing.volume = candle["volume"]
+            existing.close_time = close_time
+            existing.is_final = incoming_final
+            existing.source = source
+            existing.quality_state = (
+                "VERIFIED" if incoming_final else "PROVISIONAL"
+            )
+            existing.revision = int(existing.revision or 0) + 1
+            existing.updated_at = now_utc.replace(tzinfo=None)
+            if commit:
+                commit_or_rollback(db)
+            return "FINALIZED" if incoming_final else "UPDATED"
 
         entity = MarketCandle(
             symbol=candle["symbol"],
-            timeframe=candle["timeframe"],
+            timeframe=timeframe,
+            venue=venue,
+            market_type=market_type,
             open_price=candle["open"],
             high_price=candle["high"],
             low_price=candle["low"],
             close_price=candle["close"],
             volume=candle["volume"],
-            candle_time=candle_time,
+            candle_time=open_time,
+            open_time=open_time,
+            close_time=close_time,
+            is_final=incoming_final,
+            source=source,
+            ingested_at=now_utc.replace(tzinfo=None),
+            updated_at=now_utc.replace(tzinfo=None),
+            revision=1,
+            quality_state="VERIFIED" if incoming_final else "PROVISIONAL",
         )
         db.add(entity)
-        commit_or_rollback(db)
-        return True
+        if commit:
+            commit_or_rollback(db)
+        return "INSERTED"
 
     def get_last_candle_time(self, db, symbol: str, timeframe: str):
         candle = get_latest_candle(db, symbol, timeframe)
         return candle.candle_time if candle else None
+
+    def get_collection_cursor(
+        self,
+        db,
+        symbol: str,
+        timeframe: str,
+        *,
+        market_type="FUTURES",
+    ):
+        return (
+            db.query(MarketCandle)
+            .filter(MarketCandle.symbol == symbol)
+            .filter(MarketCandle.timeframe == timeframe)
+            .filter(MarketCandle.market_type == market_type)
+            .filter(MarketCandle.venue != "UNKNOWN")
+            .order_by(
+                MarketCandle.open_time.desc(),
+                MarketCandle.id.desc(),
+            )
+            .first()
+        )
+
+    def get_source_candles(
+        self,
+        db,
+        symbol: str,
+        timeframe: str,
+        venue: str,
+        start_time,
+        end_time,
+    ):
+        return (
+            db.query(MarketCandle)
+            .filter(MarketCandle.symbol == symbol)
+            .filter(MarketCandle.timeframe == timeframe)
+            .filter(MarketCandle.market_type == "FUTURES")
+            .filter(MarketCandle.venue == str(venue).upper())
+            .filter(MarketCandle.is_final == true())
+            .filter(MarketCandle.open_time >= start_time)
+            .filter(MarketCandle.open_time <= end_time)
+            .order_by(MarketCandle.open_time.asc())
+            .all()
+        )
 
     def delete_candles(self, db, symbol: str, timeframe: str):
         (
@@ -60,3 +177,34 @@ class MarketRepository:
             .delete(synchronize_session=False)
         )
         commit_or_rollback(db)
+
+
+def _valid_ohlcv(candle):
+    try:
+        open_price = float(candle["open"])
+        high_price = float(candle["high"])
+        low_price = float(candle["low"])
+        close_price = float(candle["close"])
+        volume = float(candle["volume"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        volume >= 0
+        and high_price >= low_price
+        and high_price >= max(open_price, close_price)
+        and low_price <= min(open_price, close_price)
+    )
+
+
+def _candle_changed(existing, candle, close_time, incoming_final):
+    return any(
+        (
+            float(existing.open_price) != float(candle["open"]),
+            float(existing.high_price) != float(candle["high"]),
+            float(existing.low_price) != float(candle["low"]),
+            float(existing.close_price) != float(candle["close"]),
+            float(existing.volume) != float(candle["volume"]),
+            existing.close_time != close_time,
+            bool(existing.is_final) != bool(incoming_final),
+        )
+    )

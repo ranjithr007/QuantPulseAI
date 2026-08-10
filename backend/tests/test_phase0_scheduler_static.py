@@ -10,23 +10,23 @@ APP_ROOT = PROJECT_ROOT / "backend" / "app"
 
 
 class Phase0SchedulerStaticTests(unittest.TestCase):
-    def test_default_scheduler_jobs_cover_live_intelligence_pipeline(self):
+    def test_default_scheduler_jobs_cover_paper_pipeline(self):
         self.assertEqual(
             resolve_job_ids([]),
             [
-                "market",
+                "deterministic_pipeline",
                 "derivative",
-                "feature",
-                "regime",
-                "orderflow",
-                "smc",
-                "heatmap",
-                "whales",
-                "whale_ai",
-                "intelligence",
-                "master_ai",
+                "candle_completeness",
             ],
         )
+
+    def test_deterministic_pipeline_is_registered_for_explicit_promotion(self):
+        job = get_job_definition("deterministic_pipeline")
+
+        self.assertIsNotNone(job)
+        self.assertEqual(job.module, "app.jobs.deterministic_pipeline_job")
+        self.assertEqual(job.function, "run_deterministic_pipeline_job")
+        self.assertEqual(resolve_job_ids(["deterministic_pipeline"]), ["deterministic_pipeline"])
 
     def test_known_job_definitions_are_lazy_import_metadata(self):
         market = get_job_definition("market")
@@ -42,7 +42,7 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
         self.assertEqual(regime.module, "app.jobs.regime_jobs")
         self.assertEqual(regime.function, "run_regime_job")
         self.assertEqual(regime.minutes, 1)
-        self.assertIn("return run_regime_analysis()", self._source("app/jobs/regime_jobs.py"))
+        self.assertIn("return run_regime_analysis(context=context)", self._source("app/jobs/regime_jobs.py"))
 
     def _source(self, relative_path):
         return (PROJECT_ROOT / "backend" / relative_path).read_text(encoding="utf-8")

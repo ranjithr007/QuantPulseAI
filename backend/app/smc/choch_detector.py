@@ -5,9 +5,9 @@ def detect_choch(candles):
 
         return False
 
-    recent = candles[:5]
+    recent = candles[-5:]
 
-    old = candles[5:10]
+    old = candles[-10:-5]
 
     recent_high = max(x.high_price for x in recent)
 

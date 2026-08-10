@@ -259,6 +259,10 @@ def _scorecard(trades, as_of):
         float(_value(trade, "fees_percent") or 0)
         for trade in closed
     )
+    total_funding_cost = sum(
+        float(_value(trade, "funding_cost_percent") or 0)
+        for trade in closed
+    )
 
     return {
         "total_trades": len(trades),
@@ -288,6 +292,7 @@ def _scorecard(trades, as_of):
         "max_drawdown_percent": round(max_drawdown, 4),
         "trade_return_sharpe": _trade_return_sharpe(returns),
         "simulated_fees_percent": round(total_fees, 4),
+        "simulated_funding_cost_percent": round(total_funding_cost, 6),
         "observation_days": observation_days,
         "first_opened_at": first_opened_at.isoformat() if first_opened_at else None,
         "as_of": as_of.isoformat(),
@@ -493,6 +498,47 @@ def _data_quality(trades):
             field: sum(1 for trade in trades if _value(trade, field) in (None, ""))
             for field in context_fields
         },
+        "trades_missing_pipeline_lineage": sum(
+            1
+            for trade in trades
+            if _value(trade, "data_generation_id") in (None, "")
+        ),
+        "trades_missing_validation_contract": sum(
+            1
+            for trade in trades
+            if _value(trade, "validation_contract_version") in (None, "")
+        ),
+        "trades_missing_fill_model": sum(
+            1
+            for trade in trades
+            if _value(trade, "fill_model_version") in (None, "")
+        ),
+        "trades_missing_entry_slippage_snapshot": sum(
+            1
+            for trade in trades
+            if _value(trade, "entry_slippage_percent") is None
+        ),
+        "closed_trades_missing_exit_slippage_snapshot": sum(
+            1
+            for trade in closed
+            if _value(trade, "exit_slippage_percent") is None
+        ),
+        "trades_missing_funding_snapshot": sum(
+            1
+            for trade in trades
+            if _value(trade, "funding_rate_snapshot") is None
+        ),
+        "closed_trades_missing_funding_accrual": sum(
+            1
+            for trade in closed
+            if _value(trade, "funding_cost_percent") is None
+            or _value(trade, "funding_event_count") is None
+        ),
+        "trades_missing_open_interest_snapshot": sum(
+            1
+            for trade in trades
+            if _value(trade, "open_interest_snapshot") is None
+        ),
         "legacy_trade_note": (
             "Trades opened before measurement v1 may not contain fee or context snapshots."
         ),

@@ -8,17 +8,19 @@ from app.config import get_settings
 from app.scheduler.registry import all_job_definitions
 from app.scheduler.registry import get_job_definition
 from app.utils.network_resilience import summarize_network_error
+from app.contracts.scheduler import SchedulerJobsResponse, SchedulerStatusResponse
 
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
 
-@router.get("/jobs")
+@router.get("/jobs", response_model=SchedulerJobsResponse)
 def list_jobs():
     try:
         settings = get_settings()
         return {
-            "scheduler_enabled": settings.start_scheduler,
+            "scheduler_enabled": settings.run_scheduler,
+            "process_role": settings.process_role,
             "configured_jobs": settings.scheduler_job_ids,
             "jobs": [definition.as_dict() for definition in all_job_definitions()],
         }
@@ -26,7 +28,7 @@ def list_jobs():
         return _scheduler_error_payload("jobs", exc)
 
 
-@router.get("/status")
+@router.get("/status", response_model=SchedulerStatusResponse)
 def scheduler_status():
     try:
         from app.scheduler.scheduler import get_scheduler

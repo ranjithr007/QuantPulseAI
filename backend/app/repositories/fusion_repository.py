@@ -17,6 +17,7 @@ class FusionSignalRepository:
             smc_score=data.get("smc_score", 0),
             liquidation_score=data.get("liquidation_score", 0),
             whale_score=data.get("whale_score", 0),
+            data_generation_id=data.get("data_generation_id"),
         )
 
         db.add(record)
