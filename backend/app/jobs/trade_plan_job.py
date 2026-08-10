@@ -17,10 +17,11 @@ from app.trading.planner.trade_planner import TradePlanner
 from app.repositories._db_utils import safe_rollback
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 
 fusion_repo = FusionSignalRepository()
 
-TRADE_PLAN_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+TRADE_PLAN_TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
 
 trade_repo = TradePlanRepository()
 

@@ -93,6 +93,7 @@ class OrderFlowRepository:
             Exhaustion=data["exhaustion"],
             FlowSignal=data["signal"],
             Confidence=data["confidence"],
+            data_generation_id=data.get("data_generation_id"),
         )
 
         db.add(record)

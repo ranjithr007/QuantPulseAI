@@ -11,7 +11,7 @@ from app.intelligence.master_ai_engine import generate_master_signal
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.candle_repository import get_latest_candles
 from app.repositories.intelligence_repository import get_ai_inputs
-from app.utils.freshness import freshness_status
+from app.utils.freshness import candle_freshness_timestamp, freshness_status
 
 
 ACTIONABLE_SIGNALS = {"LONG", "SHORT"}
@@ -95,7 +95,10 @@ def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=9
     heatmap = _latest_heatmap(db, symbol)
 
     freshness = {
-        "candle": freshness_status(candle.candle_time, stale_after_seconds),
+        "candle": freshness_status(
+            candle_freshness_timestamp(candle),
+            stale_after_seconds,
+        ),
         "feature": freshness_status(
             getattr(feature, "CreatedAt", None), stale_after_seconds
         ),

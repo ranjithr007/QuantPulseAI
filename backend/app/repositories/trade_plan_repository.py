@@ -103,6 +103,7 @@ class TradePlanRepository:
             entry_timeframe=plan.get("entry_timeframe"),
             timeframe_stack=_timeframe_stack_value(plan.get("timeframe_stack")),
             regime=plan.get("regime"),
+            data_generation_id=plan.get("data_generation_id"),
             status="OPEN",
         )
 
@@ -137,6 +138,7 @@ class TradePlanRepository:
             entry_timeframe=context.get("entry_timeframe"),
             timeframe_stack=_timeframe_stack_value(context.get("timeframe_stack")),
             regime=context.get("regime"),
+            data_generation_id=context.get("data_generation_id"),
             status="OPEN",
         )
 

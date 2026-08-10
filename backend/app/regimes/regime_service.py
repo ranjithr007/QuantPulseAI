@@ -8,7 +8,7 @@ from app.regimes.regime_engine import analyze_market
 from app.utils.network_resilience import summarize_network_error
 
 
-def run_regime_analysis():
+def run_regime_analysis(*, context=None):
 
     db = SessionLocal()
 
@@ -18,6 +18,11 @@ def run_regime_analysis():
         results=[]
         features = (
             db.query(MarketFeature)
+            .filter(
+                (MarketFeature.data_generation_id == context.generation_id)
+                if context is not None
+                else True
+            )
             .order_by(MarketFeature.CreatedAt.desc())
             .limit(50)
             .all()
@@ -46,6 +51,9 @@ def run_regime_analysis():
                 Confidence=result["confidence"],
                 RecommendedStrategy=result["strategy"],
                 Reason=result["reason"],
+                data_generation_id=(
+                    context.generation_id if context is not None else None
+                ),
             )
 
             db.add(regime)

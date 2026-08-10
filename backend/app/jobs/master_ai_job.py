@@ -11,8 +11,9 @@ from app.trading.trade_plan_engine import build_trade_plan
 from app.repositories._db_utils import safe_rollback
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 
-TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
 
 
 def run_master_ai_job():

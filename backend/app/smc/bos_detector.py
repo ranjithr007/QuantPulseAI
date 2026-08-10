@@ -4,11 +4,11 @@ def detect_bos(candles):
 
         return {"detected": False, "direction": "NONE"}
 
-    last = candles[0]
+    last = candles[-1]
 
-    previous_high = max(c.high_price for c in candles[1:5])
+    previous_high = max(c.high_price for c in candles[-5:-1])
 
-    previous_low = min(c.low_price for c in candles[1:5])
+    previous_low = min(c.low_price for c in candles[-5:-1])
 
     if last.close_price > previous_high:
 

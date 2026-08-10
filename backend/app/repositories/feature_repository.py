@@ -14,7 +14,8 @@ def save_market_feature(db, feature):
         FinalScore=feature["final_score"],
         Trend=feature["trend"],
         Signal=feature["signal"],
-        ATR=feature.get("atr", 0)
+        ATR=feature.get("atr", 0),
+        data_generation_id=feature.get("data_generation_id"),
     )
 
     db.add(record)

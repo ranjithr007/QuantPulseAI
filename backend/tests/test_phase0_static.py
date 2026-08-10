@@ -48,7 +48,7 @@ class Phase0StaticSmokeTests(unittest.TestCase):
 
     def test_runtime_config_is_environment_driven(self):
         config_text = (APP_ROOT / "config.py").read_text(encoding="utf-8")
-        sqlserver_text = (APP_ROOT / "database" / "sqlserver.py").read_text(encoding="utf-8")
+        database_runtime_text = (APP_ROOT / "database" / "runtime.py").read_text(encoding="utf-8")
 
         self.assertIn("QUANTPULSE_DATABASE_URL", config_text)
         self.assertIn("QUANTPULSE_START_SCHEDULER", config_text)
@@ -56,7 +56,7 @@ class Phase0StaticSmokeTests(unittest.TestCase):
         self.assertIn("QUANTPULSE_SQL_TRUST_SERVER_CERTIFICATE", config_text)
         self.assertIn("Encrypt", config_text)
         self.assertIn("TrustServerCertificate", config_text)
-        self.assertIn("get_settings().database_url", sqlserver_text)
+        self.assertIn("get_settings().database_url", database_runtime_text)
 
 
 if __name__ == "__main__":

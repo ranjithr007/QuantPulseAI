@@ -69,6 +69,7 @@ class SMCRepository:
             fvg_price=data.get("fvg_size", 0),
             smc_bias=smc_bias,
             confidence=data["smc_score"],
+            data_generation_id=data.get("data_generation_id"),
         )
 
         db.add(signal)

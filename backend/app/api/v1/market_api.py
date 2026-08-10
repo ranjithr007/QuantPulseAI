@@ -6,16 +6,18 @@ from app.database.sqlserver import SessionLocal
 from app.repositories.candle_repository import get_latest_candles
 from app.repositories.market_repository import MarketRepository
 from app.repositories.symbol_repository import SymbolRepository
-from app.utils.freshness import freshness_status
+from app.utils.freshness import candle_freshness_timestamp, freshness_status
 from app.utils.freshness import stale_after_seconds_for_timeframe
 from app.utils.freshness import with_freshness
+from app.contracts.specialized import MarketCandlesResponse
+from app.contracts.control import MarketRefreshResponse
 
 
 router = APIRouter(prefix="/market", tags=["Market"])
 FUTURES_REFRESH_ORDER = ["1d", "4h", "1h", "15m", "5m", "1m"]
 
 
-@router.get("/{symbol}/candles")
+@router.get("/{symbol}/candles", response_model=MarketCandlesResponse)
 def get_market_candles(
     symbol: str,
     timeframe: str | None = Query(default=None),
@@ -41,7 +43,7 @@ def get_market_candles(
         db.close()
 
 
-@router.post("/{symbol}/refresh-candles")
+@router.post("/{symbol}/refresh-candles", response_model=MarketRefreshResponse)
 def refresh_market_candles(
     symbol: str,
     timeframe: str = Query(...),
@@ -67,7 +69,7 @@ def refresh_market_candles(
         db.close()
 
 
-@router.post("/refresh-candles/bulk")
+@router.post("/refresh-candles/bulk", response_model=MarketRefreshResponse)
 def refresh_market_candles_bulk(
     timeframe: str = Query(...),
     limit: int = Query(default=500, ge=50, le=15000),
@@ -121,7 +123,7 @@ def refresh_market_candles_bulk(
         db.close()
 
 
-@router.post("/refresh-candles/stack")
+@router.post("/refresh-candles/stack", response_model=MarketRefreshResponse)
 def refresh_market_candles_stack(
     limit: int = Query(default=500, ge=50, le=15000),
     replace_existing: bool = Query(default=False),
@@ -283,7 +285,7 @@ def build_market_candles_payload(db, symbol, timeframe=None, limit=100, stale_af
         "status": "OK",
         "data_scope": "timeframe",
         "count": len(items),
-        "latest": items[0] if items else None,
+        "latest": items[-1] if items else None,
         "records": items,
     }
 
@@ -356,7 +358,7 @@ def _market_timeframe_coverage(db, symbol, timeframe):
         .count()
     )
     freshness = freshness_status(
-        getattr(latest, "candle_time", None),
+        candle_freshness_timestamp(latest),
         stale_after_seconds_for_timeframe(timeframe),
     )
     return {

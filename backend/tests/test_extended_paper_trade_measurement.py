@@ -234,7 +234,7 @@ def test_measurement_api_exposes_configurable_gate_report():
                 fees_percent=0.08,
                 confidence=80,
                 mode="intraday",
-                entry_timeframe="5m",
+                entry_timeframe="1h",
                 regime="TRENDING_BULL",
                 opened_at=AS_OF - timedelta(days=60),
                 created_at=AS_OF - timedelta(days=60),
@@ -321,7 +321,7 @@ def test_ready_trade_plan_snapshots_measurement_context():
         {
             "symbol": "BTCUSDT",
             "mode": "intraday",
-            "timeframes_used": ["5m", "15m", "1h"],
+            "timeframes_used": ["1h", "4h", "1d"],
             "trigger": {"status": "READY", "side": "LONG", "reason": "ready"},
             "trade_plan": {
                 "entry": 100,
@@ -333,7 +333,7 @@ def test_ready_trade_plan_snapshots_measurement_context():
             "trade_plan_validation": {"is_valid": True, "errors": []},
             "timeframes": [
                 {
-                    "timeframe": "5m",
+                    "timeframe": "1h",
                     "confidence": 80,
                     "component_scores": {
                         "regime": {"value": "TRENDING_BULL"},
@@ -346,7 +346,9 @@ def test_ready_trade_plan_snapshots_measurement_context():
     assert result["action"] == "saved"
     assert captured == {
         "mode": "intraday",
-        "entry_timeframe": "5m",
-        "timeframe_stack": ["5m", "15m", "1h"],
+        "entry_timeframe": "1h",
+        "timeframe_stack": ["1h", "4h", "1d"],
+        "scenario": None,
+        "contradiction": None,
         "regime": "TRENDING_BULL",
     }

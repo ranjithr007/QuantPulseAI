@@ -25,6 +25,7 @@ import {
 } from "recharts";
 import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
+import Phase2ValidationBadge from "./Phase2ValidationBadge";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
 import { formatDate, formatPercent, formatPrice, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
 
@@ -147,6 +148,14 @@ export default function PnLSection({
             ) : null}
           </div>
         ) : null}
+
+        <div className="mt-3">
+          <Phase2ValidationBadge
+            symbol={selectedDetail?.symbol}
+            timeframe={selectedDetail?.timeframe || "1h"}
+            signalType={selectedDetail?.signalType}
+          />
+        </div>
 
         <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
           <MetricCard label="Total unrealized PnL" value={formatSigned(unrealizedPnl)} note="Open PnL" icon={TrendingUp} accent="emerald" />

@@ -17,7 +17,7 @@ from app.repositories.candle_repository import get_latest_candle
 from app.trading.trade_plan_engine import risk_level
 from app.intelligence.signal_quality_engine import validate_signal
 from app.risk.risk_engine import RiskEngine
-from app.utils.freshness import freshness_status
+from app.utils.freshness import candle_freshness_timestamp, freshness_status
 from app.utils.network_resilience import summarize_network_error
 from app.utils.signal_validation import validate_trade_plan_direction
 
@@ -89,7 +89,10 @@ def build_master_ai_response(symbol: str, timeframe: str, stale_after_seconds: i
         result["trade_plan_validation"] = validation
         result["current_price"] = current_price
         result["candle_time"] = candle.candle_time
-        result["freshness"] = freshness_status(candle.candle_time, stale_after_seconds)
+        result["freshness"] = freshness_status(
+            candle_freshness_timestamp(candle),
+            stale_after_seconds,
+        )
         result["inputs"] = {
             "feature": freshness_status(
                 getattr(data["feature"], "CreatedAt", None),

@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
-from traceback import format_exc
+import secrets
+import time
+import uuid
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +40,8 @@ from app.config import get_settings
 from app.database.bootstrap import bootstrap_sqlite_demo_data
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.database.sqlserver import engine as db_engine
+from app.observability.http_operations import SlidingWindowRateLimiter
+from app.observability.http_operations import build_http_logger
 from app.repositories.automation_settings_repository import ensure_automation_settings_schema
 from app.repositories.trade_thesis_repository import ensure_trade_thesis_lineage_schema
 
@@ -45,6 +49,7 @@ from app.repositories.trade_thesis_repository import ensure_trade_thesis_lineage
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    settings.validate_runtime()
     active_scheduler = None
     live_market_started = False
 
@@ -59,7 +64,7 @@ async def lifespan(app: FastAPI):
         bootstrap_sqlite_demo_data(db_engine)
         print("SQLite fallback seeded")
 
-    if settings.start_scheduler:
+    if settings.run_scheduler:
         try:
             from app.scheduler import scheduler as scheduler_module
             from app.scheduler.scheduler import start_scheduler
@@ -69,7 +74,7 @@ async def lifespan(app: FastAPI):
             if start_scheduler():
                 active_scheduler = scheduler_module.get_scheduler()
 
-    if settings.start_live_market:
+    if settings.run_live_market:
         try:
             from app.services.live_market_service import start_live_market_listener
         except ModuleNotFoundError as exc:
@@ -92,13 +97,10 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 app = FastAPI(title=f"{settings.app_name} v{settings.version}", lifespan=lifespan)
+rate_limiter = SlidingWindowRateLimiter()
+http_logger = build_http_logger()
 
-ALLOWED_ORIGINS = {
-    "http://127.0.0.1:4173",
-    "http://localhost:4173",
-    *{f"http://127.0.0.1:{port}" for port in range(5173, 5180)},
-    *{f"http://localhost:{port}" for port in range(5173, 5180)},
-}
+ALLOWED_ORIGINS = set(settings.allowed_origins)
 
 app.add_middleware(
     CORSMiddleware,
@@ -111,20 +113,131 @@ app.add_middleware(
 
 @app.middleware("http")
 async def ensure_cors_headers(request: Request, call_next):
+    started_at = time.perf_counter()
     origin = request.headers.get("origin")
+    request_id = _request_id(request)
+    request.state.request_id = request_id
+    mutating = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
 
-    try:
-        response = await call_next(request)
-    except Exception:
-        print(format_exc())
-        response = JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+    if _rate_limit_exceeded(request, mutating):
+        response = JSONResponse(
+            {"detail": "Rate limit exceeded"},
+            status_code=429,
+            headers={"Retry-After": "60"},
+        )
+    elif mutating and settings.require_admin_auth:
+        supplied_key = _admin_api_key_from_request(request)
+        if not supplied_key or not secrets.compare_digest(supplied_key, settings.admin_api_key):
+            response = JSONResponse(
+                {"detail": "Administrator authentication required"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        else:
+            response = await _call_with_error_boundary(request, call_next)
+    else:
+        response = await _call_with_error_boundary(request, call_next)
 
     if origin in ALLOWED_ORIGINS:
         response.headers.setdefault("Access-Control-Allow-Origin", origin)
         response.headers.setdefault("Access-Control-Allow-Credentials", "true")
         response.headers.setdefault("Vary", "Origin")
 
+    _apply_security_headers(response, request_id)
+    duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    http_logger.info(
+        "http_request",
+        extra={
+            "structured": {
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+                "client": _client_identifier(request),
+            }
+        },
+    )
+
     return response
+
+
+async def _call_with_error_boundary(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        http_logger.exception(
+            "unhandled_request_exception",
+            extra={
+                "structured": {
+                    "request_id": getattr(request.state, "request_id", None),
+                    "method": request.method,
+                    "path": request.url.path,
+                }
+            },
+        )
+        return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+
+
+def _admin_api_key_from_request(request):
+    authorization = request.headers.get("authorization", "")
+    scheme, _, credential = authorization.partition(" ")
+    if scheme.lower() == "bearer" and credential:
+        return credential.strip()
+    return request.headers.get("x-quantpulse-admin-key", "").strip()
+
+
+def _rate_limit_exceeded(request, mutating):
+    if not getattr(settings, "rate_limit_enabled", False):
+        return False
+    if request.url.path in {"/health/live", "/health/ready"}:
+        return False
+    limit = (
+        getattr(settings, "admin_rate_limit_per_minute", 30)
+        if mutating
+        else getattr(settings, "rate_limit_per_minute", 120)
+    )
+    bucket = "admin" if mutating else "read"
+    key = f"{_client_identifier(request)}:{bucket}"
+    return not rate_limiter.allow(key, limit, window_seconds=60)
+
+
+def _client_identifier(request):
+    if getattr(settings, "trust_proxy_headers", False):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",", 1)[0].strip()[:64]
+    return (request.client.host if request.client else "unknown")[:64]
+
+
+def _request_id(request):
+    supplied = request.headers.get("x-request-id", "").strip()
+    if supplied and len(supplied) <= 128 and all(
+        character.isalnum() or character in "-_." for character in supplied
+    ):
+        return supplied
+    return uuid.uuid4().hex
+
+
+def _apply_security_headers(response, request_id):
+    response.headers.setdefault("X-Request-ID", request_id)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    if getattr(settings, "environment", "development") == "production":
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    if response.headers.get("content-type", "").startswith("application/json"):
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'",
+        )
 
 app.include_router(health_api.router)
 app.include_router(automation_api.router)

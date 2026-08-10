@@ -83,9 +83,120 @@ Useful endpoints:
 - `GET /backtest/walk-forward`
 - `GET /paper-trade/measurement`
 
+## Phase 2 Runtime Supervisor
+
+Phase 2 evidence collection depends on LocalDB, the backend scheduler, and the
+live-market service remaining available. On Windows, validate the supervisor
+once from the repository root:
+
+```powershell
+.\backend\scripts\phase2_supervisor.ps1 -Once
+```
+
+Install the reversible per-user logon task:
+
+```powershell
+.\backend\scripts\install_phase2_supervisor.ps1
+```
+
+Remove it if required:
+
+```powershell
+.\backend\scripts\install_phase2_supervisor.ps1 -Uninstall
+```
+
+Runtime status and logs are written under `backend\runtime\`, which is excluded
+from source control. The supervisor requires canonical MSSQL and will restart
+the backend rather than permit Phase 2 collection into SQLite fallback.
+
+## Cloud Runtime Roles
+
+Cloud deployments must set `QUANTPULSE_ENV=production`, provide a canonical
+`QUANTPULSE_DATABASE_URL`, and keep `QUANTPULSE_ALLOW_SQLITE_FALLBACK=false`.
+The backend fails fast if the production database is unavailable instead of
+writing Phase 2 evidence to temporary SQLite storage.
+
+Use `QUANTPULSE_PROCESS_ROLE=api` for the public API process and
+`QUANTPULSE_PROCESS_ROLE=worker` for the single scheduler process. Configure
+the public dashboard origin through `QUANTPULSE_ALLOWED_ORIGINS`. Cloud HTTP
+processes must bind `QUANTPULSE_HOST=0.0.0.0` and use the provider's `PORT`.
+
+### Container deployment reference
+
+`docker-compose.cloud.yml` defines four distinct deployment roles:
+
+- `migrate`: one-shot `alembic upgrade head` release command.
+- `api`: public FastAPI process with live-market WebSocket ownership.
+- `worker`: singleton deterministic scheduler with no public port.
+- `frontend`: Nginx-hosted production dashboard with SPA fallback routing.
+
+Copy `cloud.env.example` to a secret-managed environment, replace every
+placeholder, and validate the graph before deploying:
+
+```powershell
+docker compose --env-file cloud.env -f docker-compose.cloud.yml config
+docker compose --env-file cloud.env -f docker-compose.cloud.yml build
+docker compose --env-file cloud.env -f docker-compose.cloud.yml up
+```
+
+The migration image and command are packaged and import correctly. The target
+cloud database is PostgreSQL. Do not run the historical SQL Server migration
+chain unchanged against PostgreSQL; Railway deployment remains gated on the
+reviewed PostgreSQL baseline described in
+`outputs/postgresql_railway_readiness_audit_2026-08-09.md`. SQLite is not a
+valid migration substitute.
+
+### Production administrator authentication
+
+All `POST`, `PUT`, `PATCH`, and `DELETE` requests require administrator
+authentication when `QUANTPULSE_REQUIRE_ADMIN_AUTH=true`; production enables
+this by default. API startup fails unless `QUANTPULSE_ADMIN_API_KEY` contains
+at least 32 characters. Supply it through the provider's secret manager, never
+through `VITE_*` variables or frontend source code.
+
+Operators can authenticate with either header form:
+
+```text
+Authorization: Bearer <QUANTPULSE_ADMIN_API_KEY>
+X-QuantPulse-Admin-Key: <QUANTPULSE_ADMIN_API_KEY>
+```
+
+The public dashboard may read market and evidence endpoints without this
+secret. Mutating dashboard controls remain unavailable in a public deployment
+until an authenticated operator-session UI is introduced.
+
+### Production HTTP operations
+
+Production enables per-client sliding-window rate limits by default: 120 read
+requests and 30 mutating requests per minute. Configure these with
+`QUANTPULSE_RATE_LIMIT_PER_MINUTE` and
+`QUANTPULSE_ADMIN_RATE_LIMIT_PER_MINUTE`. Trusted cloud proxy addresses are
+read from `X-Forwarded-For` only when `QUANTPULSE_TRUST_PROXY_HEADERS=true`.
+
+Every response includes a request ID, clickjacking/MIME/referrer protections,
+and an HSTS header in production. Request completion and unhandled exceptions
+are emitted as single-line JSON logs without query strings or credentials.
+
+Cloud probes:
+
+- `/health/live` verifies that the HTTP process is alive.
+- `/health/ready` verifies database connectivity and rejects non-canonical
+  evidence storage in production.
+
 ## Database
 
-By default, the app builds a SQL Server LocalDB URL using:
+The cloud target accepts Railway-style PostgreSQL URLs. Driver-neutral
+`postgres://` and `postgresql://` values are normalized to psycopg 3:
+
+```text
+postgresql+psycopg://USER:PASSWORD@HOST:5432/railway?sslmode=require
+```
+
+The database-neutral runtime lives in `app.database.runtime`. The former
+`app.database.sqlserver` module is a temporary compatibility shim during the
+dual-dialect transition.
+
+Local development continues to build a SQL Server LocalDB URL by default using:
 
 - `QUANTPULSE_SQLSERVER`
 - `QUANTPULSE_DATABASE`
@@ -98,7 +209,8 @@ You can override the full SQLAlchemy URL with:
 $env:QUANTPULSE_DATABASE_URL="mssql+pyodbc://@(localdb)\MSSQLLocalDB/QuantPulseAI?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
 ```
 
-Run migrations from `backend` after dependencies and the database driver are installed:
+Run migrations from `backend` only against a database supported by the selected
+migration baseline:
 
 ```powershell
 alembic upgrade head
@@ -110,13 +222,13 @@ marks missing legacy context and fee snapshots as data-quality gaps.
 
 ## Extended Paper-Trading Measurement
 
-The default evidence gate requires at least 100 closed trades observed over at least 56 days.
+The default evidence gate requires at least 100 closed trades observed over at least 90 days.
 After evidence is sufficient, the report passes only when all profitability gates pass:
 
 - Compounded net return is positive.
 - Per-trade expectancy is positive.
-- Profit factor is at least `1.25`.
-- Maximum drawdown is no greater than `15%`.
+- Profit factor is at least `1.30`.
+- Maximum drawdown is no greater than `20%`.
 
 Win rate is reported but deliberately is not a pass/fail gate. Simulated P&L for newly closed
 paper trades includes adverse entry/exit slippage and a configurable round-trip fee snapshot.

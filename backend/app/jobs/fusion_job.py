@@ -5,11 +5,12 @@ from app.services.fusion_service import FusionService
 from app.repositories._db_utils import safe_rollback
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 
 service = FusionService()
-TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
 
-def run_fusion_job():
+def run_fusion_job(*, context=None):
 
     print("Running Fusion signal Collector...")
     db = SessionLocal()
@@ -20,7 +21,7 @@ def run_fusion_job():
             symbol = item.symbol
             for timeframe in TIMEFRAMES:
                 try:
-                    result = service.generate(db, symbol, timeframe)
+                    result = service.generate(db, symbol, timeframe, context=context)
                     results.append(result)
                 except Exception as ex:
                     if not is_transient_network_error(ex):

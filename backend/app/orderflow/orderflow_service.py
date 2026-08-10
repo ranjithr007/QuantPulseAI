@@ -8,7 +8,7 @@ from app.repositories.orderflow_repository import OrderFlowRepository
 from app.orderflow.delta_engine import analyze_orderflow
 
 
-def generate_orderflow(symbol, timeframe):
+def generate_orderflow(symbol, timeframe, *, context=None):
 
     db = SessionLocal()
 
@@ -22,6 +22,8 @@ def generate_orderflow(symbol, timeframe):
         latest_record = OrderFlowRepository.get_last_cvd(db, symbol)
         
         result = analyze_orderflow(candles,latest_record,True)
+        if context is not None:
+            result["data_generation_id"] = context.generation_id
 
         OrderFlowRepository.save_orderflow(db, symbol, timeframe, result)
 

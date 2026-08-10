@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.governance.evidence_policy import govern_phase2_report
+
 
 PHASE2_REPORT_VERSION = "phase2_validation_report_v1"
 
@@ -162,7 +164,7 @@ def build_phase2_validation_report(
     overall_status = _overall_report_status(contract, architecture_gate_status)
     blockers = [check["name"] for check in gate_checks if check["status"] != "PASS"]
 
-    return {
+    report = {
         "report_version": PHASE2_REPORT_VERSION,
         "generated_at": _as_of(as_of).isoformat(),
         "overall_status": overall_status,
@@ -203,6 +205,7 @@ def build_phase2_validation_report(
         "blocked_by": blockers,
         "next_action": _next_action(overall_status, gate_checks),
     }
+    return govern_phase2_report(report, recorded_at=as_of)
 
 
 def _metric_gate_check(name, actual, threshold, comparison):

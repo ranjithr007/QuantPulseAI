@@ -1,0 +1,76 @@
+x-backend-environment: &backend-environment
+  QUANTPULSE_ENV: production
+  QUANTPULSE_DATABASE_URL: ${QUANTPULSE_DATABASE_URL:?QUANTPULSE_DATABASE_URL is required}
+  QUANTPULSE_ALLOW_SQLITE_FALLBACK: "false"
+  QUANTPULSE_SCHEDULER_JOBS: deterministic_pipeline,derivative,candle_completeness
+  QUANTPULSE_LIVE_MARKET_SYMBOLS: BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT,BNBUSDT,DOGEUSDT
+
+services:
+  migrate:
+    build:
+      context: ./backend
+    environment:
+      <<: *backend-environment
+      QUANTPULSE_PROCESS_ROLE: api
+      QUANTPULSE_START_SCHEDULER: "false"
+      QUANTPULSE_START_LIVE_MARKET: "false"
+    command: ["alembic", "-c", "alembic.postgresql.ini", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      <<: *backend-environment
+      QUANTPULSE_PROCESS_ROLE: api
+      QUANTPULSE_START_SCHEDULER: "false"
+      QUANTPULSE_START_LIVE_MARKET: "true"
+      QUANTPULSE_ALLOWED_ORIGINS: ${QUANTPULSE_ALLOWED_ORIGINS:?QUANTPULSE_ALLOWED_ORIGINS is required}
+      QUANTPULSE_REQUIRE_ADMIN_AUTH: "true"
+      QUANTPULSE_ADMIN_API_KEY: ${QUANTPULSE_ADMIN_API_KEY:?QUANTPULSE_ADMIN_API_KEY is required}
+      QUANTPULSE_RATE_LIMIT_ENABLED: "true"
+      QUANTPULSE_RATE_LIMIT_PER_MINUTE: ${QUANTPULSE_RATE_LIMIT_PER_MINUTE:-120}
+      QUANTPULSE_ADMIN_RATE_LIMIT_PER_MINUTE: ${QUANTPULSE_ADMIN_RATE_LIMIT_PER_MINUTE:-30}
+      QUANTPULSE_TRUST_PROXY_HEADERS: "true"
+      PORT: "8000"
+    command: ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $${PORT}"]
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${PORT}/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+    environment:
+      <<: *backend-environment
+      QUANTPULSE_PROCESS_ROLE: worker
+      QUANTPULSE_START_SCHEDULER: "true"
+      QUANTPULSE_START_LIVE_MARKET: "false"
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend/quantpulse-dashboard
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:?VITE_BACKEND_URL is required}
+    environment:
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

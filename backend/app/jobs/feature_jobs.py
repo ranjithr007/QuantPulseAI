@@ -4,9 +4,10 @@ from app.repositories.symbol_repository import SymbolRepository
 from app.repositories._db_utils import safe_rollback
 from app.utils.network_resilience import classify_network_error
 from app.utils.network_resilience import is_transient_network_error
-TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
+TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
 
-def run_feature_job():
+def run_feature_job(*, context=None):
     print("Running Feature Factory...")
     db = SessionLocal()
     try:
@@ -16,7 +17,7 @@ def run_feature_job():
         for item in symbols:
             for tf in TIMEFRAMES:
                 try:
-                    result= generate_features(item.symbol, tf)
+                    result= generate_features(item.symbol, tf, context=context)
                     results.append(result)
                 except Exception as ex:
                     if not is_transient_network_error(ex):

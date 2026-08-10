@@ -24,4 +24,6 @@ class MarketRegime(Base):
 
     Reason = Column(String)
 
+    data_generation_id = Column(String(100), index=True, nullable=True)
+
     CreatedAt = Column(DateTime, default=datetime.utcnow)

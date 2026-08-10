@@ -7,6 +7,7 @@ from datetime import timedelta
 from datetime import timezone
 from typing import Any
 
+from app.backtesting.walk_forward_validator import is_phase2_official_timeframe
 from app.database.sqlserver import SessionLocal
 from app.database.models.market_features import MarketFeature
 
@@ -45,7 +46,7 @@ class RiskJobConfig:
     - persistence and lineage
     """
 
-    default_timeframe: str = "5m"
+    default_timeframe: str = "1h"
 
     # Signal is considered stale after this many completed bars.
     master_signal_max_age_bars: int = 3
@@ -118,7 +119,10 @@ class RiskJob:
         summary = self._create_summary()
 
         try:
-            master_signals = self.master_repo.get_latest_signals(db,timeframe="5m")
+            master_signals = self.master_repo.get_latest_signals(
+                db,
+                timeframe=self.config.default_timeframe,
+            )
             master_signals = self._deduplicate_master_signals(master_signals)
 
             for master_signal in master_signals:
@@ -486,7 +490,15 @@ class RiskJob:
             "errors": [],
         }
 
-        trades = self.trade_plan_repo.get_open_trades(db)
+        trades = [
+            trade
+            for trade in self.trade_plan_repo.get_open_trades(db)
+            if is_phase2_official_timeframe(
+                self._get_value(trade, "entry_timeframe")
+                or self._get_value(trade, "timeframe")
+                or self.config.default_timeframe
+            )
+        ]
 
         for trade in trades:
             symbol = self._get_required_text(trade, "symbol")
@@ -718,6 +730,11 @@ class RiskJob:
             source_timestamp or self._utc_now()
         )
         result["effective_timestamp"] = self._utc_now()
+
+        context = getattr(self, "_pipeline_context", None)
+        if context is not None:
+            result["data_generation_id"] = context.generation_id
+            result["source_cutoff"] = context.source_cutoff
 
         result.setdefault("risk_percent", 1.0)
         result.setdefault("targets", {})
@@ -1066,9 +1083,11 @@ class RiskJob:
 LONG_DECISIONS = {"BULLISH", "STRONG_LONG", "LONG", "BUY"}
 SHORT_DECISIONS = {"BEARISH", "STRONG_SHORT", "SHORT", "SELL"}
 
-def run_risk_job():
+def run_risk_job(*, context=None):
     """
     APScheduler-compatible entry point.
     """
 
-    return RiskJob().run()
+    job = RiskJob()
+    job._pipeline_context = context
+    return job.run()

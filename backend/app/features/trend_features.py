@@ -18,7 +18,7 @@ def calculate_trend(candles):
             "ema50": None,
             "ema_gap_pct": 0.0,
             "price_position": "UNKNOWN",
-            "momentum_score": 0.0,
+            "momentum_score": 50.0,
         }
 
     closes = [float(c.close_price) for c in candles]
@@ -68,7 +68,7 @@ def calculate_trend(candles):
     else:
         trend = "SIDEWAYS"
 
-    momentum_score = getmomentum_score(closes, 5)
+    momentum_score = clamp(50.0 + getmomentum_score(closes, 5), 0.0, 100.0)
     return {"trend_score": score, "trend": trend, "momentum_score": momentum_score}
 
 

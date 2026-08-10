@@ -15,15 +15,22 @@ htmlcov/
 .env
 .env.*
 !.env.example
+cloud.env
 venv/
 .venv/
 backend/venv/
 backend/.venv/
 backend/app/storage/models/
+backend/runtime/
 frontend/node_modules/
 frontend/*/node_modules/
 frontend/*/dist/
 frontend/*/build/
+
+# Generated research, migration evidence, and local database checkpoints
+outputs/
+backend/outputs/
+*.bak
 
 # User-specific files
 *.rsuser

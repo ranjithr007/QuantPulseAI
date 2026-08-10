@@ -125,6 +125,36 @@ def test_rolling_mode_keeps_training_window_fixed():
     assert result["folds"][1]["train"]["start"] == (START + timedelta(minutes=3)).isoformat()
 
 
+def test_adverse_replay_uses_frozen_fold_parameters_without_reselection():
+    result = run_walk_forward(
+        candles(12),
+        "LONG",
+        stop_grid=[1, 2],
+        target_grid=[2, 3],
+        train_size=6,
+        test_size=3,
+        step_size=3,
+        min_train_trades=1,
+        fee_bps=8,
+        slippage_bps=4,
+        frozen_fold_parameters=[
+            {"stop_percent": 2, "target_percent": 3},
+            {"stop_percent": 1, "target_percent": 2},
+        ],
+    )
+
+    assert result["validation_status"] == "VALID"
+    assert result["configuration"]["selection_mode"] == "FROZEN_FOLD_PARAMETERS"
+    assert [
+        fold["selected_parameters"]
+        for fold in result["folds"]
+    ] == [
+        {"stop_percent": 2.0, "target_percent": 3.0},
+        {"stop_percent": 1.0, "target_percent": 2.0},
+    ]
+    assert all(fold["selection"]["status"] == "FROZEN" for fold in result["folds"])
+
+
 def test_low_sample_fallback_prefers_evidence_over_no_trade_score():
     def runner(items, signal, **options):
         trades = 0 if options["stop_percent"] == 1 else 2
@@ -203,6 +233,7 @@ def test_walk_forward_api_forwards_validated_configuration(monkeypatch):
         position_size_percent=50,
         fee_bps=5,
         slippage_bps=3,
+        as_of=START,
     )
 
     assert response["source"] == "walk_forward_validation_v1"
@@ -210,6 +241,7 @@ def test_walk_forward_api_forwards_validated_configuration(monkeypatch):
     assert captured["stop_grid"] == [0.5, 1.0]
     assert captured["target_grid"] == [1.5, 2.0]
     assert captured["mode"] == "ROLLING"
+    assert captured["as_of_timestamp"] == START
 
 
 def test_walk_forward_api_rejects_bad_grid_and_overlap():
@@ -236,6 +268,10 @@ def test_walk_forward_api_rejects_bad_grid_and_overlap():
             slippage_bps=2,
         )
     assert overlap_error.value.status_code == 422
+
+    with pytest.raises(HTTPException) as frozen_error:
+        backtest_api._frozen_fold_options('[{"stop_percent": 1}]')
+    assert frozen_error.value.status_code == 422
 
 
 def test_walk_forward_api_uses_phase2_defaults_for_official_timeframe(monkeypatch):

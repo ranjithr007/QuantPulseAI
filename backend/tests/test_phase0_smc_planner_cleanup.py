@@ -19,8 +19,8 @@ class Candle:
 
 class Phase0SmcPlannerCleanupTests(unittest.TestCase):
     def test_liquidity_sweep_engine_normalizes_detector_result(self):
-        candles = [Candle(100, 112, 99, 108)]
-        candles.extend(Candle(100, 110, 98, 105) for _ in range(9))
+        candles = [Candle(100, 110, 98, 105) for _ in range(9)]
+        candles.append(Candle(100, 112, 99, 108))
 
         result = LiquiditySweepEngine().analyze(candles)
 

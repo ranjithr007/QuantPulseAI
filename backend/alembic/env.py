@@ -30,8 +30,8 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 
-from app.database.sqlserver import Base
-from app.database.sqlserver import DATABASE_URL
+from app.database.runtime import Base
+from app.database.runtime import DATABASE_URL
 import app.database.models
 
 target_metadata = Base.metadata

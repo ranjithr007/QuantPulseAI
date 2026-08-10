@@ -23,7 +23,7 @@ class LiquiditySweepEngine:
                 "reason": "No liquidity sweep detected",
             }
 
-        latest = candles[0]
+        latest = candles[-1]
         direction = "BUY_SIDE_SWEEP" if result["price"] == latest.high_price else "SELL_SIDE_SWEEP"
 
         return {

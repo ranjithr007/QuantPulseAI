@@ -7,7 +7,7 @@ from app.intelligence.master_ai_engine import score_master_signal_components
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.candle_repository import get_latest_candles
 from app.repositories.intelligence_repository import get_ai_inputs
-from app.utils.freshness import freshness_status
+from app.utils.freshness import candle_freshness_timestamp, freshness_status
 
 
 ACTIONABLE_SIGNALS = {"LONG", "SHORT"}
@@ -300,7 +300,10 @@ def build_probability_profile(db, symbol, timeframe="5m", stale_after_seconds=90
     price_change_pct = _percent_change(previous_price, current_price)
     contradiction = build_contradiction_report(db, symbol, timeframe, stale_after_seconds)
     freshness = {
-        "candle": freshness_status(candle.candle_time, stale_after_seconds),
+        "candle": freshness_status(
+            candle_freshness_timestamp(candle),
+            stale_after_seconds,
+        ),
         "feature": freshness_status(
             getattr(inputs["feature"], "CreatedAt", None), stale_after_seconds
         ),

@@ -50,7 +50,8 @@ export async function loadLiveMarketSnapshot({ symbols = [], signal }) {
     20000
   );
 
-  return response?.records || [];
+  // LiveMarketResponse guarantees a records array, including empty/stale states.
+  return response.records;
 }
 
 export async function loadLiveMarketStatus({ signal } = {}) {
@@ -153,6 +154,67 @@ export async function loadPaperTradeMeasurement({ symbol, signal } = {}) {
   return response || null;
 }
 
+export async function loadPaperTradeOpportunities({ symbol, sinceHours = 24, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/opportunities",
+    {
+      symbol,
+      since_hours: sinceHours,
+    },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
+export async function loadPaperTradeLifecycleFunnel({ symbol, sinceHours = 24, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/lifecycle-funnel",
+    {
+      symbol,
+      since_hours: sinceHours,
+    },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
+export async function loadPhase2RollingValidation({ symbol, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/rolling-validation",
+    { symbol },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
+export async function loadPaperTradeRecoveryEvents({ limit = 20, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/recovery-events",
+    { limit },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
+export async function loadPhase2EvidenceCheckpoints({ limit = 30, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/evidence-checkpoints",
+    { limit },
+    signal,
+    30000
+  );
+
+  return response || null;
+}
+
 export async function loadPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", signal }) {
   const response = await requestJson(
     "/backtest/phase2-report",
@@ -233,17 +295,18 @@ export async function loadPhase2ValidationSummary({ symbol, timeframe, signalSid
 
 export async function loadAutomationSettings({ signal } = {}) {
   const response = await requestJson("/automation/settings", {}, signal, 15000);
-  return response?.settings || null;
+  // AutomationEnvelope keeps settings explicit on success and null on failure.
+  return response.settings;
 }
 
 export async function saveAutomationSettings({ settings, signal } = {}) {
   const response = await requestJson("/automation/settings", {}, signal, 15000, "PUT", settings);
-  return response?.settings || null;
+  return response.settings;
 }
 
 export async function saveAutomationEmergencyStop({ active, signal } = {}) {
   const response = await requestJson("/automation/emergency-stop", {}, signal, 15000, "POST", { active: Boolean(active) });
-  return response?.settings || null;
+  return response.settings;
 }
 
 export async function executePaperTradeCandidates({ symbol, staleAfterSeconds = 900, signal } = {}) {

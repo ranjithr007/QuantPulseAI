@@ -96,13 +96,39 @@ def test_approve_open_trade_plans_continues_after_one_trade_error():
     db.commit.assert_called_once()
 
 
+def test_approve_open_trade_plans_excludes_legacy_entry_timeframes():
+    db = SimpleNamespace(commit=Mock(), rollback=Mock())
+    trade_plan_repo = Mock()
+    trade_plan_repo.get_open_trades.return_value = [
+        SimpleNamespace(
+            symbol="XRPUSDT",
+            side="SHORT",
+            entry_timeframe="5m",
+        )
+    ]
+    engine = Mock()
+
+    job = RiskJob(
+        session_factory=Mock(),
+        master_repo=Mock(),
+        risk_repo=Mock(),
+        trade_plan_repo=trade_plan_repo,
+        engine=engine,
+    )
+
+    summary = job._approve_trade_plans(db)
+
+    assert summary["processed"] == 0
+    engine.analyze_trade_plan.assert_not_called()
+
+
 def test_run_risk_job_continues_after_one_signal_error():
     fake_db = Mock()
     session_factory = Mock(return_value=fake_db)
 
     signal_ok = SimpleNamespace(
         symbol="BTCUSDT",
-        timeframe="5m",
+        timeframe="1h",
         decision="LONG",
         confidence=80.0,
         thesis_id=11,
@@ -110,7 +136,7 @@ def test_run_risk_job_continues_after_one_signal_error():
 
     signal_bad = SimpleNamespace(
         symbol="ETHUSDT",
-        timeframe="5m",
+        timeframe="1h",
         decision="SHORT",
         confidence=70.0,
         thesis_id=22,
@@ -160,7 +186,7 @@ def test_run_risk_job_continues_after_one_signal_error():
 
     valid_market_inputs = {
         "symbol": "BTCUSDT",
-        "timeframe": "5m",
+        "timeframe": "1h",
         "price": 100.0,
         "atr": 1.0,
         "atr_source": "MARKET_FEATURE",

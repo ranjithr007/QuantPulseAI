@@ -1,4 +1,5 @@
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from types import SimpleNamespace
 
@@ -13,9 +14,33 @@ from app.backtesting.performance_engine import calculate_performance
 from app.features.point_in_time_feature_service import build_feature_snapshot
 from app.paper_trading.fill_model import build_fill_profile
 from app.regimes.rules import detect_regime
+from app.intelligence.multi_timeframe_engine import BEARISH_BIASES
+from app.intelligence.multi_timeframe_engine import BULLISH_BIASES
+from app.utils.freshness import normalize_timestamp_to_utc
 
 
 ENGINE_VERSION = "filtered_replay_v1"
+
+
+class _CandlePrefixView(Sequence):
+    """O(1) read-only view over candles closed through one decision index."""
+
+    def __init__(self, candles, end):
+        self._candles = candles
+        self._end = end
+
+    def __len__(self):
+        return self._end
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self._end)
+            return self._candles[start:stop:step]
+        normalized = index + self._end if index < 0 else index
+        if normalized < 0 or normalized >= self._end:
+            raise IndexError(index)
+        return self._candles[normalized]
+
 LONG_REGIMES = {
     "TRENDING_BULL",
     "HIGH_VOLATILITY_BREAKOUT",
@@ -36,6 +61,7 @@ GATE_PROFILES = {
         "short_momentum_score": 40,
         "short_final_score": 40,
         "short_regime_required": True,
+        "enforce_decision_chain": True,
     },
     # Research-only profile. It measures signal coverage under a directional
     # filter without changing the production STRICT gate.
@@ -48,6 +74,44 @@ GATE_PROFILES = {
         "short_momentum_score": 50,
         "short_final_score": 45,
         "short_regime_required": False,
+        "enforce_decision_chain": False,
+    },
+    # Research-only SHORT profile derived from failure-pattern diagnostics.
+    # It avoids late/exhausted shorts and countertrend bear rallies while
+    # allowing neutral/range regimes that do not strongly conflict.
+    "SHORT_EDGE_RESEARCH": {
+        "long_trend_score": 65,
+        "long_momentum_score": 60,
+        "long_final_score": 70,
+        "long_regime_required": True,
+        "short_trend_score": 45,
+        "short_trend_score_min": 25,
+        "short_momentum_score": 45,
+        "short_final_score": 45,
+        "short_final_score_min": 35,
+        "short_regime_required": False,
+        "short_blocked_regimes": {
+            *LONG_REGIMES,
+            "BEAR_RALLY",
+            "HIGH_VOLATILITY_BREAKDOWN",
+        },
+        "confidence_max": 65,
+        "enforce_decision_chain": False,
+    },
+    # Research-only profile that isolates one hypothesis from the R5
+    # untouched-symbol diagnostic: BEAR_RALLY shorts require point-in-time
+    # evidence that the counter-trend rally has exhausted.
+    "BEAR_RALLY_EXHAUSTION_RESEARCH": {
+        "long_trend_score": 55,
+        "long_momentum_score": 50,
+        "long_final_score": 60,
+        "long_regime_required": False,
+        "short_trend_score": 45,
+        "short_momentum_score": 50,
+        "short_final_score": 45,
+        "short_regime_required": False,
+        "short_bear_rally_requires_exhaustion": True,
+        "enforce_decision_chain": False,
     },
 }
 
@@ -63,6 +127,19 @@ class FilteredReplayConfig:
     warmup_candles: int = 50
     fee_bps: float = 4.0
     slippage_bps: float = 2.0
+    risk_percent_per_trade: float | None = None
+    target_trade_volatility_percent: float | None = None
+    max_leverage: float = 1.0
+    max_open_positions: int = 20
+    max_gross_exposure_percent: float = 500.0
+    initial_portfolio_positions: tuple = ()
+    collision_policy: str = "STOP_FIRST"
+    profit_protection_mode: str = "NONE"
+    profit_protection_activation_r: float = 1.0
+    timeframe_minutes: int = 60
+    funding_interval_hours: float = 8.0
+    maintenance_margin_rate: float = 0.005
+    maintenance_margin_brackets: tuple = ()
 
     def __post_init__(self):
         if self.initial_capital <= 0:
@@ -79,6 +156,49 @@ class FilteredReplayConfig:
             raise ValueError("warmup_candles must be at least 50")
         if self.fee_bps < 0 or self.slippage_bps < 0:
             raise ValueError("fee_bps and slippage_bps cannot be negative")
+        if self.risk_percent_per_trade is not None and not 0 < self.risk_percent_per_trade <= 100:
+            raise ValueError("risk_percent_per_trade must be greater than 0 and at most 100")
+        if (
+            self.target_trade_volatility_percent is not None
+            and not 0 < self.target_trade_volatility_percent <= 100
+        ):
+            raise ValueError(
+                "target_trade_volatility_percent must be greater than 0 and at most 100"
+            )
+        if (
+            self.risk_percent_per_trade is not None
+            and self.target_trade_volatility_percent is not None
+        ):
+            raise ValueError("fixed-risk and volatility-targeted sizing are mutually exclusive")
+        if self.max_leverage < 1:
+            raise ValueError("max_leverage must be at least 1")
+        if self.max_open_positions < 1:
+            raise ValueError("max_open_positions must be at least 1")
+        if self.max_gross_exposure_percent <= 0:
+            raise ValueError("max_gross_exposure_percent must be greater than zero")
+        collision_policy = str(self.collision_policy or "").upper()
+        if collision_policy not in {"STOP_FIRST", "TARGET_FIRST", "LOWER_TIMEFRAME_REQUIRED"}:
+            raise ValueError(
+                "collision_policy must be STOP_FIRST, TARGET_FIRST, or LOWER_TIMEFRAME_REQUIRED"
+            )
+        object.__setattr__(self, "collision_policy", collision_policy)
+        protection_mode = str(self.profit_protection_mode or "").upper()
+        if protection_mode not in {"NONE", "BREAKEVEN_AFTER_R"}:
+            raise ValueError(
+                "profit_protection_mode must be NONE or BREAKEVEN_AFTER_R"
+            )
+        if self.profit_protection_activation_r <= 0:
+            raise ValueError("profit_protection_activation_r must be positive")
+        object.__setattr__(self, "profit_protection_mode", protection_mode)
+        if self.timeframe_minutes <= 0 or self.funding_interval_hours <= 0:
+            raise ValueError("timeframe and funding intervals must be positive")
+        if not 0 <= self.maintenance_margin_rate < 1:
+            raise ValueError("maintenance_margin_rate must be between 0 and 1")
+        object.__setattr__(
+            self,
+            "maintenance_margin_brackets",
+            _normalize_margin_brackets(self.maintenance_margin_brackets),
+        )
 
 
 def run_filtered_replay(
@@ -86,6 +206,7 @@ def run_filtered_replay(
     side,
     *,
     feature_resolver=None,
+    stack_resolver=None,
     initial_capital=10_000,
     position_size_percent=100,
     min_confidence=70,
@@ -96,6 +217,21 @@ def run_filtered_replay(
     fee_bps=4,
     slippage_bps=2,
     gate_profile="STRICT",
+    risk_percent_per_trade=None,
+    target_trade_volatility_percent=None,
+    max_leverage=1,
+    max_open_positions=20,
+    max_gross_exposure_percent=500,
+    initial_portfolio_positions=None,
+    collision_policy="STOP_FIRST",
+    profit_protection_mode="NONE",
+    profit_protection_activation_r=1.0,
+    timeframe_minutes=60,
+    funding_interval_hours=8,
+    maintenance_margin_rate=0.005,
+    maintenance_margin_brackets=None,
+    mark_price_records=None,
+    decision_cache=None,
 ):
     requested_side = str(side or "").upper()
     if requested_side not in {"LONG", "SHORT"}:
@@ -111,6 +247,27 @@ def run_filtered_replay(
         warmup_candles=int(warmup_candles),
         fee_bps=float(fee_bps),
         slippage_bps=float(slippage_bps),
+        risk_percent_per_trade=(
+            None
+            if risk_percent_per_trade is None
+            else float(risk_percent_per_trade)
+        ),
+        target_trade_volatility_percent=(
+            None
+            if target_trade_volatility_percent is None
+            else float(target_trade_volatility_percent)
+        ),
+        max_leverage=float(max_leverage),
+        max_open_positions=int(max_open_positions),
+        max_gross_exposure_percent=float(max_gross_exposure_percent),
+        initial_portfolio_positions=tuple(initial_portfolio_positions or ()),
+        collision_policy=collision_policy,
+        profit_protection_mode=profit_protection_mode,
+        profit_protection_activation_r=float(profit_protection_activation_r),
+        timeframe_minutes=int(timeframe_minutes),
+        funding_interval_hours=float(funding_interval_hours),
+        maintenance_margin_rate=float(maintenance_margin_rate),
+        maintenance_margin_brackets=tuple(maintenance_margin_brackets or ()),
     )
     gate_profile_key = str(gate_profile or "STRICT").upper()
     if gate_profile_key not in GATE_PROFILES:
@@ -123,22 +280,48 @@ def run_filtered_replay(
     rejection_counts = Counter()
     feature_source_counts = Counter()
     point_in_time_counts = Counter()
+    stack_state_counts = Counter()
     decision_index = config.warmup_candles - 1
     cooldown_until = 0
     signal_armed = True
     exposed_candles = 0
+    initial_portfolio = _portfolio_state(
+        config.initial_portfolio_positions,
+        capital,
+    )
 
     while decision_index < len(ordered) - 1 and capital > 0:
-        decision = build_candle_decision(
-            ordered[: decision_index + 1],
+        decision_timestamp = _decision_timestamp(ordered[decision_index])
+        decision_key = (
+            decision_timestamp,
             requested_side,
             config.min_confidence,
-            feature_resolver=feature_resolver,
-            gate_profile=gate_profile_key,
+            gate_profile_key,
         )
+        decision = (
+            decision_cache.get(decision_key)
+            if decision_cache is not None
+            else None
+        )
+        if decision is None:
+            decision = build_candle_decision(
+                _CandlePrefixView(ordered, decision_index + 1),
+                requested_side,
+                config.min_confidence,
+                feature_resolver=feature_resolver,
+                stack_context=(
+                    stack_resolver(decision_timestamp)
+                    if stack_resolver is not None
+                    else None
+                ),
+                gate_profile=gate_profile_key,
+            )
+            if decision_cache is not None:
+                decision_cache[decision_key] = decision
         decision_counts[decision["signal"]] += 1
         feature_source_counts[decision["feature_source"]] += 1
         point_in_time_counts.update(decision.get("point_in_time_flags") or {})
+        stack_state_counts[decision.get("timeframe_stack_state") or "NOT_SUPPLIED"] += 1
 
         if not decision["eligible"]:
             signal_armed = True
@@ -179,22 +362,79 @@ def run_filtered_replay(
             decision_index += 1
             continue
 
-        allocated_capital = capital * (config.position_size_percent / 100)
-        quantity = allocated_capital / entry_fill
+        capital_before = capital
+        sizing = _position_sizing(
+            capital=capital,
+            entry=entry_fill,
+            stop_distance=stop_distance,
+            position_size_percent=config.position_size_percent,
+            max_leverage=config.max_leverage,
+            risk_percent_per_trade=config.risk_percent_per_trade,
+            target_trade_volatility_percent=config.target_trade_volatility_percent,
+            atr=atr,
+        )
+        quantity = sizing["quantity"]
+        planned_risk_amount = sizing["planned_risk_amount"]
+        sizing_mode = sizing["mode"]
+        allocated_capital = sizing["allocated_capital"]
+        portfolio_gate = _portfolio_gate(
+            initial_portfolio,
+            side=requested_side,
+            candidate_notional=sizing["notional"],
+            capital=capital,
+            max_open_positions=config.max_open_positions,
+            max_gross_exposure_percent=config.max_gross_exposure_percent,
+        )
+        if not portfolio_gate["allowed"]:
+            rejection_counts[portfolio_gate["reason"]] += 1
+            decision_index += 1
+            continue
         exit_details = None
+        active_stop = stop
+        protection_activated = False
+        protection_activation_time = None
         for exit_index in range(entry_index, len(ordered)):
             candle = ordered[exit_index]
-            trigger = _exit_trigger(candle, requested_side, stop, target)
+            trigger = _exit_trigger_with_policy(
+                candle,
+                requested_side,
+                active_stop,
+                target,
+                config.collision_policy,
+            )
             if trigger is not None:
                 trigger_type, trigger_price = trigger
+                if trigger_type == "STOP" and protection_activated:
+                    trigger_type = "PROTECTED_STOP"
                 exit_fill = _adverse_fill(
                     trigger_price,
                     requested_side,
                     config.slippage_bps,
                     entering=False,
                 )
-                exit_details = (exit_index, candle, trigger_type, trigger_price, exit_fill)
+                exit_details = (
+                    exit_index,
+                    candle,
+                    trigger_type,
+                    trigger_price,
+                    exit_fill,
+                    active_stop,
+                )
                 break
+            if not protection_activated:
+                protected_stop, activated = _profit_protection_stop(
+                    candle,
+                    requested_side,
+                    entry_fill,
+                    stop_distance,
+                    active_stop,
+                    mode=config.profit_protection_mode,
+                    activation_r=config.profit_protection_activation_r,
+                )
+                if activated:
+                    active_stop = protected_stop
+                    protection_activated = True
+                    protection_activation_time = _time_value(candle)
 
         if exit_details is None:
             exit_index = len(ordered) - 1
@@ -208,9 +448,17 @@ def run_filtered_replay(
                 "END_OF_DATA",
                 raw_exit,
                 _adverse_fill(raw_exit, requested_side, config.slippage_bps, entering=False),
+                active_stop,
             )
 
-        exit_index, exit_candle, exit_reason, trigger_price, exit_fill = exit_details
+        (
+            exit_index,
+            exit_candle,
+            exit_reason,
+            trigger_price,
+            exit_fill,
+            exit_stop,
+        ) = exit_details
         entry_fee = entry_fill * quantity * _bps_rate(config.fee_bps)
         exit_fee = exit_fill * quantity * _bps_rate(config.fee_bps)
         gross_pnl = (
@@ -219,10 +467,78 @@ def run_filtered_replay(
             else (entry_fill - exit_fill) * quantity
         )
         fees = entry_fee + exit_fee
-        net_pnl = gross_pnl - fees
-        pnl_percent = (net_pnl / allocated_capital) * 100 if allocated_capital else 0
+        entry_slippage_cost = abs(entry_fill - raw_entry) * quantity
+        exit_slippage_cost = abs(exit_fill - trigger_price) * quantity
+        duration_candles = exit_index - entry_index + 1
+        funding_rate = _replay_funding_rate(decision.get("timeframe_stack"))
+        funding_events = int(
+            (duration_candles * config.timeframe_minutes)
+            // (config.funding_interval_hours * 60)
+        )
+        funding_payment = (
+            entry_fill
+            * quantity
+            * funding_rate
+            * funding_events
+            * (1 if requested_side == "LONG" else -1)
+        )
+        net_pnl = gross_pnl - fees - funding_payment
+        pnl_denominator = (
+            capital_before
+            if (
+                config.risk_percent_per_trade is not None
+                or config.target_trade_volatility_percent is not None
+            )
+            else allocated_capital
+        )
+        pnl_percent = (net_pnl / pnl_denominator) * 100 if pnl_denominator else 0
         capital += net_pnl
-        exposed_candles += exit_index - entry_index + 1
+        exposed_candles += duration_candles
+        excursions = _excursion_metrics(
+            ordered,
+            entry_index,
+            exit_index,
+            requested_side,
+            entry_fill,
+            stop,
+            target,
+        )
+        collision = _intrabar_collision(
+            exit_candle,
+            requested_side,
+            exit_stop,
+            target,
+        )
+        result_label = (
+            "WIN" if net_pnl > 0 else "LOSS" if net_pnl < 0 else "BREAKEVEN"
+        )
+        loss_class = _loss_classification(
+            result_label,
+            exit_reason,
+            excursions,
+        )
+        mark_price_path = _mark_price_path(
+            mark_price_records,
+            entry_candle,
+            exit_candle,
+        )
+        liquidation = _liquidation_diagnostics(
+            mark_price_path or ordered[entry_index : exit_index + 1],
+            requested_side,
+            entry_fill,
+            quantity,
+            capital_before,
+            config.maintenance_margin_rate,
+            maintenance_margin_brackets=(
+                config.maintenance_margin_brackets
+                or _replay_margin_brackets(decision.get("timeframe_stack"))
+            ),
+            price_source=(
+                "HISTORICAL_MARK_PRICE_KLINES"
+                if mark_price_path
+                else "CANDLE_HIGH_LOW_PROXY"
+            ),
+        )
 
         trades.append(
             {
@@ -235,20 +551,68 @@ def run_filtered_replay(
                 "exit_reference": round(trigger_price, 8),
                 "exit_time": _time_value(exit_candle),
                 "stop": round(stop, 8),
+                "effective_stop_at_exit": round(exit_stop, 8),
                 "target": round(target, 8),
-                "result": "WIN" if net_pnl > 0 else "LOSS" if net_pnl < 0 else "BREAKEVEN",
+                "result": result_label,
                 "exit_reason": exit_reason,
+                "loss_class": loss_class,
+                "intrabar_collision": collision,
                 "gross_pnl": round(gross_pnl, 2),
                 "fees": round(fees, 2),
+                "execution_costs": {
+                    "entry_slippage": round(entry_slippage_cost, 4),
+                    "exit_slippage": round(exit_slippage_cost, 4),
+                    "fees": round(fees, 4),
+                    "funding_payment": round(funding_payment, 4),
+                    "funding_rate": funding_rate,
+                    "funding_events": funding_events,
+                    "total": round(
+                        entry_slippage_cost
+                        + exit_slippage_cost
+                        + fees
+                        + funding_payment,
+                        4,
+                    ),
+                },
                 "pnl": round(net_pnl, 2),
                 "pnl_percent": round(pnl_percent, 4),
                 "capital_after": round(capital, 2),
-                "duration_candles": exit_index - entry_index + 1,
+                "duration_candles": duration_candles,
+                "sizing": {
+                    "mode": sizing_mode,
+                    "quantity": round(quantity, 8),
+                    "notional": round(quantity * entry_fill, 4),
+                    "planned_risk_amount": (
+                        round(planned_risk_amount, 4)
+                        if planned_risk_amount is not None
+                        else None
+                    ),
+                    "effective_leverage": round(
+                        (quantity * entry_fill) / capital_before,
+                        4,
+                    ),
+                },
+                "portfolio_state_at_entry": portfolio_gate["projected_state"],
+                "liquidation": liquidation,
                 "regime": decision["regime"],
                 "confidence": decision["confidence"],
+                "trend_score": decision["features"]["trend_score"],
+                "momentum_score": decision["features"]["momentum_score"],
                 "feature_score": decision["features"]["final_score"],
                 "atr": round(atr, 8),
                 "feature_source": decision["feature_source"],
+                "timeframe_stack": decision.get("timeframe_stack"),
+                "profit_protection": {
+                    "mode": config.profit_protection_mode,
+                    "activation_r": config.profit_protection_activation_r,
+                    "activated": protection_activated,
+                    "activation_time": protection_activation_time,
+                    "protected_stop": (
+                        round(active_stop, 8) if protection_activated else None
+                    ),
+                    "activation_applies_from_next_candle": True,
+                },
+                "excursions": excursions,
             }
         )
         equity_curve.append({"label": _time_label(exit_candle), "equity": round(capital, 2)})
@@ -284,6 +648,11 @@ def run_filtered_replay(
             "candles": "AVAILABLE",
             "features": "POINT_IN_TIME_SNAPSHOT_FIRST",
             "regime": "RECONSTRUCTED_FROM_CLOSED_CANDLES",
+            "timeframe_stack": (
+                "POINT_IN_TIME_1H_4H_1D"
+                if stack_resolver is not None
+                else "NOT_SUPPLIED"
+            ),
             "smc": "UNAVAILABLE_HISTORICALLY",
             "orderflow": "UNAVAILABLE_HISTORICALLY",
             "claim_scope": "CANDLE_FILTER_VALIDATION_NOT_FULL_AI_REPLAY",
@@ -305,21 +674,519 @@ def run_filtered_replay(
                 "thesis_leakage_partials": point_in_time_counts.get("thesis_leakage_partial", 0),
                 "thesis_leakage_failures": point_in_time_counts.get("thesis_leakage_fail", 0),
             },
+            "timeframe_stack_states": dict(sorted(stack_state_counts.items())),
         },
         "execution_parity": _execution_parity_summary(trades, config),
         "eligibility_divergence": _eligibility_divergence_summary(rejection_counts),
+        "loss_attribution": _loss_attribution_summary(trades),
+        "portfolio_state": {
+            "initial": initial_portfolio,
+            "policy": {
+                "max_open_positions": config.max_open_positions,
+                "max_gross_exposure_percent": config.max_gross_exposure_percent,
+            },
+            "model": "PRE_DECISION_STATE_PLUS_SEQUENTIAL_REPLAY_POSITION",
+        },
         "assumptions": {
             **asdict(config),
             "gate_profile": gate_profile_key,
             "entry_timing": "NEXT_CANDLE_OPEN",
-            "intrabar_collision": "STOP_FIRST",
+            "intrabar_collision": config.collision_policy,
+            "collision_policy": config.collision_policy,
+            "sizing_mode": (
+                "FIXED_RISK_CAPPED"
+                if config.risk_percent_per_trade is not None
+                else "VOLATILITY_TARGETED_CAPPED"
+                if config.target_trade_volatility_percent is not None
+                else "CAPITAL_PERCENT"
+            ),
+            "funding_model": "ENTRY_RATE_APPLIED_PER_8H_EVENT",
+            "mark_price_model": (
+                "HISTORICAL_MARK_PRICE_KLINES"
+                if mark_price_records
+                else "CANDLE_HIGH_LOW_PROXY"
+            ),
+            "margin_bracket_model": (
+                "POINT_IN_TIME_VERSIONED_SNAPSHOT_WITH_CONFIG_FALLBACK"
+            ),
             "position_policy": "ONE_AT_A_TIME",
             "signal_reentry": "REQUIRES_GATE_RESET",
             "stop_model": "ATR_MULTIPLE",
             "target_model": "ATR_MULTIPLE",
+            "timeframe_stack_policy": (
+                "STRONG_HIGHER_TIMEFRAME_CONFLICT_BLOCKS_MIXED_LIGHT_PENALIZES"
+                if stack_resolver is not None
+                else "NOT_APPLIED"
+            ),
             "reward_risk_ratio": round(config.target_atr_multiple / config.stop_atr_multiple, 4),
         },
         **performance,
+    }
+
+
+def _excursion_metrics(
+    candles,
+    entry_index,
+    exit_index,
+    side,
+    entry,
+    stop,
+    target,
+    *,
+    post_exit_lookahead=10,
+):
+    risk_distance = abs(float(entry) - float(stop))
+    target_distance = abs(float(target) - float(entry))
+    path = list(candles[entry_index : exit_index + 1])
+    favorable = []
+    adverse = []
+    for offset, candle in enumerate(path):
+        high = _price(candle, "high_price", "close_price")
+        low = _price(candle, "low_price", "close_price")
+        if high is None or low is None:
+            continue
+        if side == "LONG":
+            favorable.append((max(0.0, high - entry), offset))
+            adverse.append((max(0.0, entry - low), offset))
+        else:
+            favorable.append((max(0.0, entry - low), offset))
+            adverse.append((max(0.0, high - entry), offset))
+
+    max_favorable, time_to_mfe = max(favorable, default=(0.0, None))
+    max_adverse, time_to_mae = max(adverse, default=(0.0, None))
+    lookahead_end = min(len(candles), exit_index + 1 + int(post_exit_lookahead))
+    post_exit = list(candles[exit_index + 1 : lookahead_end])
+    post_stop_favorable = 0.0
+    for candle in post_exit:
+        high = _price(candle, "high_price", "close_price")
+        low = _price(candle, "low_price", "close_price")
+        if high is None or low is None:
+            continue
+        move = (
+            max(0.0, high - entry)
+            if side == "LONG"
+            else max(0.0, entry - low)
+        )
+        post_stop_favorable = max(post_stop_favorable, move)
+
+    return {
+        "mfe_price": round(max_favorable, 8),
+        "mae_price": round(max_adverse, 8),
+        "mfe_r": round(max_favorable / risk_distance, 4) if risk_distance else None,
+        "mae_r": round(max_adverse / risk_distance, 4) if risk_distance else None,
+        "time_to_mfe_candles": time_to_mfe,
+        "time_to_mae_candles": time_to_mae,
+        "post_exit_lookahead_candles": int(post_exit_lookahead),
+        "post_stop_max_favorable_r": (
+            round(post_stop_favorable / risk_distance, 4)
+            if risk_distance
+            else None
+        ),
+        "post_stop_target_recovered": post_stop_favorable >= target_distance,
+    }
+
+
+def _intrabar_collision(candle, side, stop, target):
+    high = _price(candle, "high_price", "close_price")
+    low = _price(candle, "low_price", "close_price")
+    if high is None or low is None:
+        return False
+    if side == "LONG":
+        return low <= stop and high >= target
+    return high >= stop and low <= target
+
+
+def _exit_trigger_with_policy(candle, side, stop, target, collision_policy):
+    if not _intrabar_collision(candle, side, stop, target):
+        return _exit_trigger(candle, side, stop, target)
+
+    open_price = _price(candle, "open_price", "close_price")
+    if side == "LONG":
+        if open_price is not None and open_price <= stop:
+            return "STOP", open_price
+        if open_price is not None and open_price >= target:
+            return "TARGET", open_price
+    else:
+        if open_price is not None and open_price >= stop:
+            return "STOP", open_price
+        if open_price is not None and open_price <= target:
+            return "TARGET", open_price
+
+    policy = str(collision_policy or "STOP_FIRST").upper()
+    if policy == "TARGET_FIRST":
+        return "TARGET", target
+    if policy == "LOWER_TIMEFRAME_REQUIRED":
+        return "AMBIGUOUS_COLLISION", stop
+    return "STOP", stop
+
+
+def _replay_funding_rate(stack_context):
+    try:
+        return float(
+            stack_context["derivatives"]["funding"].get("rate") or 0.0
+        )
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
+def _replay_margin_brackets(stack_context):
+    try:
+        brackets = stack_context["derivatives"]["margin_brackets"]["brackets"]
+        return tuple(brackets or ())
+    except (KeyError, TypeError):
+        return ()
+
+
+def _position_sizing(
+    *,
+    capital,
+    entry,
+    stop_distance,
+    position_size_percent,
+    max_leverage,
+    risk_percent_per_trade,
+    target_trade_volatility_percent=None,
+    atr=None,
+):
+    capital = float(capital)
+    entry = float(entry)
+    stop_distance = float(stop_distance)
+    max_leverage = float(max_leverage)
+    notional_cap = capital * max_leverage * (float(position_size_percent) / 100)
+    if target_trade_volatility_percent is not None:
+        atr = float(atr)
+        if atr <= 0:
+            raise ValueError("atr must be greater than zero for volatility sizing")
+        target_move_amount = capital * (
+            float(target_trade_volatility_percent) / 100
+        )
+        quantity = min(target_move_amount / atr, notional_cap / entry)
+        planned_risk_amount = None
+        mode = "VOLATILITY_TARGETED_CAPPED"
+    elif risk_percent_per_trade is None:
+        planned_risk_amount = None
+        quantity = notional_cap / entry
+        mode = "CAPITAL_PERCENT"
+    else:
+        planned_risk_amount = capital * (float(risk_percent_per_trade) / 100)
+        quantity = min(
+            planned_risk_amount / stop_distance,
+            notional_cap / entry,
+        )
+        mode = "FIXED_RISK_CAPPED"
+
+    notional = quantity * entry
+    return {
+        "mode": mode,
+        "quantity": quantity,
+        "notional": notional,
+        "notional_cap": notional_cap,
+        "planned_risk_amount": planned_risk_amount,
+        "allocated_capital": notional / max_leverage,
+        "effective_leverage": notional / capital if capital else 0.0,
+    }
+
+
+def _portfolio_state(positions, capital):
+    normalized = []
+    for item in positions or ():
+        if not isinstance(item, dict):
+            raise ValueError("initial portfolio positions must be mappings")
+        side = str(item.get("side") or "").upper()
+        if side not in {"LONG", "SHORT"}:
+            raise ValueError("portfolio position side must be LONG or SHORT")
+        notional = float(item.get("notional") or 0)
+        if notional <= 0:
+            raise ValueError("portfolio position notional must be greater than zero")
+        normalized.append(
+            {
+                "symbol": str(item.get("symbol") or "UNKNOWN").upper(),
+                "side": side,
+                "notional": notional,
+            }
+        )
+    gross = sum(item["notional"] for item in normalized)
+    net = sum(
+        item["notional"] * (1 if item["side"] == "LONG" else -1)
+        for item in normalized
+    )
+    denominator = float(capital)
+    return {
+        "open_positions": len(normalized),
+        "gross_exposure": round(gross, 4),
+        "net_exposure": round(net, 4),
+        "gross_exposure_percent": round(
+            (gross / denominator) * 100 if denominator else 0,
+            4,
+        ),
+        "net_exposure_percent": round(
+            (net / denominator) * 100 if denominator else 0,
+            4,
+        ),
+        "positions": normalized,
+    }
+
+
+def _portfolio_gate(
+    state,
+    *,
+    side,
+    candidate_notional,
+    capital,
+    max_open_positions,
+    max_gross_exposure_percent,
+):
+    projected_open = int(state["open_positions"]) + 1
+    projected_gross = float(state["gross_exposure"]) + float(candidate_notional)
+    projected_net = float(state["net_exposure"]) + float(candidate_notional) * (
+        1 if side == "LONG" else -1
+    )
+    gross_percent = (projected_gross / float(capital)) * 100 if capital else 0
+    projected = {
+        "open_positions": projected_open,
+        "gross_exposure": round(projected_gross, 4),
+        "net_exposure": round(projected_net, 4),
+        "gross_exposure_percent": round(gross_percent, 4),
+        "net_exposure_percent": round(
+            (projected_net / float(capital)) * 100 if capital else 0,
+            4,
+        ),
+    }
+    if projected_open > int(max_open_positions):
+        return {
+            "allowed": False,
+            "reason": "PORTFOLIO_MAX_OPEN_POSITIONS",
+            "projected_state": projected,
+        }
+    if gross_percent > float(max_gross_exposure_percent):
+        return {
+            "allowed": False,
+            "reason": "PORTFOLIO_MAX_GROSS_EXPOSURE",
+            "projected_state": projected,
+        }
+    return {
+        "allowed": True,
+        "reason": None,
+        "projected_state": projected,
+    }
+
+
+def _liquidation_diagnostics(
+    candles,
+    side,
+    entry,
+    quantity,
+    capital,
+    maintenance_margin_rate,
+    *,
+    maintenance_margin_brackets=(),
+    price_source="CANDLE_HIGH_LOW_PROXY",
+):
+    notional = float(entry) * float(quantity)
+    effective_leverage = notional / float(capital) if capital else 0.0
+    bracket = _select_margin_bracket(
+        notional,
+        maintenance_margin_brackets,
+        maintenance_margin_rate,
+    )
+    maintenance_margin_rate = bracket["maintenance_margin_rate"]
+    maintenance_amount = bracket["maintenance_amount"]
+    tier_max_leverage = bracket.get("max_leverage")
+    leverage_within_tier = (
+        True
+        if tier_max_leverage in (None, 0)
+        else effective_leverage <= float(tier_max_leverage)
+    )
+    if effective_leverage <= 1:
+        return {
+            "checked": True,
+            "price": None,
+            "touched": False,
+            "effective_leverage": round(effective_leverage, 4),
+            "leverage_within_tier": leverage_within_tier,
+            "margin_bracket": bracket,
+            "price_source": price_source,
+        }
+
+    initial_margin = notional / effective_leverage
+    if side == "LONG":
+        liquidation_price = (
+            (notional - initial_margin - maintenance_amount)
+            / (float(quantity) * (1 - maintenance_margin_rate))
+        )
+        touched = any(
+            (_price(candle, "low_price", "close_price") or float("inf"))
+            <= liquidation_price
+            for candle in candles
+        )
+    else:
+        liquidation_price = (
+            (notional + initial_margin + maintenance_amount)
+            / (float(quantity) * (1 + maintenance_margin_rate))
+        )
+        touched = any(
+            (_price(candle, "high_price", "close_price") or 0)
+            >= liquidation_price
+            for candle in candles
+        )
+    return {
+        "checked": True,
+        "price": round(max(0.0, liquidation_price), 8),
+        "touched": touched,
+        "effective_leverage": round(effective_leverage, 4),
+        "leverage_within_tier": leverage_within_tier,
+        "maintenance_margin_rate": float(maintenance_margin_rate),
+        "maintenance_amount": float(maintenance_amount),
+        "margin_bracket": bracket,
+        "price_source": price_source,
+    }
+
+
+def _normalize_margin_brackets(brackets):
+    normalized = []
+    for index, bracket in enumerate(brackets or ()):
+        if not isinstance(bracket, dict):
+            raise ValueError("maintenance margin brackets must be mappings")
+        floor = float(bracket.get("notional_floor", bracket.get("notionalFloor", 0)))
+        cap_value = bracket.get("notional_cap", bracket.get("notionalCap"))
+        cap = float(cap_value) if cap_value is not None else float("inf")
+        rate = float(
+            bracket.get(
+                "maintenance_margin_rate",
+                bracket.get("maintMarginRatio"),
+            )
+        )
+        amount = float(
+            bracket.get(
+                "maintenance_amount",
+                bracket.get("cum", 0),
+            )
+        )
+        if floor < 0 or cap <= floor or not 0 <= rate < 1 or amount < 0:
+            raise ValueError("invalid maintenance margin bracket")
+        normalized.append(
+            {
+                "bracket": int(bracket.get("bracket", index + 1)),
+                "notional_floor": floor,
+                "notional_cap": cap,
+                "maintenance_margin_rate": rate,
+                "maintenance_amount": amount,
+                "max_leverage": (
+                    float(bracket["initialLeverage"])
+                    if bracket.get("initialLeverage") is not None
+                    else bracket.get("max_leverage")
+                ),
+                "source": bracket.get("source", "EXCHANGE_BRACKET_SNAPSHOT"),
+            }
+        )
+    return tuple(sorted(normalized, key=lambda item: item["notional_floor"]))
+
+
+def _select_margin_bracket(notional, brackets, fallback_rate):
+    for bracket in brackets or ():
+        if bracket["notional_floor"] <= notional < bracket["notional_cap"]:
+            return dict(bracket)
+    return {
+        "bracket": None,
+        "notional_floor": 0.0,
+        "notional_cap": None,
+        "maintenance_margin_rate": float(fallback_rate),
+        "maintenance_amount": 0.0,
+        "max_leverage": None,
+        "source": "CONFIG_FALLBACK",
+    }
+
+
+def _mark_price_path(records, entry_candle, exit_candle):
+    start = normalize_timestamp_to_utc(_decision_timestamp(entry_candle))
+    end = normalize_timestamp_to_utc(_decision_timestamp(exit_candle))
+    if start is None or end is None:
+        return []
+    selected = []
+    for record in records or ():
+        timestamp = normalize_timestamp_to_utc(
+            (
+                record.get("close_time")
+                if isinstance(record, dict)
+                else getattr(record, "close_time", None)
+            )
+        )
+        if timestamp is not None and start <= timestamp <= end:
+            selected.append(record)
+    return selected
+
+
+def _loss_classification(result, exit_reason, excursions):
+    if result == "WIN":
+        return "WIN"
+    if result == "BREAKEVEN":
+        return "BREAKEVEN"
+    if exit_reason == "PROTECTED_STOP":
+        return "PROFIT_PROTECTION_EXIT"
+    if excursions.get("post_stop_target_recovered"):
+        return "STOP_TOO_TIGHT_OR_ENTRY_EARLY"
+    if (excursions.get("mfe_r") or 0) >= 1:
+        return "PROFIT_GIVEBACK"
+    if (excursions.get("mfe_r") or 0) < 0.25 and (excursions.get("mae_r") or 0) >= 1:
+        return "IMMEDIATE_WRONG_DIRECTION"
+    if exit_reason == "END_OF_DATA":
+        return "NO_PROGRESS_END_OF_WINDOW"
+    return "ORDINARY_STOP_LOSS"
+
+
+def _profit_protection_stop(
+    candle,
+    side,
+    entry,
+    risk_distance,
+    current_stop,
+    *,
+    mode,
+    activation_r,
+):
+    if str(mode or "NONE").upper() != "BREAKEVEN_AFTER_R":
+        return current_stop, False
+    activation_distance = float(risk_distance) * float(activation_r)
+    if str(side).upper() == "LONG":
+        favorable_price = _price(candle, "high_price", "close_price")
+        activated = (
+            favorable_price is not None
+            and favorable_price >= float(entry) + activation_distance
+        )
+    else:
+        favorable_price = _price(candle, "low_price", "close_price")
+        activated = (
+            favorable_price is not None
+            and favorable_price <= float(entry) - activation_distance
+        )
+    return (float(entry), True) if activated else (current_stop, False)
+
+
+def _loss_attribution_summary(trades):
+    loss_classes = Counter(
+        trade.get("loss_class") or "UNCLASSIFIED"
+        for trade in trades
+        if trade.get("result") == "LOSS"
+    )
+    mfe_values = [
+        trade["excursions"]["mfe_r"]
+        for trade in trades
+        if (trade.get("excursions") or {}).get("mfe_r") is not None
+    ]
+    mae_values = [
+        trade["excursions"]["mae_r"]
+        for trade in trades
+        if (trade.get("excursions") or {}).get("mae_r") is not None
+    ]
+    return {
+        "source": "filtered_replay_loss_attribution",
+        "loss_classes": dict(sorted(loss_classes.items())),
+        "average_mfe_r": round(_average(mfe_values), 4) if mfe_values else None,
+        "average_mae_r": round(_average(mae_values), 4) if mae_values else None,
+        "same_candle_collisions": sum(
+            1 for trade in trades if trade.get("intrabar_collision")
+        ),
+        "classification_policy": "DIAGNOSTIC_ONLY_NOT_A_STRATEGY_GATE",
     }
 
 
@@ -329,13 +1196,14 @@ def build_candle_decision(
     min_confidence,
     *,
     feature_resolver=None,
+    stack_context=None,
     gate_profile="STRICT",
 ):
     feature_contract = None
     feature_source = "CANDLE_RECONSTRUCTION"
     point_in_time_flags = {}
     if feature_resolver is not None and candles:
-        feature_contract = feature_resolver(candles[-1].candle_time)
+        feature_contract = feature_resolver(_decision_timestamp(candles[-1]))
         if feature_contract is not None:
             metadata = feature_contract.get("_point_in_time") if isinstance(feature_contract, dict) else None
             point_in_time_flags = _point_in_time_flags(metadata)
@@ -367,14 +1235,25 @@ def build_candle_decision(
     directional_strength = final_score if requested_side == "LONG" else 100 - final_score
     confidence = round((directional_strength + regime["confidence"]) / 2, 2)
     blocked = []
+    research_gate_evidence = {}
     profile = GATE_PROFILES.get(str(gate_profile or "STRICT").upper())
     if profile is None:
         raise ValueError(f"gate_profile must be one of {sorted(GATE_PROFILES)}")
+
+    stack_penalty, stack_blocks = _timeframe_stack_gate(
+        stack_context,
+        requested_side,
+        enforce_decision_chain=profile.get("enforce_decision_chain", True),
+    )
+    confidence = round(max(0, confidence - stack_penalty), 2)
+    blocked.extend(stack_blocks)
 
     if atr <= 0:
         blocked.append("ATR_UNAVAILABLE")
     if confidence < min_confidence:
         blocked.append("CONFIDENCE_BELOW_THRESHOLD")
+    if confidence > profile.get("confidence_max", 100):
+        blocked.append("CONFIDENCE_ABOVE_PROFILE_WINDOW")
     if requested_side == "LONG":
         if trend_score < profile["long_trend_score"]:
             blocked.append("TREND_NOT_BULLISH")
@@ -385,14 +1264,28 @@ def build_candle_decision(
         if profile["long_regime_required"] and regime["regime"] not in LONG_REGIMES:
             blocked.append("REGIME_NOT_BULLISH")
     else:
+        if trend_score < profile.get("short_trend_score_min", 0):
+            blocked.append("TREND_TOO_EXTENDED_BEARISH")
         if trend_score > profile["short_trend_score"]:
             blocked.append("TREND_NOT_BEARISH")
         if momentum_score > profile["short_momentum_score"]:
             blocked.append("MOMENTUM_NOT_BEARISH")
+        if final_score < profile.get("short_final_score_min", 0):
+            blocked.append("FEATURE_SIGNAL_TOO_EXTENDED_SHORT")
         if final_score >= profile["short_final_score"]:
             blocked.append("FEATURE_SIGNAL_NOT_SHORT")
         if profile["short_regime_required"] and regime["regime"] not in SHORT_REGIMES:
             blocked.append("REGIME_NOT_BEARISH")
+        if regime["regime"] in profile.get("short_blocked_regimes", set()):
+            blocked.append("REGIME_CONFLICT_OR_REVERSAL")
+        if (
+            regime["regime"] == "BEAR_RALLY"
+            and profile.get("short_bear_rally_requires_exhaustion")
+        ):
+            exhaustion = _bear_rally_exhaustion_evidence(stack_context)
+            research_gate_evidence["bear_rally_exhaustion"] = exhaustion
+            if not exhaustion["confirmed"]:
+                blocked.append("BEAR_RALLY_EXHAUSTION_NOT_CONFIRMED")
 
     return {
         "eligible": not blocked,
@@ -402,6 +1295,13 @@ def build_candle_decision(
         "regime": regime["regime"],
         "feature_source": feature_source,
         "point_in_time_flags": point_in_time_flags,
+        "timeframe_stack_state": (
+            (stack_context.get("confirmation") or {}).get("stack_state")
+            if isinstance(stack_context, dict)
+            else None
+        ),
+        "timeframe_stack": stack_context,
+        "research_gate_evidence": research_gate_evidence,
         "features": {
             "trend": trend,
             "trend_score": trend_score,
@@ -412,6 +1312,142 @@ def build_candle_decision(
             "atr": atr,
         },
     }
+
+
+def _bear_rally_exhaustion_evidence(stack_context):
+    evidence = {
+        "confirmed": False,
+        "seller_control": False,
+        "buyer_exhaustion": False,
+        "bearish_structure": False,
+        "source": "POINT_IN_TIME_1H_ORDERFLOW_AND_SMC",
+    }
+    if not isinstance(stack_context, dict) or stack_context.get("status") != "READY":
+        evidence["reason"] = "TIMEFRAME_STACK_UNAVAILABLE"
+        return evidence
+    timeframes = list(stack_context.get("timeframes") or [])
+    if not timeframes:
+        evidence["reason"] = "ENTRY_TIMEFRAME_UNAVAILABLE"
+        return evidence
+
+    intelligence = dict(timeframes[0].get("intelligence") or {})
+    orderflow = dict(intelligence.get("orderflow") or {})
+    smc = dict(intelligence.get("smc") or {})
+    delta = _optional_float(orderflow.get("delta"))
+    buyer_strength = _optional_float(orderflow.get("buyer_strength"))
+    seller_strength = _optional_float(orderflow.get("seller_strength"))
+    buy_volume = _optional_float(orderflow.get("buy_volume"))
+    sell_volume = _optional_float(orderflow.get("sell_volume"))
+    orderflow_signal = str(orderflow.get("signal") or "").upper()
+
+    strength_confirms = (
+        buyer_strength is not None
+        and seller_strength is not None
+        and seller_strength > buyer_strength
+    )
+    volume_confirms = (
+        buy_volume is not None
+        and sell_volume is not None
+        and sell_volume > buy_volume
+    )
+    seller_control = (
+        orderflow_signal in {"SELL", "STRONG_SELL", "SELLERS"}
+        or (delta is not None and delta < 0 and (strength_confirms or volume_confirms))
+    )
+    exhaustion = str(
+        orderflow.get("exhaustion")
+        or orderflow.get("exhaustion_type")
+        or ""
+    ).upper()
+    buyer_exhaustion = exhaustion == "BUYER_EXHAUSTION"
+    bos = dict(smc.get("bos") or {})
+    bearish_structure = (
+        bool(bos.get("detected"))
+        and str(bos.get("direction") or "").upper() == "BEARISH"
+    ) or str(smc.get("bias") or "").upper() in {"SHORT", "BEARISH"}
+
+    evidence.update(
+        {
+            "confirmed": bool(
+                seller_control and (buyer_exhaustion or bearish_structure)
+            ),
+            "seller_control": bool(seller_control),
+            "buyer_exhaustion": bool(buyer_exhaustion),
+            "bearish_structure": bool(bearish_structure),
+            "orderflow_signal": orderflow_signal or None,
+            "delta": delta,
+            "reason": (
+                "SELLER_CONTROL_WITH_RALLY_EXHAUSTION"
+                if seller_control and (buyer_exhaustion or bearish_structure)
+                else "EXHAUSTION_EVIDENCE_INCOMPLETE"
+            ),
+        }
+    )
+    return evidence
+
+
+def _optional_float(value):
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _timeframe_stack_gate(
+    stack_context,
+    requested_side,
+    *,
+    enforce_decision_chain=True,
+):
+    if stack_context is None:
+        return 0, []
+    if not isinstance(stack_context, dict) or stack_context.get("status") != "READY":
+        return 0, ["TIMEFRAME_STACK_UNAVAILABLE"]
+
+    timeframes = list(stack_context.get("timeframes") or [])
+    confirmation = dict(stack_context.get("confirmation") or {})
+    if len(timeframes) != 3:
+        return 0, ["TIMEFRAME_STACK_UNAVAILABLE"]
+
+    higher_bias = str(timeframes[-1].get("bias") or "").upper()
+    if requested_side == "LONG" and higher_bias in BEARISH_BIASES:
+        return 0, ["HIGHER_TIMEFRAME_CONFLICT"]
+    if requested_side == "SHORT" and higher_bias in BULLISH_BIASES:
+        return 0, ["HIGHER_TIMEFRAME_CONFLICT"]
+
+    permission = str(confirmation.get("trade_permission") or "").upper()
+    if requested_side == "LONG" and permission in {"SHORT_ONLY", "SHORT_ALLOWED"}:
+        return 0, ["TIMEFRAME_PERMISSION_CONFLICT"]
+    if requested_side == "SHORT" and permission in {"LONG_ONLY", "LONG_ALLOWED"}:
+        return 0, ["TIMEFRAME_PERMISSION_CONFLICT"]
+
+    stack_state = str(confirmation.get("stack_state") or "").upper()
+    if stack_state == "MIXED_STRONG":
+        return 0, ["TIMEFRAME_STACK_STRONG_CONFLICT"]
+
+    decision_chain = stack_context.get("decision_chain")
+    if enforce_decision_chain and isinstance(decision_chain, dict):
+        chain_signal = str(
+            (decision_chain.get("signal") or {}).get("signal") or ""
+        ).upper()
+        if chain_signal not in {"LONG", "SHORT"}:
+            return 0, ["REPLAY_SIGNAL_NOT_ACTIONABLE"]
+        if chain_signal != requested_side:
+            return 0, ["REPLAY_SIGNAL_SIDE_MISMATCH"]
+
+        contradiction = dict(decision_chain.get("contradiction") or {})
+        if not contradiction.get("trade_allowed"):
+            return 0, ["CONTRADICTION_GATE_BLOCKED"]
+
+        risk = dict(decision_chain.get("risk") or {})
+        if str(risk.get("decision") or "").upper() != "APPROVE":
+            return 0, ["RISK_GATE_REJECTED"]
+
+        executor = dict(decision_chain.get("executor") or {})
+        if str(executor.get("verdict") or "").upper() != "WOULD_QUEUE":
+            return 0, ["EXECUTOR_NOT_READY"]
+
+    return float(confirmation.get("confidence_penalty") or 0), []
 
 
 def _point_in_time_flags(metadata):
@@ -434,6 +1470,14 @@ def _point_in_time_flags(metadata):
     flags.update(_leakage_status_flags("feature_leakage", feature_status))
     flags.update(_leakage_status_flags("thesis_leakage", thesis_status))
     return flags
+
+
+def _decision_timestamp(candle):
+    return (
+        getattr(candle, "close_time", None)
+        or getattr(candle, "candle_time", None)
+        or getattr(candle, "open_time", None)
+    )
 
 
 def _leakage_status_flags(prefix, status):

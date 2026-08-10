@@ -6,12 +6,13 @@ from fastapi import WebSocketDisconnect
 from app.services.live_market_service import get_live_market_service
 from app.services.live_market_service import start_live_market_listener
 from app.utils.network_resilience import summarize_network_error
+from app.contracts.control import LiveMarketResponse
 
 
 router = APIRouter(tags=["Live Market"])
 
 
-@router.get("/live/market-snapshot")
+@router.get("/live/market-snapshot", response_model=LiveMarketResponse)
 async def get_live_market_snapshot(symbols: str | None = Query(default=None)):
     service = get_live_market_service()
 
@@ -26,7 +27,7 @@ async def get_live_market_snapshot(symbols: str | None = Query(default=None)):
         return _live_market_error_payload("snapshot", exc, symbols=symbols)
 
 
-@router.get("/live/status")
+@router.get("/live/status", response_model=LiveMarketResponse)
 async def get_live_market_status():
     service = get_live_market_service()
 
@@ -39,7 +40,7 @@ async def get_live_market_status():
         return _live_market_error_payload("status", exc)
 
 
-@router.post("/live/start")
+@router.post("/live/start", response_model=LiveMarketResponse)
 async def start_live_market(symbols: str | None = Query(default=None)):
     service = get_live_market_service()
 

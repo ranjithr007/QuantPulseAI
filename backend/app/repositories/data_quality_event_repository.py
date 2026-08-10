@@ -43,7 +43,15 @@ class DataQualityEventRepository:
 
         return [self._serialize(row) for row in rows]
 
-    def list_events(self, db, symbol=None, timeframe=None, limit=100):
+    def list_events(
+        self,
+        db,
+        symbol=None,
+        timeframe=None,
+        source=None,
+        category=None,
+        limit=100,
+    ):
         self.ensure_table(db)
         query = db.query(DataQualityEvent)
 
@@ -52,6 +60,10 @@ class DataQualityEventRepository:
 
         if timeframe:
             query = query.filter(DataQualityEvent.timeframe == timeframe)
+        if source:
+            query = query.filter(DataQualityEvent.source == source)
+        if category:
+            query = query.filter(DataQualityEvent.category == category)
 
         rows = (
             query.order_by(DataQualityEvent.created_at.desc(), DataQualityEvent.id.desc())

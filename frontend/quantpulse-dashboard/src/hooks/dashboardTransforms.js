@@ -13,7 +13,7 @@ export function buildSignalRow(symbol, signal, watchlist) {
     symbol,
     timeframe: signal?.timeframe || null,
     type: side,
-    confidence: effectiveConfidence(signal),
+    confidence: rawSignalConfidence(signal),
     signalBias: signal?.bias || signal?.signal || "WAIT",
     signalScore: safeNumber(signal?.score, 0),
     probabilityLong: normalizedProbability(probability?.probabilities?.LONG ?? probability?.long_probability ?? signal?.long_probability),
@@ -119,7 +119,8 @@ export function buildSelectedDetail({
         { label: "Liquidity sweep", value: formatSweepValue(selectedSmc) },
       ]
     : [{ label: "SMC", value: "No data" }];
-  const breakdown = buildConfidenceBreakdown(signal, diagnostics, risk, aiScores, selectedOrderflow, selectedSmc);
+  const breakdown = buildConfidenceBreakdown(signal, diagnostics, aiScores, selectedOrderflow, selectedSmc);
+  const validationBreakdown = buildValidationBreakdown(signal, diagnostics, risk);
   const liquidityZones = {
     upper: currentPrice + atr * 1.75,
     lower: currentPrice - atr * 1.75,
@@ -133,7 +134,7 @@ export function buildSelectedDetail({
     timeframe,
     currentPrice,
     liveMarket: signal?.live_market || null,
-    confidence: effectiveConfidence(signal, diagnostics?.confidence),
+    confidence: rawSignalConfidence(signal, diagnostics?.confidence),
     signalType: signalBias,
     signalBias: signal?.bias || "WAIT",
     invalidationReason: invalidation,
@@ -161,6 +162,7 @@ export function buildSelectedDetail({
     whaleMaxVolume,
     liquidationZones: liquidityZones,
     breakdown,
+    validationBreakdown,
     tradeSetup,
     entryTrigger,
     multiTimeframe,
@@ -354,17 +356,13 @@ export function dateValue(value) {
   return Number.isFinite(date.getTime()) ? date.getTime() : 0;
 }
 
-function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores, selectedOrderflow, selectedSmc) {
+function buildConfidenceBreakdown(signal, diagnostics, aiScores, selectedOrderflow, selectedSmc) {
   const componentScores = diagnostics?.component_scores || {};
-  const signalConfidence = effectiveConfidence(signal, diagnostics?.confidence);
+  const signalConfidence = rawSignalConfidence(signal, diagnostics?.confidence);
   const aiScore = safeNumber(
     aiScores?.computed?.final_score ?? aiScores?.latest?.final_score ?? aiScores?.final_score,
     signalConfidence
   );
-  const freshnessScore = diagnostics?.freshness?.candle?.is_stale ? 15 : 85;
-  const contradictionScore = diagnostics?.contradiction?.conflict_score
-    ? Math.max(0, 100 - safeNumber(diagnostics.contradiction.conflict_score, 0))
-    : 60;
   const orderflowComponent = hasMeaningfulComponentScore(componentScores.orderflow)
     ? componentScores.orderflow
     : fallbackOrderflowComponent(selectedOrderflow) || componentScores.orderflow || null;
@@ -408,6 +406,29 @@ function buildConfidenceBreakdown(signal, diagnostics, risk, aiScores, selectedO
       score: aiScore,
       reason: aiScores?.computed?.bias || aiScores?.latest?.bias || aiScores?.bias || "Computed",
       width: clamp(aiScore, 0, 100),
+    },
+  ];
+}
+
+function buildValidationBreakdown(signal, diagnostics, risk) {
+  const freshnessScore = diagnostics?.freshness?.candle?.is_stale ? 15 : 85;
+  const contradictionScore = diagnostics?.contradiction?.conflict_score
+    ? Math.max(0, 100 - safeNumber(diagnostics.contradiction.conflict_score, 0))
+    : 60;
+  const probabilityDecision = String(
+    signal?.probability?.decision || signal?.probability_decision || "WAIT"
+  ).toUpperCase();
+  const probabilityConfidence = safeNumber(
+    signal?.probability?.confidence,
+    signal?.[`${probabilityDecision.toLowerCase()}_probability`] ?? 0
+  );
+
+  return [
+    {
+      label: "Decision probability",
+      score: probabilityConfidence,
+      reason: `${probabilityDecision} probability`,
+      width: clamp(probabilityConfidence, 0, 100),
     },
     {
       label: "Freshness",
@@ -527,7 +548,7 @@ function directionalSplit(signal, fallbackSide = "WAIT") {
     }
   }
 
-  const confidence = effectiveConfidence(signal);
+  const confidence = rawSignalConfidence(signal);
   const direction = fallbackSide === "BUY" || fallbackSide === "SELL" ? fallbackSide : "WAIT";
 
   if (direction === "BUY") {
@@ -665,6 +686,13 @@ function effectiveConfidence(signal, fallback = 0) {
   }
   if (signalInvalidationReason(signal)) {
     return safeNumber(signal?.probability?.confidence, fallback);
+  }
+  return safeNumber(signal?.confidence, fallback);
+}
+
+function rawSignalConfidence(signal, fallback = 0) {
+  if (!signal || String(signal?.status || "").toUpperCase() === "FAILED") {
+    return safeNumber(fallback, 0);
   }
   return safeNumber(signal?.confidence, fallback);
 }

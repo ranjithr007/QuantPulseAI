@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Query
+from app.contracts.bundle import IntelligenceBundleResponse
 
 from app.api.v1.ai_scores_api import build_ai_scores_payload
 from app.api.v1.derivatives_api import build_derivatives_payload
@@ -23,7 +24,7 @@ from app.features.point_in_time_feature_service import build_point_in_time_bundl
 from app.repositories.intelligence_repository import get_ai_inputs
 from app.repositories._db_utils import safe_rollback
 from app.trading.trade_plan_engine import build_trade_plan
-from app.utils.freshness import freshness_status
+from app.utils.freshness import candle_freshness_timestamp, freshness_status
 from app.utils.network_resilience import summarize_network_error
 
 
@@ -127,7 +128,10 @@ def get_intelligence_snapshot(
             "timeframe": timeframe,
             "current_price": current_price,
             "candle_time": candle.candle_time,
-            "freshness": freshness_status(candle.candle_time, stale_after_seconds),
+            "freshness": freshness_status(
+                candle_freshness_timestamp(candle),
+                stale_after_seconds,
+            ),
             "signal": signal,
             "trade_plan": build_trade_plan(signal["signal"], current_price, atr),
             "inputs": {
@@ -189,7 +193,7 @@ def get_intelligence_snapshot_as_of(
         db.close()
 
 
-@router.get("/{symbol}/bundle")
+@router.get("/{symbol}/bundle", response_model=IntelligenceBundleResponse)
 def get_intelligence_bundle(
     symbol: str,
     timeframe: str = Query(default="1h"),

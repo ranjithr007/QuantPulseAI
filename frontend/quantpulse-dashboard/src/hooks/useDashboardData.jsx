@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   liveMarketWebSocketUrl,
   loadDashboardBatches,
@@ -56,24 +56,21 @@ function createInitialDashboardData() {
   };
 }
 
-function createSelectedBundleData(view, bundle) {
+function mergeSelectedBundleData(current, view, bundle) {
   return {
+    ...current,
     signalsBySymbol: {
+      ...current.signalsBySymbol,
       [view.symbol]: bundle?.signal || null,
     },
-    watchlist: null,
-    pipeline: null,
-    performance: null,
-    openTrades: [],
-    closedTrades: [],
     selected: {
+      ...current.selected,
       signal: bundle?.signal || null,
       diagnostics: bundle?.diagnostics || null,
       candles: bundle?.candles || null,
       orderflow: bundle?.orderflow || null,
       smc: bundle?.smc || null,
       risk: bundle?.risk || null,
-      paperTradeCandidates: [],
       autoDecision: bundle?.autoDecision || null,
       aiScores: bundle?.aiScores || null,
       derivatives: bundle?.derivatives || null,
@@ -257,6 +254,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const [liveMarket, setLiveMarket] = useState({});
   const [liveStatus, setLiveStatus] = useState({});
   const [resumeTick, setResumeTick] = useState(0);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -464,7 +462,10 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     let refreshTimer = null;
 
     async function load() {
-      setLoading(true);
+      const isInitialLoad = !hasLoadedRef.current;
+      if (isInitialLoad) {
+        setLoading(true);
+      }
       setError("");
 
         try {
@@ -474,10 +475,12 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
 
             if (cancelled) {
               return;
-            }
+              }
 
               if (selectedBundle?.signal) {
-                setData(createSelectedBundleData(view, selectedBundle));
+                setData((current) => mergeSelectedBundleData(current, view, selectedBundle));
+                hasLoadedRef.current = true;
+                setLoading(false);
               }
             } catch {
               // Non-blocking: selected bundle can fall back to the live batch payload.
@@ -497,6 +500,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
         }
       } finally {
         if (!cancelled) {
+          hasLoadedRef.current = true;
           setLoading(false);
           refreshTimer = window.setTimeout(load, autoRefreshMs);
         }
@@ -531,7 +535,6 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     filters.failedMax,
     tick,
     symbols,
-    resumeTick,
   ]);
 
   const signalsBySymbol = useMemo(

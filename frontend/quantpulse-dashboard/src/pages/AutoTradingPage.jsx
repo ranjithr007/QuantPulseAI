@@ -31,13 +31,13 @@ export default function AutoTradingPage({
 
   return (
     <section className="border-b border-white/5">
-      <div className="mx-auto w-full max-w-[1680px] px-4 py-3 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-[1680px] px-3 py-3 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-1.5 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Futures Auto Trading</div>
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Futures automation lock and eligibility</h2>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5 sm:gap-2">
             <Pill tone="cyan">PAPER ONLY</Pill>
             {auto.version ? <Pill tone="slate">POLICY v{auto.version}</Pill> : null}
             {autoDecision.stackState ? <Pill tone={autoDecision.stackState === "ALIGNED" ? "emerald" : autoDecision.stackState === "MIXED_STRONG" ? "rose" : "amber"}>{autoDecision.stackState}</Pill> : null}
@@ -46,7 +46,7 @@ export default function AutoTradingPage({
           </div>
         </div>
 
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5">
           <MetricCard label="Auto status" value={state.label} note={state.note} icon={state.icon} accent={state.tone} />
           <MetricCard
             label="Selected signal"
@@ -69,10 +69,17 @@ export default function AutoTradingPage({
             icon={executor.icon}
             accent={executor.tone}
           />
-          <MetricCard label="Open futures trades" value={openTrades.length} note={`Limit ${auto.maxOpenTrades}`} icon={Wallet} accent={openTrades.length < auto.maxOpenTrades ? "emerald" : "rose"} />
+          <MetricCard
+            className="col-span-2 xl:col-span-1"
+            label="Open futures trades"
+            value={openTrades.length}
+            note={`Limit ${auto.maxOpenTrades}`}
+            icon={Wallet}
+            accent={openTrades.length < auto.maxOpenTrades ? "emerald" : "rose"}
+          />
         </div>
 
-        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-2">
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <DiagnosticStrip
             label="Auto gate"
             value={state.label}

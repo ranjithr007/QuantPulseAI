@@ -45,7 +45,7 @@ else {
 }
 
 if (-not $env:QUANTPULSE_SCHEDULER_JOBS) {
-    $env:QUANTPULSE_SCHEDULER_JOBS = "market,feature,regime,orderflow,smc,watchlist_persist,risk,paper_trade_execute,paper_trade_monitor"
+    $env:QUANTPULSE_SCHEDULER_JOBS = "deterministic_pipeline,derivative,candle_completeness"
 }
 
 if (-not $env:QUANTPULSE_START_LIVE_MARKET) {
@@ -61,4 +61,12 @@ if ($Reload) {
     $uvicornArguments += "--reload"
 }
 
-& uvicorn @uvicornArguments
+$python = Join-Path $PSScriptRoot "venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $python)) {
+    $python = "python"
+}
+
+$hostAddress = if ($env:QUANTPULSE_HOST) { $env:QUANTPULSE_HOST } else { "127.0.0.1" }
+$portNumber = if ($env:PORT) { $env:PORT } elseif ($env:QUANTPULSE_PORT) { $env:QUANTPULSE_PORT } else { "8000" }
+
+& $python -m uvicorn @uvicornArguments --host $hostAddress --port $portNumber

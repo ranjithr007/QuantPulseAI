@@ -48,6 +48,25 @@ def freshness_status(timestamp, stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS)
     }
 
 
+def candle_freshness_timestamp(candle):
+    """Use the close boundary when measuring a candle's age."""
+    if candle is None:
+        return None
+
+    if isinstance(candle, dict):
+        return (
+            candle.get("close_time")
+            or candle.get("candle_time")
+            or candle.get("open_time")
+        )
+
+    return (
+        getattr(candle, "close_time", None)
+        or getattr(candle, "candle_time", None)
+        or getattr(candle, "open_time", None)
+    )
+
+
 def orm_to_dict(record):
     if record is None:
         return None

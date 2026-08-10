@@ -106,8 +106,8 @@ export default function DashboardHeader({
             <SourceStrip selectedDetail={selectedDetail} loading={loading} liveStatus={liveStatus} />
           </div>
 
-          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-1.5">
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:flex sm:items-start sm:justify-between">
+            <div className="contents sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:items-center sm:gap-1.5">
               <SelectField
                 label="Symbol"
                 value={view.symbol}
@@ -120,7 +120,7 @@ export default function DashboardHeader({
                 options={modes}
                 onChange={(mode) => setView((current) => ({ ...current, mode }))}
               />
-              <div className="min-w-0 flex-1 sm:flex-none">
+              <div className="col-span-2 min-w-0 sm:flex-none">
                 <span className="sr-only">Timeframe</span>
                 <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap sm:overflow-visible sm:pb-0">
                   {timeframes.map((timeframe) => (
@@ -144,7 +144,7 @@ export default function DashboardHeader({
             <button
               type="button"
               onClick={() => setTick((value) => value + 1)}
-              className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/80 px-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-slate-800 sm:w-auto"
+              className="col-span-2 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/80 px-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-slate-800 sm:w-auto"
             >
               <RefreshCw className={clsx("h-4 w-4", loading && "animate-spin")} />
               Refresh
@@ -203,7 +203,7 @@ function SourceStrip({ selectedDetail, loading, liveStatus }) {
     : "Calculating";
 
   return (
-    <div className="flex flex-wrap gap-1.5 lg:justify-end">
+    <div className="grid grid-cols-3 gap-1.5 lg:flex lg:flex-wrap lg:justify-end">
       <SourceChip
         icon={RadioTower}
         label="B WebSocket"
@@ -235,14 +235,14 @@ function SourceChip({ icon: Icon, label, value, tone }) {
     };
 
   return (
-    <div className="flex h-8 min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-slate-900/75 px-2.5">
-      <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.12em] text-slate-500">
+    <div className="flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/75 px-1.5 sm:justify-start sm:gap-2 sm:px-2.5">
+      <div className="hidden items-center gap-1.5 text-[9px] uppercase tracking-[0.12em] text-slate-500 sm:flex">
         <Icon className="h-3.5 w-3.5" />
         <span className="truncate">{label}</span>
       </div>
       <div className="flex min-w-0 items-center gap-1.5">
         <span className={clsx("h-1.5 w-1.5 shrink-0 rounded-full", toneClass.dot)} />
-        <span className={clsx("truncate text-xs font-semibold", toneClass.text)}>{value}</span>
+        <span className={clsx("truncate text-[10px] font-semibold sm:text-xs", toneClass.text)}>{value}</span>
       </div>
     </div>
   );

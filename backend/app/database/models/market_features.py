@@ -31,4 +31,6 @@ class MarketFeature(Base):
 
     Signal = Column(String(50))
 
+    data_generation_id = Column(String(100), index=True, nullable=True)
+
     CreatedAt = Column(DateTime, default=datetime.utcnow)

@@ -54,7 +54,7 @@ def test_phase2_validation_report_marks_current_system_partial_when_gate_inputs_
     assert report["report_version"] == "phase2_validation_report_v1"
     assert report["overall_status"] == "PARTIAL"
     assert report["architecture_gate"]["status"] == "INSUFFICIENT_EVIDENCE"
-    assert report["derived_metrics"]["out_of_sample_payoff_ratio"] == 1.8947
+    assert report["derived_metrics"]["out_of_sample_payoff_ratio"] == 1.7273
     names = {item["name"]: item for item in report["architecture_gate"]["checks"]}
     assert names["out_of_sample_win_rate"]["status"] == "PASS"
     assert names["out_of_sample_annualized_sharpe"]["status"] == "NOT_STARTED"

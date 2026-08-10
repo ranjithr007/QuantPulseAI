@@ -1,0 +1,1 @@
+"""Shared pipeline lineage contracts."""
