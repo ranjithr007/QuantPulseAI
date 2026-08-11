@@ -46,7 +46,7 @@ export default function AutoTradingPage({
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5">
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3 xl:grid-cols-5">
           <MetricCard label="Auto status" value={state.label} note={state.note} icon={state.icon} accent={state.tone} />
           <MetricCard
             label="Selected signal"

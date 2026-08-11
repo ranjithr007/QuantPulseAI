@@ -58,9 +58,9 @@ export default function DashboardHomePage({
 
     return (
         <section className="border-b border-white/5 bg-slate-950/55">
-            <div className="mx-auto grid w-full max-w-[1680px] gap-3.5 px-4 py-4 sm:px-6 lg:px-8">
-                <div className="grid items-start gap-3.5 2xl:grid-cols-[minmax(0,1fr)_430px]">
-                    <div className="self-start rounded-lg border border-white/10 bg-slate-900/75 p-3.5">
+            <div className="mx-auto grid min-w-0 w-full max-w-[1680px] gap-3.5 px-3 py-3 sm:px-6 sm:py-4 lg:px-8">
+                <div className="grid min-w-0 items-start gap-3.5 2xl:grid-cols-[minmax(0,1fr)_430px]">
+                    <div className="min-w-0 self-start rounded-lg border border-white/10 bg-slate-900/75 p-3 sm:p-3.5">
                         <div className="flex flex-col gap-2.5 lg:flex-row lg:items-start lg:justify-between">
                             <div>
                                 <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-slate-500">

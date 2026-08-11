@@ -30,7 +30,20 @@ export default function MarketSignalTable({
         <div className="text-xs uppercase tracking-[0.2em] text-slate-500">{enrichedRows.length} symbols</div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="divide-y divide-white/5 sm:hidden">
+        {enrichedRows.map((row) => (
+          <MobileSignalCard
+            key={row.symbol}
+            row={row}
+            active={activeSymbol === row.symbol}
+            minConfidence={minConfidence}
+            onOpenSymbol={onOpenSymbol}
+            getSymbolHref={getSymbolHref}
+          />
+        ))}
+      </div>
+
+      <div className="hidden overflow-x-auto sm:block">
         <table className="min-w-[920px] divide-y divide-white/5 text-left text-sm xl:min-w-[1040px]">
           <thead className="bg-slate-950/60 text-[11px] uppercase tracking-[0.16em] text-slate-500">
             <tr>
@@ -129,6 +142,57 @@ export default function MarketSignalTable({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function MobileSignalCard({ row, active, minConfidence, onOpenSymbol, getSymbolHref }) {
+  return (
+    <article className={clsx("min-w-0 p-3", active && "bg-cyan-500/10")}>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-white">{row.symbol}</span>
+            <Pill tone="slate">{row.timeframe || "-"}</Pill>
+            <span className={clsx("inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]", liveStateClasses(row.liveState.tone))}>
+              {row.liveState.label}
+            </span>
+          </div>
+          <div className="mt-1 text-lg font-semibold text-slate-100">
+            {formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}
+          </div>
+          <div className="text-[11px] text-slate-500">{row.priceSource} | {formatTickAge(row.liveState.ageSeconds)}</div>
+        </div>
+        <DetailAction row={row} onOpenSymbol={onOpenSymbol} getSymbolHref={getSymbolHref} />
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <MobileDatum label="Signal" value={<Pill tone={signalTone(row.type)}>{row.type}</Pill>} />
+        <MobileDatum label="Confidence" value={formatPercent(row.confidence, 0, "-")} />
+        <MobileDatum label="Regime" value={row.regime} />
+        <MobileDatum label="Stage" value={row.stage} />
+        <MobileDatum label="Long / short" value={`${formatPercent(row.longPct, 0)} / ${formatPercent(row.shortPct, 0)}`} />
+        <MobileDatum label="RS score" value={formatSigned(row.rsScore, 0, "-")} valueClass={row.rsScore >= 0 ? "text-emerald-300" : "text-rose-300"} />
+      </div>
+
+      <div className="mt-2 rounded-lg border border-white/10 bg-slate-950/60 p-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
+          <Pill tone={row.executorTone}>{row.executorLabel}</Pill>
+          <span className="text-[11px] text-slate-500">RR {formatSigned(row.riskReward, 2, "-")}</span>
+        </div>
+        {row.riskLabel === "Blocked by confidence" ? <div className="mt-1 text-[11px] text-slate-500">Minimum confidence {minConfidence}</div> : null}
+        {(row.executorNote || row.riskNote) ? <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{row.executorNote || row.riskNote}</div> : null}
+      </div>
+    </article>
+  );
+}
+
+function MobileDatum({ label, value, valueClass = "text-slate-200" }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-white/10 bg-slate-950/55 px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div>
+      <div className={clsx("mt-1 min-w-0 break-words font-medium", valueClass)}>{value}</div>
     </div>
   );
 }

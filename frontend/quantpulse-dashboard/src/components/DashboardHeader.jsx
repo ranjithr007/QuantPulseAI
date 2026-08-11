@@ -106,7 +106,7 @@ export default function DashboardHeader({
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex min-w-0 items-center justify-end gap-2">
               <SourceStrip selectedDetail={selectedDetail} loading={loading} liveStatus={liveStatus} />
               <button type="button" onClick={onLogout} title={`Sign out ${username}`} aria-label="Sign out" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-slate-900/80 text-slate-400 transition hover:border-rose-400/30 hover:text-rose-200">
                 <LogOut className="h-4 w-4" />
@@ -211,7 +211,7 @@ function SourceStrip({ selectedDetail, loading, liveStatus }) {
     : "Calculating";
 
   return (
-    <div className="grid grid-cols-3 gap-1.5 lg:flex lg:flex-wrap lg:justify-end">
+    <div className="grid min-w-0 flex-1 grid-cols-3 gap-1.5 lg:flex lg:flex-wrap lg:justify-end">
       <SourceChip
         icon={RadioTower}
         label="B WebSocket"
