@@ -1,7 +1,13 @@
-const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.PROD
+  ? new URL("/api/", window.location.origin).toString()
+  : import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+
+function apiUrl(path) {
+  return new URL(String(path).replace(/^\/+/, ""), API_BASE);
+}
 
 async function authRequest(path, options = {}) {
-  const response = await fetch(new URL(path, API_BASE), {
+  const response = await fetch(apiUrl(path), {
     ...options,
     credentials: "include",
     headers: {

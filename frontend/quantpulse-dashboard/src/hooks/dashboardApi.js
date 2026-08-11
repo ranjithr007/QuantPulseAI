@@ -1,4 +1,10 @@
-const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.PROD
+  ? new URL("/api/", window.location.origin).toString()
+  : import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+
+function apiUrl(path) {
+  return new URL(String(path).replace(/^\/+/, ""), API_BASE);
+}
 const STALE_AFTER_BY_TIMEFRAME = {
   "1m": 5 * 60,
   "5m": 15 * 60,
@@ -30,7 +36,7 @@ const SYMBOL_SCOPED_PAPER_PAGES = new Set([
 ]);
 
 export function liveMarketWebSocketUrl(symbols = []) {
-  const url = new URL("/ws/live-market", API_BASE);
+  const url = apiUrl("/ws/live-market");
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 
   if (symbols.length) {
@@ -456,7 +462,7 @@ async function resolveBatch(requests) {
 }
 
 async function requestJson(path, params = {}, signal, timeoutMs = 60000, method = "GET", body) {
-  const url = new URL(path, API_BASE);
+  const url = apiUrl(path);
   Object.entries(params).forEach(([key, value]) => {
     if (value !== null && value !== undefined && value !== "" && value !== "ALL") {
       url.searchParams.set(key, String(value));
