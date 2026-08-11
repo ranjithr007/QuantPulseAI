@@ -380,11 +380,15 @@ function DashboardApp({ username, onLogout }) {
       winningTrades={winningTrades}
       losingTrades={losingTrades}
       winRate={winRate}
+      username={username}
+      onLogout={onLogout}
     />
   );
 }
 
 function DashboardLayout({
+  username,
+  onLogout,
   activePage,
   onPageChange,
   getPageHref,
