@@ -11,7 +11,12 @@ from app.api.v1.signals_api import _market_direction
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.funding_rates import FundingRate
 from app.database.models.trade_plan import TradePlan
+from app.governance.evidence_policy import FULL_SIZE_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MINIMUM_TIER_RISK_PERCENT
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
+from app.intelligence.master_ai_engine import _signal_from_score
+from app.risk.confidence_sizing import confidence_sizing_profile
 from app.intelligence.multi_timeframe_engine import combine_timeframe_signals
 from app.jobs.deterministic_pipeline_job import STAGE_ORDER
 from app.repositories.paper_trade_repository import PaperTradeRepository
@@ -36,6 +41,22 @@ def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
 
 def test_governed_stack_contains_all_four_required_timeframes():
     assert OFFICIAL_ENTRY_TIMEFRAMES == ("1h", "2h", "4h", "1d")
+
+
+def test_governed_score_and_position_tier_boundaries():
+    assert MIN_ENTRY_CONFIDENCE == 40.0
+    assert FULL_SIZE_ENTRY_CONFIDENCE == 60.0
+    assert MINIMUM_TIER_RISK_PERCENT == 0.5
+    assert _signal_from_score(39.99) == "WAIT"
+    assert _signal_from_score(40) == "LONG"
+    assert _signal_from_score(-39.99) == "WAIT"
+    assert _signal_from_score(-40) == "SHORT"
+    assert confidence_sizing_profile(59.99, 1.0) == {
+        "position_tier": "MINIMUM",
+        "risk_percent": 0.5,
+        "requested_risk_percent": 1.0,
+    }
+    assert confidence_sizing_profile(60, 1.0)["position_tier"] == "MAXIMUM"
 
 
 def test_four_timeframe_direction_requires_full_stack_alignment():

@@ -11,7 +11,7 @@ export default function MarketSignalTable({
   watchlist,
   liveStatus,
   paperTradeCandidates = [],
-  minConfidence = 60,
+  minConfidence = 40,
   activeSymbol,
   onOpenSymbol,
   getSymbolHref,
@@ -218,7 +218,7 @@ function DetailAction({ row, onOpenSymbol, getSymbolHref }) {
   );
 }
 
-export function enrichRow(row, watchlist, liveStatus, minConfidence = 60, paperTradeCandidates = []) {
+export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperTradeCandidates = []) {
   const watchRow = (watchlist?.records || []).find((item) => item.symbol === row.symbol) || {};
   const rsScore = resolveRsScore(row, watchRow);
   const longPct = resolveDirectionalPct(row, "LONG");

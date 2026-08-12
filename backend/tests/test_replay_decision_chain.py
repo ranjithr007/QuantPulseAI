@@ -70,7 +70,7 @@ def test_replay_decision_chain_blocks_low_confidence_at_risk_gate():
     result = build_replay_decision_chain(
         "DOGEUSDT",
         "1h",
-        _long_intelligence(confidence=55),
+        _long_intelligence(confidence=39),
         _derivatives(),
     )
 
@@ -102,9 +102,9 @@ def test_research_risk_confidence_does_not_relax_trending_signal():
     result = build_replay_decision_chain(
         "DOGEUSDT",
         "1h",
-        _long_intelligence(confidence=55, regime="TRENDING_BULL"),
+        _long_intelligence(confidence=39, regime="TRENDING_BULL"),
         _derivatives(),
-        risk_min_confidence=50,
+        risk_min_confidence=35,
         risk_confidence_scope="DIRECTIONAL_PULLBACK_RANGE",
     )
 

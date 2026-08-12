@@ -8,6 +8,7 @@ from datetime import timezone
 from typing import Any
 
 from app.backtesting.walk_forward_validator import is_phase2_official_timeframe
+from app.database.models.automation_settings import AutomationSetting
 from app.database.sqlserver import SessionLocal
 from app.database.models.market_features import MarketFeature
 
@@ -113,12 +114,14 @@ class RiskJob:
         self.risk_repo = risk_repo or RiskRepository()
         self.trade_plan_repo = trade_plan_repo or TradePlanRepository()
         self.engine = engine or RiskEngine()
+        self._active_risk_percent = self.config.trade_plan_risk_percent
 
     def run(self) -> dict[str, Any]:
         db = self.session_factory()
         summary = self._create_summary()
 
         try:
+            self._active_risk_percent = self._configured_max_risk_percent(db)
             master_signals = self.master_repo.get_latest_signals(
                 db,
                 timeframe=self.config.default_timeframe,
@@ -253,6 +256,7 @@ class RiskJob:
                     price=inputs["price"],
                     atr=inputs["atr"],
                     confidence=confidence,
+                    risk_percent=self._active_risk_percent,
                 )
 
                 result["market_price"] = inputs["price"]
@@ -535,7 +539,7 @@ class RiskJob:
                     confidence=self._normalize_confidence(
                         self._get_value(trade, "confidence")
                     ),
-                    risk_percent=self.config.trade_plan_risk_percent,
+                    risk_percent=self._active_risk_percent,
                 )
 
                 confidence = self._normalize_confidence(
@@ -545,9 +549,6 @@ class RiskJob:
                 result["symbol"] = symbol
                 result["signal"] = side
                 result["confidence"] = confidence
-                result["risk_percent"] = (
-                    self.config.trade_plan_risk_percent
-                )
 
                 if not result.get("targets"):
                     result["targets"] = {
@@ -601,6 +602,22 @@ class RiskJob:
                 )
 
         return summary
+
+    def _configured_max_risk_percent(self, db) -> float:
+        """Use the persisted paper-trading maximum when a real DB is supplied."""
+        try:
+            row = (
+                db.query(AutomationSetting)
+                .filter(AutomationSetting.id == 1)
+                .first()
+            )
+            value = float(row.max_risk_per_trade) if row is not None else None
+        except (AttributeError, TypeError, ValueError):
+            value = None
+
+        if value is None or not 0 < value <= 100:
+            return float(self.config.trade_plan_risk_percent)
+        return value
 
     def _persist_result(self, db, result: dict[str, Any]) -> None:
         """

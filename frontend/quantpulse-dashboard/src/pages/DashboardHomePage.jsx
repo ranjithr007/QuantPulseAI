@@ -22,7 +22,7 @@ import { dedupeReasonList } from "../utils/reasonDisplay";
 import { humanizeMachineStatus } from "../utils/text";
 import { progressToneClass } from "../utils/toneClasses";
 
-const MIN_READY_CONFIDENCE = 60;
+const MIN_READY_CONFIDENCE = 40;
 
 export default function DashboardHomePage({
     view,
@@ -282,6 +282,7 @@ function AutomationPanel({ autoDecision, selectedRisk, openTrades, selectedDetai
             <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-2 2xl:grid-cols-3">
                 <StatusTile label="Open trades" value={openTrades.length} icon={Bot} />
                 <StatusTile label="Risk decision" value={selectedRisk?.decision || humanizeMachineStatus(selectedRisk?.status, "Wait")} icon={ShieldCheck} tone={riskTone} />
+                <StatusTile label="Size tier" value={humanizeMachineStatus(selectedRisk?.position_tier, "-")} icon={BarChart3} tone={riskTone} />
                 <StatusTile label="Risk %" value={formatPercent(selectedRisk?.risk_percent, 1, "-")} icon={Target} tone="cyan" />
                 <StatusTile label="Position" value={formatNumber(selectedRisk?.position_size, 2, "-")} icon={BarChart3} tone={riskTone} />
                 <StatusTile label="Executor" value={executor.label} icon={ShieldCheck} tone={executor.tone} />

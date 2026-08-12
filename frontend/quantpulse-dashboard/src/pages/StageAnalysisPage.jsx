@@ -15,7 +15,7 @@ const STAGE_COLORS = {
 };
 
 export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol, auto, getSymbolHref }) {
-  const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 60));
+  const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 40));
   const groups = STAGE_ORDER.map((stage) => ({
     stage,
     count: rows.filter((row) => row.stage === stage).length,

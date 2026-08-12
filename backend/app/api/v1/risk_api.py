@@ -9,6 +9,7 @@ from app.api.v1.signals_api import build_multi_timeframe_signal_payload
 from app.api.v1.signals_api import build_signal_payload
 from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+from app.risk.confidence_sizing import confidence_sizing_profile
 from app.risk.risk_engine import RiskEngine
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
@@ -90,6 +91,9 @@ def _build_computed_risk(signal, max_risk_per_trade, stale_after_seconds):
         "risk_reward": risk_reward if risk_reward is not None else trade_plan.get("risk_reward"),
         "position_size": position_size,
         "risk_percent": result.get("risk_percent"),
+        "requested_risk_percent": result.get("requested_risk_percent"),
+        "position_tier": result.get("position_tier"),
+        "full_size_confidence": result.get("full_size_confidence"),
         "confidence": confidence if confidence is not None else _effective_confidence(signal),
         "freshness": signal.get("freshness") or freshness_status(None, stale_after_seconds),
         "is_valid_trade_plan": approved,
@@ -133,6 +137,7 @@ def build_risk_payload(db, symbol, stale_after_seconds=900):
     freshness = freshness_status(risk.created_at, stale_after_seconds)
     is_usable = validation["is_valid"] and not freshness["is_stale"]
     reason = _risk_reason(risk)
+    sizing_profile = _stored_sizing_profile(risk)
 
     return {
         "symbol": risk.symbol,
@@ -148,6 +153,9 @@ def build_risk_payload(db, symbol, stale_after_seconds=900):
         "risk_reward": risk.risk_reward,
         "position_size": risk.position_size,
         "risk_percent": risk.risk_percent,
+        "requested_risk_percent": sizing_profile["requested_risk_percent"],
+        "position_tier": sizing_profile["position_tier"],
+        "full_size_confidence": risk_engine.FULL_SIZE_CONFIDENCE,
         "confidence": risk.confidence,
         "reason": reason,
         "thesis_id": getattr(risk, "thesis_id", None),
@@ -158,6 +166,18 @@ def build_risk_payload(db, symbol, stale_after_seconds=900):
         "ignored_reasons": _ignored_reasons(freshness, validation, reason, risk.decision),
         "validation_errors": validation["errors"],
     }
+
+
+def _stored_sizing_profile(risk):
+    confidence = _safe_number(getattr(risk, "confidence", None), 0)
+    risk_percent = _safe_number(getattr(risk, "risk_percent", None), 1.0)
+    profile = confidence_sizing_profile(confidence, risk_percent)
+    if str(getattr(risk, "decision", "") or "").upper() != "APPROVE":
+        profile["position_tier"] = None
+    # Persisted rows contain the effective risk; the requested cap is not stored.
+    profile["risk_percent"] = risk_percent
+    profile["requested_risk_percent"] = None
+    return profile
 
 
 @router.get("/{symbol}/bundle", response_model=RiskBundleResponse)

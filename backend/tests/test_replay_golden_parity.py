@@ -43,7 +43,7 @@ GOLDEN_INPUT_FINGERPRINT = (
     "32bcf9a8c6aa12d0bb35de4085201256ab1aa074184aa483b26b681b81eaf176"
 )
 GOLDEN_DECISION_FINGERPRINT = (
-    "00d94ff08b94354305072c2dfd399f5674ead42523f70ca94aac2995f318b867"
+    "86f7e6a8826201341def48aa2f575615484d59727bf4424d6567fe0f35acfbf5"
 )
 
 
@@ -69,7 +69,7 @@ def test_golden_decision_is_byte_stable_for_identical_frozen_context():
 def test_golden_fingerprint_detects_decision_input_drift():
     changed = {
         **GOLDEN_INPUT,
-        "signal": {**GOLDEN_INPUT["signal"], "confidence": 55},
+        "signal": {**GOLDEN_INPUT["signal"], "confidence": 39},
     }
 
     baseline = _decision()

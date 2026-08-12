@@ -591,7 +591,7 @@ def _transition_policy(spec):
 
 def _risk_min_confidence_key(spec):
     value = spec.get("risk_min_confidence")
-    return "production_65" if value is None else f"research_{float(value):g}"
+    return "production_40" if value is None else f"research_{float(value):g}"
 
 
 def _risk_confidence_scope_key(spec):

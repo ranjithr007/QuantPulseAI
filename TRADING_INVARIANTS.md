@@ -49,8 +49,15 @@ After all four timeframe evaluations are complete and fresh:
 5. Map `BULLISH` to a Long candidate and `BEARISH` to a Short candidate.
 6. Submit no order when no candidate passes every required gate.
 
-For paper trading, the signal confidence must be at least **60%**. A value of
-exactly `60%` passes the confidence gate; any value below `60%` is rejected.
+For paper trading, the absolute signal score must be at least **40**. Scores from
+`+40` through `<+60` produce a minimum-tier Long, while scores from `-40`
+through `>-60` produce a minimum-tier Short. The minimum tier risks at most
+**0.5%** of account capital. Scores from `+60` through `+100` and from `-60`
+through `-100` produce a full-size directional candidate using the configured
+maximum risk per trade, currently **1.0%**. A configured maximum below `0.5%`
+remains the absolute cap for every tier. Scores strictly between `-40` and `+40`
+remain `WAIT` and cannot execute.
+
 Multi-timeframe analysis must not subtract a numeric penalty from signal
 confidence. Timeframe availability, direction, and confirmation remain separate
 eligibility gates and may block a candidate. This threshold does not bypass

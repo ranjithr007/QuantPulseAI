@@ -17,7 +17,7 @@ def _decision(
             "emergencyStop": False,
             "allowedSymbols": ["BTCUSDT"],
             "direction": "BOTH",
-            "minConfidence": 60.0,
+            "minConfidence": 40.0,
             "maxOpenTrades": 4,
             "dailyLossLimit": 4.0,
         },
@@ -49,7 +49,7 @@ def _decision(
 
 @pytest.mark.parametrize(
     ("confidence", "allowed"),
-    [(59.99, False), (60.0, True), (60.01, True)],
+    [(39.99, False), (40.0, True), (40.01, True)],
 )
 def test_signal_confidence_entry_boundary(confidence, allowed):
     decision = _decision(confidence)
@@ -61,14 +61,14 @@ def test_signal_confidence_entry_boundary(confidence, allowed):
 
 def test_legacy_timeframe_penalty_does_not_reduce_signal_confidence():
     decision = _decision(
-        62.0,
+        45.0,
         stack_state="MIXED_LIGHT",
         trade_permission="WAIT",
         legacy_penalty=15,
     )
 
-    assert decision["confidence"] == 62.0
-    assert decision["rawConfidence"] == 62.0
+    assert decision["confidence"] == 45.0
+    assert decision["rawConfidence"] == 45.0
     assert "confidencePenalty" not in decision
     assert decision["allowed"] is True
 

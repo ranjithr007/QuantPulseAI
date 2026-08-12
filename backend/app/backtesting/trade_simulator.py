@@ -527,7 +527,7 @@ def execute_walk_forward(
                 "production_hysteresis",
             )
             risk_min_confidence_key = (
-                "production_65"
+                "production_40"
                 if risk_min_confidence is None
                 else f"research_{float(risk_min_confidence):g}"
             )
@@ -870,7 +870,7 @@ def _build_in_memory_stack_resolver(
         "production_hysteresis",
     )
     risk_min_confidence_key = (
-        "production_65"
+        "production_40"
         if risk_min_confidence is None
         else f"research_{float(risk_min_confidence):g}"
     )

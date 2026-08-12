@@ -17,6 +17,7 @@ from app.regimes.rules import detect_regime, regime_direction
 from app.intelligence.multi_timeframe_engine import BEARISH_BIASES
 from app.intelligence.multi_timeframe_engine import BULLISH_BIASES
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+from app.risk.confidence_sizing import confidence_sizing_profile
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.freshness import normalize_timestamp_to_utc
 
@@ -481,13 +482,22 @@ def run_filtered_replay(
             continue
 
         capital_before = capital
+        effective_risk_percent = config.risk_percent_per_trade
+        position_tier = None
+        if effective_risk_percent is not None:
+            sizing_profile = confidence_sizing_profile(
+                decision["confidence"],
+                effective_risk_percent,
+            )
+            effective_risk_percent = sizing_profile["risk_percent"]
+            position_tier = sizing_profile["position_tier"]
         sizing = _position_sizing(
             capital=capital,
             entry=entry_fill,
             stop_distance=stop_distance,
             position_size_percent=config.position_size_percent,
             max_leverage=config.max_leverage,
-            risk_percent_per_trade=config.risk_percent_per_trade,
+            risk_percent_per_trade=effective_risk_percent,
             target_trade_volatility_percent=config.target_trade_volatility_percent,
             atr=atr,
         )
@@ -698,6 +708,9 @@ def run_filtered_replay(
                 "duration_candles": duration_candles,
                 "sizing": {
                     "mode": sizing_mode,
+                    "position_tier": position_tier,
+                    "risk_percent": effective_risk_percent,
+                    "requested_risk_percent": config.risk_percent_per_trade,
                     "quantity": round(quantity, 8),
                     "notional": round(quantity * entry_fill, 4),
                     "planned_risk_amount": (
