@@ -757,7 +757,7 @@ function normalizeAutoSettings(value) {
     maxOpenTrades: 4,
     maxLeverage: 5,
     maxPositionSize: 25000,
-    minConfidence: 65,
+    minConfidence: 60,
     direction: "BOTH",
     executionMode: "PAPER",
     liveExecutionEnabled: false,

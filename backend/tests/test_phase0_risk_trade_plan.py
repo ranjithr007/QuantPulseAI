@@ -66,7 +66,32 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertEqual(default["reason"], "Confidence below risk threshold")
         self.assertEqual(research["decision"], "APPROVE")
         self.assertEqual(research["minimum_confidence"], 45)
-        self.assertEqual(RiskEngine.MIN_CONFIDENCE, 65)
+        self.assertEqual(RiskEngine.MIN_CONFIDENCE, 60)
+
+    def test_adjusted_confidence_boundary_allows_60_and_rejects_below(self):
+        at_boundary = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=60,
+        )
+        below_boundary = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=59.99,
+        )
+
+        self.assertEqual(at_boundary["decision"], "APPROVE")
+        self.assertEqual(below_boundary["decision"], "REJECT")
+        self.assertEqual(
+            below_boundary["reason"],
+            "Confidence below risk threshold",
+        )
 
     def test_risk_engine_rejects_invalid_persisted_trade_plan_direction(self):
         risk = RiskEngine().analyze_trade_plan(

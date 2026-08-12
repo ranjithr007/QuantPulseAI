@@ -58,7 +58,7 @@ export function deriveSelectedEligibilityState({ auto, autoDecision, selectedDet
   };
 }
 
-export function deriveRowEligibilityState({ row, watchRow, minConfidence = 65 }) {
+export function deriveRowEligibilityState({ row, watchRow, minConfidence = 60 }) {
   if (watchRow?.eligibility_label) {
     const riskSource = String(watchRow?.risk_source || "").toLowerCase();
     const sourceLabel = riskSource === "persisted"

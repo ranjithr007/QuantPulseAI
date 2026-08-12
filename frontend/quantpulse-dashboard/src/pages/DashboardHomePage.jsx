@@ -22,7 +22,7 @@ import { dedupeReasonList } from "../utils/reasonDisplay";
 import { humanizeMachineStatus } from "../utils/text";
 import { progressToneClass } from "../utils/toneClasses";
 
-const MIN_READY_CONFIDENCE = 65;
+const MIN_READY_CONFIDENCE = 60;
 
 export default function DashboardHomePage({
     view,

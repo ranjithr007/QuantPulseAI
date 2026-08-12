@@ -8,7 +8,7 @@ import { formatPercent, formatPrice, formatSigned, tooltipStyle } from "../utils
 
 export default function RsRankingPage({ signalRows, watchlist, activeSymbol, auto, getSymbolHref }) {
   const rankedRows = signalRows
-    .map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 65))
+    .map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 60))
     .sort((a, b) => b.rsScore - a.rsScore);
   const leader = rankedRows[0];
   const laggard = rankedRows[rankedRows.length - 1];
