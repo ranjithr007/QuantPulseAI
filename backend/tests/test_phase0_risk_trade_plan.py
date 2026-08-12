@@ -68,7 +68,7 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertEqual(research["minimum_confidence"], 45)
         self.assertEqual(RiskEngine.MIN_CONFIDENCE, 60)
 
-    def test_adjusted_confidence_boundary_allows_60_and_rejects_below(self):
+    def test_signal_confidence_boundary_allows_60_and_rejects_below(self):
         at_boundary = RiskEngine().analyze_trade_plan(
             symbol="BTCUSDT",
             side="LONG",

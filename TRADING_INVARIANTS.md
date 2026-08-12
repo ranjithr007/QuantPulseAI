@@ -49,11 +49,13 @@ After all four timeframe evaluations are complete and fresh:
 5. Map `BULLISH` to a Long candidate and `BEARISH` to a Short candidate.
 6. Submit no order when no candidate passes every required gate.
 
-For paper trading, the adjusted entry confidence must be at least **60%**.
-Adjusted confidence is the signal confidence after any governed multi-timeframe
-conflict penalty. A value of exactly `60%` passes the confidence gate; any value
-below `60%` is rejected. This threshold does not bypass direction, reward/risk,
-timeframe confirmation, freshness, risk, or the one-active-trade lock.
+For paper trading, the signal confidence must be at least **60%**. A value of
+exactly `60%` passes the confidence gate; any value below `60%` is rejected.
+Multi-timeframe analysis must not subtract a numeric penalty from signal
+confidence. Timeframe availability, direction, and confirmation remain separate
+eligibility gates and may block a candidate. This threshold does not bypass
+direction, reward/risk, timeframe confirmation, freshness, risk, or the
+one-active-trade lock.
 
 Selection must be deterministic. If two candidates cannot be separated by the
 governed ranking and tie-breaking policy, the safe result is no new trade.

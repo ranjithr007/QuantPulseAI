@@ -32,7 +32,7 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertEqual(60.0, settings["minConfidence"])
             self.assertEqual(
                 60.0,
-                settings["governance"]["min_adjusted_entry_confidence"],
+                settings["governance"]["min_entry_confidence"],
             )
             self.assertEqual(
                 ["1h", "2h", "4h", "1d"],

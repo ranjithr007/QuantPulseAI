@@ -3,7 +3,7 @@ from datetime import datetime
 
 from app.database.models.automation_settings import AutomationSetting
 from app.database.models.automation_settings import AutomationSettingsAudit
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.governance.evidence_policy import r0_runtime_policy
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
@@ -19,7 +19,7 @@ DEFAULT_AUTOMATION_SETTINGS = {
     "maxOpenTrades": 4,
     "maxLeverage": 5,
     "maxPositionSize": 25000.0,
-    "minConfidence": MIN_ADJUSTED_ENTRY_CONFIDENCE,
+    "minConfidence": MIN_ENTRY_CONFIDENCE,
     "direction": "BOTH",
     "executionMode": "PAPER",
     "liveExecutionEnabled": False,
@@ -164,7 +164,7 @@ def normalize_automation_settings(value):
         "maxLeverage": int(value.get("maxLeverage", 5)),
         "maxPositionSize": float(value.get("maxPositionSize", 25000)),
         "minConfidence": float(
-            value.get("minConfidence", MIN_ADJUSTED_ENTRY_CONFIDENCE)
+            value.get("minConfidence", MIN_ENTRY_CONFIDENCE)
         ),
         "direction": direction,
         "executionMode": "PAPER",

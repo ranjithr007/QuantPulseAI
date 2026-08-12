@@ -8,7 +8,7 @@ from app.api.v1.paper_trade_api import build_paper_trade_bundle
 from app.api.v1.signals_api import build_multi_timeframe_signal_payload
 from app.api.v1.signals_api import build_signal_payload
 from app.database.sqlserver import SessionLocal
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.risk_engine import RiskEngine
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
@@ -176,7 +176,7 @@ def get_risk_bundle(
     max_leverage: int = Query(default=5, ge=1),
     max_position_size: float = Query(default=25000, ge=0),
     min_confidence: float = Query(
-        default=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+        default=MIN_ENTRY_CONFIDENCE,
         ge=0,
         le=100,
     ),
@@ -348,7 +348,7 @@ def _normalize_auto_settings(auto):
         "maxPositionSize": _safe_number(auto.get("maxPositionSize"), 25000),
         "minConfidence": _safe_number(
             auto.get("minConfidence"),
-            MIN_ADJUSTED_ENTRY_CONFIDENCE,
+            MIN_ENTRY_CONFIDENCE,
         ),
         "direction": direction,
     }
@@ -358,8 +358,6 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
     signal_side = _signal_side(signal)
     confidence = _effective_confidence(signal)
     stack_state = _timeframe_stack_state(multi_timeframe)
-    mixed_timeframe_penalty = _mixed_timeframe_penalty(multi_timeframe)
-    adjusted_confidence = max(0, confidence - mixed_timeframe_penalty)
     invalidation = _signal_invalidation_reason(signal)
     open_trades = _build_open_positions(paper_bundle.get("openTrades", {}).get("records") or [], signal.get("current_price"))
     closed_trades = paper_bundle.get("closedTrades", {}).get("records") or []
@@ -388,9 +386,9 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
         reasons.append("Signal is WAIT")
     if invalidation:
         reasons.append(invalidation)
-    if mixed_timeframe_penalty:
+    if stack_state in {"MIXED_LIGHT", "MIXED_STRONG"}:
         warnings.append("Timeframe stack is mixed")
-    if adjusted_confidence < auto["minConfidence"]:
+    if confidence < auto["minConfidence"]:
         reasons.append("Confidence below minimum")
     if len(open_trades) >= auto["maxOpenTrades"]:
         reasons.append("Open trade cap reached")
@@ -403,7 +401,7 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
     trade_plan = signal.get("trade_plan") or {}
     if trade_plan and _safe_number(trade_plan.get("risk_reward"), 0) < 1:
         reasons.append("Risk reward is weak")
-    if _timeframe_conflict_is_hard_block(multi_timeframe, signal_side, adjusted_confidence, auto["minConfidence"]):
+    if _timeframe_conflict_is_hard_block(multi_timeframe, signal_side):
         reasons.append("Higher timeframe conflict is too strong")
 
     daily_loss = _sum_within_days(open_trades, 1, "unrealized_pnl_percent") + _sum_within_days(
@@ -417,11 +415,6 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
     allowed = len(reasons) == 0
     reason = (
         "Selected futures contract passes allowlist, direction, confidence, derivatives, and risk checks."
-        + (
-            " Timeframe stack is mixed, so confidence was reduced."
-            if warnings
-            else ""
-        )
         if allowed
         else f"Automatic execution blocked by {', '.join(reasons)}."
     )
@@ -432,9 +425,8 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
         "reasons": reasons,
         "warnings": warnings,
         "signalSide": signal_side,
-        "confidence": adjusted_confidence,
+        "confidence": confidence,
         "rawConfidence": confidence,
-        "confidencePenalty": mixed_timeframe_penalty,
         "stackState": stack_state,
         "dailyLoss": round(daily_loss, 2),
         "openTrades": len(open_trades),
@@ -560,28 +552,12 @@ def _contains_mixed_bias(multi_timeframe):
     return "MIXED" in overall_bias
 
 
-def _mixed_timeframe_penalty(multi_timeframe):
-    confirmation = ((multi_timeframe or {}).get("confirmation") or {})
-    stack_state = str(confirmation.get("stack_state") or "").upper()
-    configured_penalty = _safe_number(confirmation.get("confidence_penalty"), None)
-
-    if configured_penalty is not None:
-        return configured_penalty
-
-    if stack_state == "MIXED_STRONG":
-        return 15
-    if stack_state == "MIXED_LIGHT":
-        return 5
-
-    return 0
-
-
 def _timeframe_stack_state(multi_timeframe):
     confirmation = ((multi_timeframe or {}).get("confirmation") or {})
     return str(confirmation.get("stack_state") or "").upper()
 
 
-def _timeframe_conflict_is_hard_block(multi_timeframe, signal_side, adjusted_confidence, min_confidence):
+def _timeframe_conflict_is_hard_block(multi_timeframe, signal_side):
     confirmation = ((multi_timeframe or {}).get("confirmation") or {})
     trade_permission = str(confirmation.get("trade_permission") or "").upper()
     stack_state = str(confirmation.get("stack_state") or "").upper()
@@ -592,10 +568,7 @@ def _timeframe_conflict_is_hard_block(multi_timeframe, signal_side, adjusted_con
     if signal_side == "SELL" and trade_permission == "LONG_ONLY":
         return True
 
-    if stack_state != "MIXED_STRONG":
-        return False
-
-    return float(adjusted_confidence or 0) < float(min_confidence or 0)
+    return stack_state == "MIXED_STRONG"
 
 
 def _sum_within_days(records, days, field="pnl_percent"):

@@ -2,12 +2,12 @@ from math import isfinite
 
 from app.risk.stop_loss_engine import StopLossEngine
 from app.risk.target_engine import TargetEngine
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.position_sizing import PositionSizer
 
 
 class RiskEngine:
-    MIN_CONFIDENCE = MIN_ADJUSTED_ENTRY_CONFIDENCE
+    MIN_CONFIDENCE = MIN_ENTRY_CONFIDENCE
     MIN_RISK_REWARD = 2.0
 
     SIGNAL_TO_SIDE = {

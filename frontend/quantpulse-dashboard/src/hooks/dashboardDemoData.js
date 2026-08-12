@@ -340,7 +340,6 @@ function buildDemoMultiTimeframe(signal) {
       overall_bias: signal.bias,
       trade_permission: signal.signal === "SHORT" ? "SHORT_ALLOWED" : signal.signal === "WAIT" ? "WAIT" : "LONG_ONLY",
       stack_state: stackState,
-      confidence_penalty: stackState === "MIXED_STRONG" ? 15 : stackState === "MIXED_LIGHT" ? 5 : 0,
     },
   };
 }

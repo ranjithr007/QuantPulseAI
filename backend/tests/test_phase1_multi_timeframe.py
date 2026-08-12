@@ -69,6 +69,19 @@ class Phase1MultiTimeframeTests(unittest.TestCase):
         self.assertEqual(result["trade_permission"], "LONG_ONLY")
         self.assertEqual(result["reason"], "4h is bullish while 15m is pulling back")
 
+    def test_mixed_timeframes_do_not_reduce_confidence(self):
+        result = combine_timeframe_signals(
+            [
+                tf("1h", "LONG", "LONG"),
+                tf("2h", "WAIT", "NEUTRAL"),
+                tf("4h", "WAIT", "NEUTRAL"),
+                tf("1d", "WAIT", "NEUTRAL"),
+            ]
+        )
+
+        self.assertEqual(result["stack_state"], "MIXED_LIGHT")
+        self.assertNotIn("confidence_penalty", result)
+
 
 if __name__ == "__main__":
     unittest.main()
