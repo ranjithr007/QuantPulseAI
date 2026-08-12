@@ -41,6 +41,32 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertEqual(risk["risk_reward"], 2.0)
         self.assertGreater(risk["position_size"], 0)
         self.assertEqual(risk["risk_percent"], 1)
+        self.assertNotIn("minimum_confidence", risk)
+
+    def test_research_override_does_not_change_default_risk_confidence(self):
+        default = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=50,
+        )
+        research = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=50,
+            min_confidence=45,
+        )
+
+        self.assertEqual(default["decision"], "REJECT")
+        self.assertEqual(default["reason"], "Confidence below risk threshold")
+        self.assertEqual(research["decision"], "APPROVE")
+        self.assertEqual(research["minimum_confidence"], 45)
+        self.assertEqual(RiskEngine.MIN_CONFIDENCE, 65)
 
     def test_risk_engine_rejects_invalid_persisted_trade_plan_direction(self):
         risk = RiskEngine().analyze_trade_plan(

@@ -10,6 +10,12 @@ from app.risk.risk_engine import RiskEngine
 from app.backtesting.replay_parity import build_parity_record
 
 
+DIRECTIONAL_RISK_RESEARCH_REGIMES = {
+    "LONG": {"BULL_PULLBACK", "RANGE_ACCUMULATION"},
+    "SHORT": {"BEAR_RALLY", "RANGE_DISTRIBUTION"},
+}
+
+
 def evaluate_frozen_decision(
     symbol,
     timeframe,
@@ -18,6 +24,8 @@ def evaluate_frozen_decision(
     *,
     capital=10_000,
     risk_percent=1,
+    risk_min_confidence=None,
+    risk_confidence_scope=None,
 ):
     capital = float(capital)
     risk_percent = float(risk_percent)
@@ -108,6 +116,14 @@ def evaluate_frozen_decision(
         open_interest_change_pct=oi_change,
     )
 
+    signal_side = str(master_signal.get("signal") or "").upper()
+    regime_name = str(regime.get("regime") or "").upper()
+    scope_key = str(risk_confidence_scope or "").upper()
+    risk_override_applies = (
+        risk_min_confidence is not None
+        and scope_key == "DIRECTIONAL_PULLBACK_RANGE"
+        and regime_name in DIRECTIONAL_RISK_RESEARCH_REGIMES.get(signal_side, set())
+    )
     risk = RiskEngine().analyze(
         symbol=symbol,
         signal=master_signal.get("signal"),
@@ -116,6 +132,7 @@ def evaluate_frozen_decision(
         confidence=master_signal.get("confidence"),
         capital=capital,
         risk_percent=risk_percent,
+        min_confidence=(risk_min_confidence if risk_override_applies else None),
     )
     if risk.get("decision") == "APPROVE" and not contradiction.get("trade_allowed"):
         risk = {
@@ -152,15 +169,19 @@ def evaluate_frozen_decision(
         },
         "leakage_status": "PASS",
     }
-    decision["parity"] = build_parity_record(
-        {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "intelligence": intelligence,
-            "derivatives": derivatives,
-            "capital": capital,
-            "risk_percent": risk_percent,
-        },
-        decision,
-    )
+    parity_inputs = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "intelligence": intelligence,
+        "derivatives": derivatives,
+        "capital": capital,
+        "risk_percent": risk_percent,
+    }
+    if risk_min_confidence is not None:
+        decision["risk_min_confidence"] = float(risk_min_confidence)
+        decision["risk_confidence_scope"] = scope_key
+        decision["risk_confidence_override_applied"] = risk_override_applies
+        parity_inputs["risk_min_confidence"] = float(risk_min_confidence)
+        parity_inputs["risk_confidence_scope"] = scope_key
+    decision["parity"] = build_parity_record(parity_inputs, decision)
     return decision

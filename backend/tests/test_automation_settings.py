@@ -30,7 +30,7 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertFalse(settings["governance"]["promotion_enabled"])
             self.assertFalse(settings["governance"]["ml_authority_enabled"])
             self.assertEqual(
-                ["1h", "4h", "1d"],
+                ["1h", "2h", "4h", "1d"],
                 settings["governance"]["official_entry_timeframes"],
             )
             self.assertEqual(1, settings["version"])

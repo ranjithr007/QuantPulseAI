@@ -41,6 +41,7 @@ def _stack(*, seller_control, bearish_structure):
             },
             {"bias": "WEAK_SHORT"},
             {"bias": "WEAK_SHORT"},
+            {"bias": "WEAK_SHORT"},
         ],
         "confirmation": {
             "trade_permission": "SHORT_ALLOWED",

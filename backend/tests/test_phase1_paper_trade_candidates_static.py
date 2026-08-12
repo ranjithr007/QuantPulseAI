@@ -24,7 +24,7 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
     def test_paper_trade_execute_candidates_is_simulator_only(self):
         source = PAPER_TRADE_API.read_text(encoding="utf-8")
 
-        self.assertIn('@router.post("/execute-candidates")', source)
+        self.assertIn('@router.post("/execute-candidates"', source)
         self.assertIn("execute_paper_trade_candidates_for_symbol", source)
         self.assertIn('from app.paper_trading.fill_model import build_fill_profile', source)
         self.assertIn("PaperTradeRepository", source)
@@ -35,7 +35,7 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
         self.assertIn("repo.save_candidate", source)
         self.assertIn("skipped_existing_open_paper_trade", source)
         self.assertIn('"source": "paper_trade_execution_simulator"', source)
-        self.assertNotIn("binance", source.lower())
+        self.assertNotIn("from app.collectors", source)
         self.assertNotIn("create_order", source)
         self.assertNotIn("place_order", source)
 

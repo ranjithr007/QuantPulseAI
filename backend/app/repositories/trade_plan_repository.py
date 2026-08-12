@@ -10,11 +10,11 @@ class TradePlanRepository:
     def get_open_trades(self, db):
         return db.query(TradePlan).filter(TradePlan.status == "OPEN").all()
 
-    def get_open_trade(self, db, symbol, side):
+    def get_open_trade(self, db, symbol, side=None):
+        """Get the symbol's open plan; direction is not part of the lock key."""
         return (
             db.query(TradePlan)
-            .filter(TradePlan.symbol == symbol)
-            .filter(TradePlan.side == side)
+            .filter(TradePlan.symbol == str(symbol).upper())
             .filter(TradePlan.status == "OPEN")
             .order_by(TradePlan.created_at.desc())
             .first()
@@ -41,7 +41,7 @@ class TradePlanRepository:
 
         return invalidated
 
-    def has_open_trade(self, db, symbol, side):
+    def has_open_trade(self, db, symbol, side=None):
         return self.get_open_trade(db, symbol, side) is not None
 
     def close_trade(self, db, trade, price, result):

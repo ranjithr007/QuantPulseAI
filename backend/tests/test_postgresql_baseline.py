@@ -37,8 +37,10 @@ def test_baseline_create_and_drop_use_locked_metadata():
         postgresql_baseline.drop_postgresql_baseline(bind)
 
     assert check.call_count == 2
-    create.assert_called_once_with(bind=bind, checkfirst=False)
-    drop.assert_called_once_with(bind=bind, checkfirst=True)
+    baseline_tables = postgresql_baseline._baseline_tables()
+    create.assert_called_once_with(bind=bind, tables=baseline_tables, checkfirst=False)
+    drop.assert_called_once_with(bind=bind, tables=baseline_tables, checkfirst=True)
+    assert "walk_forward_jobs" not in {table.name for table in baseline_tables}
 
 
 def test_cloud_migration_service_uses_postgresql_lineage():
@@ -50,12 +52,24 @@ def test_cloud_migration_service_uses_postgresql_lineage():
     assert "COPY alembic_postgresql ./alembic_postgresql" in dockerfile
 
 
-def test_postgresql_lineage_has_single_locked_baseline():
+def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     versions = list(
         (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions").glob("*.py")
     )
 
-    assert [path.name for path in versions] == ["pg_20260809_baseline.py"]
-    content = versions[0].read_text(encoding="utf-8")
+    assert sorted(path.name for path in versions) == [
+        "pg_20260809_baseline.py",
+        "pg_20260811_one_open_paper_trade_per_symbol.py",
+        "pg_20260812_walk_forward_jobs.py",
+    ]
+    content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
     assert "down_revision = None" in content
+
+    invariant = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260811_one_open_paper_trade_per_symbol.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260809_baseline"' in invariant
+    assert "uq_paper_trades_one_open_symbol" in invariant
+
+    jobs = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260812_walk_forward_jobs.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260811_one_open_symbol"' in jobs
+    assert "walk_forward_jobs" in jobs

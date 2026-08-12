@@ -46,3 +46,4 @@ from .risk_decision import RiskDecision
 from .paper_trade import PaperTrade
 from .automation_settings import AutomationSetting, AutomationSettingsAudit
 from .pipeline_runs import PipelineRun, JobRun
+from .walk_forward_jobs import WalkForwardJob

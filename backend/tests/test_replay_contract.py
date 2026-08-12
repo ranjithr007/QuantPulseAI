@@ -26,8 +26,8 @@ def _candle(offset, *, final=True, close_offset=None):
 def test_replay_contract_declares_official_stack_and_partial_multi_timeframe_scope():
     contract = build_replay_input_contract("1h")
 
-    assert contract["official_timeframes"] == ["1h", "4h", "1d"]
-    assert contract["higher_timeframes"] == ["4h", "1d"]
+    assert contract["official_timeframes"] == ["1h", "2h", "4h", "1d"]
+    assert contract["higher_timeframes"] == ["2h", "4h", "1d"]
     assert contract["status"] == "PARTIAL_MULTI_TIMEFRAME"
     assert contract["as_of_policy"] == "FINAL_CLOSED_CANDLES_ONLY"
 
@@ -52,7 +52,7 @@ def test_candles_as_of_excludes_forming_and_future_closed_candles():
 def test_point_in_time_stack_uses_one_cutoff_for_all_official_timeframes():
     base = datetime(2025, 1, 1, tzinfo=timezone.utc)
     candles_by_timeframe = {}
-    durations = {"1h": 1, "4h": 4, "1d": 24}
+    durations = {"1h": 1, "2h": 2, "4h": 4, "1d": 24}
     for timeframe, hours in durations.items():
         candles_by_timeframe[timeframe] = [
             {
@@ -71,7 +71,7 @@ def test_point_in_time_stack_uses_one_cutoff_for_all_official_timeframes():
             "effective_timestamp": timestamps["effective_timestamp"],
             "latest_close": history[-1]["close_time"],
         }
-        score = {"1h": 72, "4h": 65, "1d": 61}[timeframe]
+        score = {"1h": 72, "2h": 68, "4h": 65, "1d": 61}[timeframe]
         return {"feature": {"final_score": score}}
 
     cutoff = base + timedelta(days=60)
@@ -83,7 +83,7 @@ def test_point_in_time_stack_uses_one_cutoff_for_all_official_timeframes():
     )
 
     assert result["status"] == "READY"
-    assert result["timeframes_used"] == ["1h", "4h", "1d"]
+    assert result["timeframes_used"] == ["1h", "2h", "4h", "1d"]
     assert result["confirmation"]["trade_permission"] == "LONG_ALLOWED"
     assert all(item["effective_timestamp"] == cutoff for item in observed.values())
     assert all(item["latest_close"] <= cutoff for item in observed.values())
@@ -106,7 +106,7 @@ def test_point_in_time_stack_fails_closed_when_higher_history_is_missing():
 def test_point_in_time_stack_prefers_governed_intelligence_signal_when_supplied():
     histories = {
         timeframe: [_candle(index) for index in range(60)]
-        for timeframe in ("1h", "4h", "1d")
+        for timeframe in ("1h", "2h", "4h", "1d")
     }
 
     def intelligence_builder(symbol, timeframe, history, **timestamps):
@@ -137,6 +137,7 @@ def test_replay_gate_blocks_strong_higher_timeframe_conflict():
         "status": "READY",
         "timeframes": [
             {"timeframe": "1h", "bias": "LONG"},
+            {"timeframe": "2h", "bias": "NEUTRAL"},
             {"timeframe": "4h", "bias": "NEUTRAL"},
             {"timeframe": "1d", "bias": "WEAK_SHORT"},
         ],
@@ -158,6 +159,7 @@ def test_replay_gate_penalizes_mixed_light_without_hard_block():
         "status": "READY",
         "timeframes": [
             {"timeframe": "1h", "bias": "LONG"},
+            {"timeframe": "2h", "bias": "NEUTRAL"},
             {"timeframe": "4h", "bias": "NEUTRAL"},
             {"timeframe": "1d", "bias": "NEUTRAL"},
         ],
@@ -179,6 +181,7 @@ def test_replay_gate_enforces_reconstructed_risk_and_executor_verdict():
         "status": "READY",
         "timeframes": [
             {"timeframe": "1h", "bias": "LONG"},
+            {"timeframe": "2h", "bias": "LONG"},
             {"timeframe": "4h", "bias": "LONG"},
             {"timeframe": "1d", "bias": "LONG"},
         ],
@@ -206,6 +209,7 @@ def test_research_replay_gate_can_measure_directional_coverage_without_chain():
         "status": "READY",
         "timeframes": [
             {"timeframe": "1h", "bias": "SHORT"},
+            {"timeframe": "2h", "bias": "SHORT"},
             {"timeframe": "4h", "bias": "SHORT"},
             {"timeframe": "1d", "bias": "SHORT"},
         ],

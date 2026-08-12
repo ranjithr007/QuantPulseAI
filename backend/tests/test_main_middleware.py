@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -112,6 +113,94 @@ def test_mutating_request_accepts_valid_bearer_admin_key():
     auth_settings = SimpleNamespace(
         require_admin_auth=True,
         admin_api_key=admin_key,
+    )
+    with patch("app.main.settings", auth_settings):
+        response = asyncio.run(ensure_cors_headers(request, call_next))
+
+    assert response.status_code == 200
+
+
+def test_read_request_requires_login_when_app_auth_is_enabled():
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/signals/watchlist",
+        "headers": [],
+    }
+
+    async def receive():
+        return {"type": "http.request"}
+
+    request = Request(scope, receive)
+
+    async def call_next(_request):
+        return JSONResponse({"unexpected": True})
+
+    auth_settings = SimpleNamespace(
+        require_app_auth=True,
+        app_session_secret="s" * 32,
+        app_username="ranjithr007",
+        require_admin_auth=True,
+        rate_limit_enabled=False,
+    )
+    with patch("app.main.settings", auth_settings):
+        response = asyncio.run(ensure_cors_headers(request, call_next))
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {"detail": "Login required"}
+
+
+def test_health_ready_remains_public_when_app_auth_is_enabled():
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/health/ready",
+        "headers": [],
+    }
+
+    async def receive():
+        return {"type": "http.request"}
+
+    request = Request(scope, receive)
+
+    async def call_next(_request):
+        return JSONResponse({"status": "ready"})
+
+    auth_settings = SimpleNamespace(
+        require_app_auth=True,
+        app_session_secret="s" * 32,
+        app_username="ranjithr007",
+        require_admin_auth=True,
+        rate_limit_enabled=False,
+    )
+    with patch("app.main.settings", auth_settings):
+        response = asyncio.run(ensure_cors_headers(request, call_next))
+
+    assert response.status_code == 200
+
+
+def test_login_endpoint_remains_public_when_admin_auth_is_enabled():
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/auth/login",
+        "headers": [(b"origin", b"http://localhost:4173")],
+    }
+
+    async def receive():
+        return {"type": "http.request"}
+
+    request = Request(scope, receive)
+
+    async def call_next(_request):
+        return JSONResponse({"authenticated": True})
+
+    auth_settings = SimpleNamespace(
+        require_app_auth=True,
+        app_session_secret="s" * 32,
+        app_username="ranjithr007",
+        require_admin_auth=True,
+        rate_limit_enabled=False,
     )
     with patch("app.main.settings", auth_settings):
         response = asyncio.run(ensure_cors_headers(request, call_next))

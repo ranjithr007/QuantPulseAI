@@ -12,6 +12,7 @@ CONFIDENCE_WINDOWS = {
     "5m": {"min": 55.0, "preferred": 65.0, "max": 78.0},
     "15m": {"min": 58.0, "preferred": 68.0, "max": 80.0},
     "1h": {"min": 60.0, "preferred": 70.0, "max": 82.0},
+    "2h": {"min": 61.0, "preferred": 71.0, "max": 83.0},
     "4h": {"min": 62.0, "preferred": 72.0, "max": 84.0},
     "1d": {"min": 65.0, "preferred": 75.0, "max": 86.0},
 }
@@ -241,11 +242,14 @@ def _stack_confidence(timeframes):
     if not timeframes:
         return 0.0
 
-    weights = [0.5, 0.3, 0.2]
+    configured_weights = {"1h": 0.15, "2h": 0.20, "4h": 0.25, "1d": 0.40}
     total = 0.0
     weight_sum = 0.0
 
-    for item, weight in zip(timeframes, weights):
+    for item in timeframes:
+        weight = configured_weights.get(str(item.get("timeframe") or "").lower(), 0.0)
+        if weight <= 0:
+            continue
         total += _confidence_value(item) * weight
         weight_sum += weight
 

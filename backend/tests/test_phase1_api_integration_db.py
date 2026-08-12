@@ -66,6 +66,7 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
                 target3=106.0,
                 risk_reward=2.0,
                 confidence=50.0,
+                entry_timeframe="1h",
                 status="OPEN",
                 created_at=trade_created_at,
             )

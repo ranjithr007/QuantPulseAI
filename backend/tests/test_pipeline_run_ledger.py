@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -77,6 +77,45 @@ def test_readiness_reports_missing_and_failed_required_stages():
     assert readiness["ready"] is False
     assert readiness["missing_stages"] == ["risk"]
     assert readiness["failed_stages"] == ["feature"]
+
+
+def test_stale_running_recovery_preserves_completed_and_recent_records():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[PipelineRun.__table__, JobRun.__table__])
+    session = sessionmaker(bind=engine)()
+    repo = PipelineRunRepository()
+    now = datetime(2026, 8, 12, 12, 0)
+
+    stale, _ = repo.start_pipeline(session, "gen-stale")
+    stale.started_at = now - timedelta(hours=2)
+    stale_job, _ = repo.start_job(
+        session,
+        stale.id,
+        "market",
+        idempotency_key="gen-stale:market",
+    )
+    recent, _ = repo.start_pipeline(session, "gen-recent")
+    recent.started_at = now - timedelta(minutes=5)
+    completed, _ = repo.start_pipeline(session, "gen-completed")
+    completed.started_at = now - timedelta(hours=3)
+    completed.status = "COMPLETED"
+    session.commit()
+
+    result = repo.recover_stale_running(
+        session,
+        now=now,
+        stale_after_seconds=1800,
+    )
+
+    assert result["recovered_pipelines"] == 1
+    assert result["recovered_jobs"] == 1
+    assert result["pipeline_ids"] == [stale.id]
+    assert session.get(PipelineRun, stale.id).status == "FAILED"
+    assert session.get(PipelineRun, stale.id).error_category == "STALE_RUN_RECOVERY"
+    assert session.get(JobRun, stale_job.id).status == "FAILED"
+    assert session.get(JobRun, stale_job.id).error_category == "STALE_RUN_RECOVERY"
+    assert session.get(PipelineRun, recent.id).status == "RUNNING"
+    assert session.get(PipelineRun, completed.id).status == "COMPLETED"
 
 
 def test_lineage_counts_are_scoped_to_one_generation():

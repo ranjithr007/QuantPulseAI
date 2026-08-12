@@ -13,9 +13,10 @@ from app.backtesting.backtest_engine import chronological_candles
 from app.backtesting.performance_engine import calculate_performance
 from app.features.point_in_time_feature_service import build_feature_snapshot
 from app.paper_trading.fill_model import build_fill_profile
-from app.regimes.rules import detect_regime
+from app.regimes.rules import detect_regime, regime_direction
 from app.intelligence.multi_timeframe_engine import BEARISH_BIASES
 from app.intelligence.multi_timeframe_engine import BULLISH_BIASES
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.freshness import normalize_timestamp_to_utc
 
 
@@ -51,6 +52,20 @@ SHORT_REGIMES = {
     "HIGH_VOLATILITY_BREAKDOWN",
     "LIQUIDITY_GRAB_BEARISH",
 }
+DIRECTIONAL_LONG_ENTRY_RESEARCH_REGIMES = {
+    "BULL_PULLBACK",
+    "RANGE_ACCUMULATION",
+}
+DIRECTIONAL_SHORT_ENTRY_RESEARCH_REGIMES = {
+    "BEAR_RALLY",
+    "RANGE_DISTRIBUTION",
+}
+DIRECTIONAL_LONG_RESEARCH_REGIMES = (
+    LONG_REGIMES | DIRECTIONAL_LONG_ENTRY_RESEARCH_REGIMES
+)
+DIRECTIONAL_SHORT_RESEARCH_REGIMES = (
+    SHORT_REGIMES | DIRECTIONAL_SHORT_ENTRY_RESEARCH_REGIMES
+)
 GATE_PROFILES = {
     "STRICT": {
         "long_trend_score": 65,
@@ -112,6 +127,38 @@ GATE_PROFILES = {
         "short_regime_required": False,
         "short_bear_rally_requires_exhaustion": True,
         "enforce_decision_chain": False,
+    },
+    # Attribution cell A: expand only directional regime membership while all
+    # production feature and decision-chain requirements remain enforced.
+    "DIRECTIONAL_REGIME_EXPANSION_RESEARCH": {
+        "long_trend_score": 65,
+        "long_momentum_score": 60,
+        "long_final_score": 70,
+        "long_regime_required": True,
+        "long_allowed_regimes": DIRECTIONAL_LONG_RESEARCH_REGIMES,
+        "short_trend_score": 35,
+        "short_momentum_score": 40,
+        "short_final_score": 40,
+        "short_regime_required": True,
+        "short_allowed_regimes": DIRECTIONAL_SHORT_RESEARCH_REGIMES,
+        "enforce_decision_chain": True,
+    },
+    # Attribution cell B: in the four added pullback/range regimes only, a
+    # fully actionable decision chain plus local order-flow/SMC confirmation
+    # substitutes for structurally incompatible feature-entry thresholds.
+    "DIRECTIONAL_ENTRY_CONFIRMATION_RESEARCH": {
+        "long_trend_score": 65,
+        "long_momentum_score": 60,
+        "long_final_score": 70,
+        "long_regime_required": True,
+        "long_allowed_regimes": DIRECTIONAL_LONG_RESEARCH_REGIMES,
+        "short_trend_score": 35,
+        "short_momentum_score": 40,
+        "short_final_score": 40,
+        "short_regime_required": True,
+        "short_allowed_regimes": DIRECTIONAL_SHORT_RESEARCH_REGIMES,
+        "directional_entry_confirmation": True,
+        "enforce_decision_chain": True,
     },
 }
 
@@ -217,6 +264,7 @@ def run_filtered_replay(
     fee_bps=4,
     slippage_bps=2,
     gate_profile="STRICT",
+    regime_detector=None,
     risk_percent_per_trade=None,
     target_trade_volatility_percent=None,
     max_leverage=1,
@@ -272,12 +320,36 @@ def run_filtered_replay(
     gate_profile_key = str(gate_profile or "STRICT").upper()
     if gate_profile_key not in GATE_PROFILES:
         raise ValueError(f"gate_profile must be one of {sorted(GATE_PROFILES)}")
+    regime_detector = regime_detector or detect_regime
+    regime_detector_key = getattr(regime_detector, "__name__", str(regime_detector))
     ordered = chronological_candles(candles)
     capital = config.initial_capital
     trades = []
     equity_curve = [{"label": _time_label(ordered[0]) if ordered else "START", "equity": round(capital, 2)}]
     decision_counts = Counter()
     rejection_counts = Counter()
+    regime_counts = Counter()
+    regime_direction_counts = Counter()
+    regime_source_counts = Counter()
+    rejection_combination_counts = Counter()
+    gate_pass_counts = Counter()
+    score_distributions = {
+        name: _new_score_distribution()
+        for name in (
+            "confidence",
+            "regime_confidence",
+            "trend_score",
+            "momentum_score",
+            "volatility_score",
+            "liquidity_score",
+            "final_score",
+        )
+    }
+    master_signal_diagnostics = {
+        "all_decisions": _new_master_signal_diagnostics(),
+        "regime_gate_pass_decisions": _new_master_signal_diagnostics(),
+    }
+    directional_entry_funnel = _new_directional_entry_funnel()
     feature_source_counts = Counter()
     point_in_time_counts = Counter()
     stack_state_counts = Counter()
@@ -297,6 +369,7 @@ def run_filtered_replay(
             requested_side,
             config.min_confidence,
             gate_profile_key,
+            regime_detector_key,
         )
         decision = (
             decision_cache.get(decision_key)
@@ -315,10 +388,54 @@ def run_filtered_replay(
                     else None
                 ),
                 gate_profile=gate_profile_key,
+                regime_detector=regime_detector,
             )
             if decision_cache is not None:
                 decision_cache[decision_key] = decision
         decision_counts[decision["signal"]] += 1
+        decision_regime = decision.get("regime") or "UNKNOWN"
+        regime_counts[decision_regime] += 1
+        regime_direction_counts[regime_direction(decision_regime)] += 1
+        regime_source_counts[decision.get("regime_source") or "UNKNOWN"] += 1
+        blocked_reasons = tuple(sorted(set(decision.get("blocked_reasons") or ())))
+        rejection_combination_counts[
+            " | ".join(blocked_reasons) if blocked_reasons else "PASS"
+        ] += 1
+        gate_pass_counts.update(_independent_gate_passes(blocked_reasons))
+        _update_master_signal_diagnostics(
+            master_signal_diagnostics["all_decisions"],
+            decision,
+        )
+        _update_directional_entry_funnel(
+            directional_entry_funnel,
+            decision,
+            requested_side,
+            config.min_confidence,
+        )
+        if not any(
+            reason.startswith("REGIME_") or reason.startswith("BEAR_RALLY_")
+            for reason in blocked_reasons
+        ):
+            _update_master_signal_diagnostics(
+                master_signal_diagnostics["regime_gate_pass_decisions"],
+                decision,
+            )
+        _update_score_distribution(score_distributions["confidence"], decision.get("confidence"))
+        _update_score_distribution(
+            score_distributions["regime_confidence"],
+            decision.get("regime_confidence"),
+        )
+        for score_name in (
+            "trend_score",
+            "momentum_score",
+            "volatility_score",
+            "liquidity_score",
+            "final_score",
+        ):
+            _update_score_distribution(
+                score_distributions[score_name],
+                (decision.get("features") or {}).get(score_name),
+            )
         feature_source_counts[decision["feature_source"]] += 1
         point_in_time_counts.update(decision.get("point_in_time_flags") or {})
         stack_state_counts[decision.get("timeframe_stack_state") or "NOT_SUPPLIED"] += 1
@@ -630,6 +747,7 @@ def run_filtered_replay(
         equity_curve=equity_curve,
     )
     candle_span = max(0, len(ordered) - 1)
+    evaluated_decisions = sum(decision_counts.values())
     return {
         "engine_version": ENGINE_VERSION,
         "strategy": "CANDLE_RECONSTRUCTED_REGIME_FILTER_V1",
@@ -640,9 +758,39 @@ def run_filtered_replay(
         "equity_curve": equity_curve,
         "exposure_percent": round((exposed_candles / candle_span) * 100 if candle_span else 0, 2),
         "decision_summary": {
-            "evaluated": sum(decision_counts.values()),
+            "evaluated": evaluated_decisions,
             "signals": dict(sorted(decision_counts.items())),
             "rejections": dict(sorted(rejection_counts.items())),
+            "regimes": dict(sorted(regime_counts.items())),
+            "regime_percentages": _percentage_distribution(
+                regime_counts,
+                evaluated_decisions,
+            ),
+            "regime_directions": dict(sorted(regime_direction_counts.items())),
+            "regime_sources": dict(sorted(regime_source_counts.items())),
+            "regime_direction_percentages": _percentage_distribution(
+                regime_direction_counts,
+                evaluated_decisions,
+            ),
+            "independent_gate_pass_counts": dict(sorted(gate_pass_counts.items())),
+            "independent_gate_pass_percentages": _percentage_distribution(
+                gate_pass_counts,
+                evaluated_decisions,
+            ),
+            "rejection_combinations": dict(
+                rejection_combination_counts.most_common()
+            ),
+            "feature_score_distributions": {
+                name: _serialize_score_distribution(distribution)
+                for name, distribution in sorted(score_distributions.items())
+            },
+            "master_signal_diagnostics": {
+                scope: _serialize_master_signal_diagnostics(diagnostics)
+                for scope, diagnostics in sorted(master_signal_diagnostics.items())
+            },
+            "directional_entry_funnel": _serialize_directional_entry_funnel(
+                directional_entry_funnel
+            ),
         },
         "historical_input_status": {
             "candles": "AVAILABLE",
@@ -690,6 +838,7 @@ def run_filtered_replay(
         "assumptions": {
             **asdict(config),
             "gate_profile": gate_profile_key,
+            "regime_detector": regime_detector_key,
             "entry_timing": "NEXT_CANDLE_OPEN",
             "intrabar_collision": config.collision_policy,
             "collision_policy": config.collision_policy,
@@ -1198,7 +1347,9 @@ def build_candle_decision(
     feature_resolver=None,
     stack_context=None,
     gate_profile="STRICT",
+    regime_detector=None,
 ):
+    regime_detector = regime_detector or detect_regime
     feature_contract = None
     feature_source = "CANDLE_RECONSTRUCTION"
     point_in_time_flags = {}
@@ -1231,7 +1382,11 @@ def build_candle_decision(
         LiquidityScore=liquidity_score,
         FinalScore=final_score,
     )
-    regime = detect_regime(feature_snapshot)
+    regime = _stateful_regime_from_stack(stack_context)
+    regime_source = "POINT_IN_TIME_STATEFUL_STACK"
+    if regime is None:
+        regime = regime_detector(feature_snapshot)
+        regime_source = "STATELESS_FEATURE_FALLBACK"
     directional_strength = final_score if requested_side == "LONG" else 100 - final_score
     confidence = round((directional_strength + regime["confidence"]) / 2, 2)
     blocked = []
@@ -1261,7 +1416,8 @@ def build_candle_decision(
             blocked.append("MOMENTUM_NOT_BULLISH")
         if final_score <= profile["long_final_score"]:
             blocked.append("FEATURE_SIGNAL_NOT_LONG")
-        if profile["long_regime_required"] and regime["regime"] not in LONG_REGIMES:
+        long_allowed_regimes = profile.get("long_allowed_regimes", LONG_REGIMES)
+        if profile["long_regime_required"] and regime["regime"] not in long_allowed_regimes:
             blocked.append("REGIME_NOT_BULLISH")
     else:
         if trend_score < profile.get("short_trend_score_min", 0):
@@ -1274,7 +1430,8 @@ def build_candle_decision(
             blocked.append("FEATURE_SIGNAL_TOO_EXTENDED_SHORT")
         if final_score >= profile["short_final_score"]:
             blocked.append("FEATURE_SIGNAL_NOT_SHORT")
-        if profile["short_regime_required"] and regime["regime"] not in SHORT_REGIMES:
+        short_allowed_regimes = profile.get("short_allowed_regimes", SHORT_REGIMES)
+        if profile["short_regime_required"] and regime["regime"] not in short_allowed_regimes:
             blocked.append("REGIME_NOT_BEARISH")
         if regime["regime"] in profile.get("short_blocked_regimes", set()):
             blocked.append("REGIME_CONFLICT_OR_REVERSAL")
@@ -1287,12 +1444,51 @@ def build_candle_decision(
             if not exhaustion["confirmed"]:
                 blocked.append("BEAR_RALLY_EXHAUSTION_NOT_CONFIRMED")
 
+    if (
+        profile.get("directional_entry_confirmation")
+        and (
+            requested_side == "LONG"
+            and regime["regime"] in DIRECTIONAL_LONG_ENTRY_RESEARCH_REGIMES
+            or requested_side == "SHORT"
+            and regime["regime"] in DIRECTIONAL_SHORT_ENTRY_RESEARCH_REGIMES
+        )
+    ):
+        confirmation = _directional_entry_confirmation_evidence(
+            stack_context,
+            requested_side,
+        )
+        research_gate_evidence["directional_entry_confirmation"] = confirmation
+        if confirmation["confirmed"]:
+            replaceable = (
+                {
+                    "TREND_NOT_BULLISH",
+                    "MOMENTUM_NOT_BULLISH",
+                    "FEATURE_SIGNAL_NOT_LONG",
+                }
+                if requested_side == "LONG"
+                else {
+                    "TREND_TOO_EXTENDED_BEARISH",
+                    "TREND_NOT_BEARISH",
+                    "MOMENTUM_NOT_BEARISH",
+                    "FEATURE_SIGNAL_TOO_EXTENDED_SHORT",
+                    "FEATURE_SIGNAL_NOT_SHORT",
+                }
+            )
+            replaced = sorted(set(blocked) & replaceable)
+            blocked = [reason for reason in blocked if reason not in replaceable]
+            confirmation["replaced_gate_rejections"] = replaced
+        else:
+            blocked.append("DIRECTIONAL_ENTRY_CONFIRMATION_NOT_CONFIRMED")
+
     return {
         "eligible": not blocked,
         "signal": requested_side if not blocked else "WAIT",
         "blocked_reasons": blocked,
         "confidence": confidence,
         "regime": regime["regime"],
+        "regime_confidence": regime["confidence"],
+        "regime_source": regime_source,
+        "regime_detector": getattr(regime_detector, "__name__", str(regime_detector)),
         "feature_source": feature_source,
         "point_in_time_flags": point_in_time_flags,
         "timeframe_stack_state": (
@@ -1386,11 +1582,485 @@ def _bear_rally_exhaustion_evidence(stack_context):
     return evidence
 
 
+def _directional_entry_confirmation_evidence(stack_context, requested_side):
+    side = str(requested_side or "").upper()
+    evidence = {
+        "confirmed": False,
+        "side": side,
+        "orderflow_aligned": False,
+        "structure_aligned": False,
+        "source": "POINT_IN_TIME_DECISION_TIMEFRAME_ORDERFLOW_OR_SMC",
+    }
+    if side not in {"LONG", "SHORT"}:
+        evidence["reason"] = "INVALID_SIDE"
+        return evidence
+    if not isinstance(stack_context, dict) or stack_context.get("status") != "READY":
+        evidence["reason"] = "TIMEFRAME_STACK_UNAVAILABLE"
+        return evidence
+
+    decision_timeframe = str(stack_context.get("decision_chain_timeframe") or "")
+    record = next(
+        (
+            item
+            for item in (stack_context.get("timeframes") or ())
+            if str(item.get("timeframe") or "") == decision_timeframe
+        ),
+        None,
+    )
+    intelligence = record.get("intelligence") if isinstance(record, dict) else None
+    if not isinstance(intelligence, dict):
+        evidence["reason"] = "DECISION_TIMEFRAME_INTELLIGENCE_UNAVAILABLE"
+        evidence["decision_timeframe"] = decision_timeframe or None
+        return evidence
+
+    orderflow = dict(intelligence.get("orderflow") or {})
+    smc = dict(intelligence.get("smc") or {})
+    delta = _optional_float(orderflow.get("delta"))
+    buyer_strength = _optional_float(orderflow.get("buyer_strength"))
+    seller_strength = _optional_float(orderflow.get("seller_strength"))
+    buy_volume = _optional_float(orderflow.get("buy_volume"))
+    sell_volume = _optional_float(orderflow.get("sell_volume"))
+    orderflow_signal = str(orderflow.get("signal") or "").upper()
+
+    if side == "LONG":
+        strength_aligned = (
+            buyer_strength is not None
+            and seller_strength is not None
+            and buyer_strength > seller_strength
+        )
+        volume_aligned = (
+            buy_volume is not None
+            and sell_volume is not None
+            and buy_volume > sell_volume
+        )
+        orderflow_aligned = (
+            orderflow_signal in {"BUY", "STRONG_BUY", "BUYERS"}
+            or (delta is not None and delta > 0 and (strength_aligned or volume_aligned))
+        )
+        structure_direction = "BULLISH"
+        structure_biases = {"LONG", "BULLISH"}
+    else:
+        strength_aligned = (
+            buyer_strength is not None
+            and seller_strength is not None
+            and seller_strength > buyer_strength
+        )
+        volume_aligned = (
+            buy_volume is not None
+            and sell_volume is not None
+            and sell_volume > buy_volume
+        )
+        orderflow_aligned = (
+            orderflow_signal in {"SELL", "STRONG_SELL", "SELLERS"}
+            or (delta is not None and delta < 0 and (strength_aligned or volume_aligned))
+        )
+        structure_direction = "BEARISH"
+        structure_biases = {"SHORT", "BEARISH"}
+
+    bos = dict(smc.get("bos") or {})
+    structure_aligned = (
+        bool(bos.get("detected"))
+        and str(bos.get("direction") or "").upper() == structure_direction
+    ) or str(smc.get("bias") or "").upper() in structure_biases
+    confirmed = bool(orderflow_aligned or structure_aligned)
+    evidence.update(
+        {
+            "confirmed": confirmed,
+            "decision_timeframe": decision_timeframe,
+            "orderflow_aligned": bool(orderflow_aligned),
+            "structure_aligned": bool(structure_aligned),
+            "orderflow_signal": orderflow_signal or None,
+            "delta": delta,
+            "reason": (
+                "LOCAL_DIRECTIONAL_CONFIRMATION_PRESENT"
+                if confirmed
+                else "LOCAL_DIRECTIONAL_CONFIRMATION_ABSENT"
+            ),
+        }
+    )
+    return evidence
+
+
 def _optional_float(value):
     try:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+_DIRECTIONAL_FUNNEL_STAGES = (
+    "SAME_SIDE_CANDIDATE_REGIME",
+    "LOCAL_CONFIRMATION",
+    "CONFIDENCE_AT_OR_ABOVE_THRESHOLD",
+    "ATR_AVAILABLE",
+    "TIMEFRAME_COMPATIBLE",
+    "MASTER_SIGNAL_SAME_SIDE",
+    "CONTRADICTION_ALLOWED",
+    "RISK_APPROVED",
+    "EXECUTOR_READY",
+    "FINAL_ELIGIBLE",
+)
+
+
+def _new_directional_entry_funnel():
+    return {
+        "evaluated": 0,
+        "stage_counts": Counter(),
+        "condition_pass_counts": Counter(),
+        "first_failure_counts": Counter(),
+        "candidate_regimes": Counter(),
+        "confirmed_candidate_score_distributions": {
+            name: _new_score_distribution()
+            for name in (
+                "composite_confidence",
+                "directional_strength",
+                "regime_confidence",
+                "timeframe_penalty",
+            )
+        },
+        "master_candidate_chain_audit": {
+            "evaluated": 0,
+            "contradiction_statuses": Counter(),
+            "contradiction_trade_allowed": Counter(),
+            "conflict_scores": _new_score_distribution(),
+            "master_signal_scores": _new_score_distribution(),
+            "master_signal_confidences": _new_score_distribution(),
+            "risk_confidences": _new_score_distribution(),
+            "conflict_names": Counter(),
+            "conflict_severities": Counter(),
+            "bias_maps": {},
+            "risk_decisions": Counter(),
+            "risk_reasons": Counter(),
+            "executor_verdicts": Counter(),
+            "current_price_availability": Counter(),
+        },
+    }
+
+
+def _update_directional_entry_funnel(
+    diagnostics,
+    decision,
+    requested_side,
+    min_confidence,
+):
+    observation = _directional_entry_funnel_observation(
+        decision,
+        requested_side,
+        min_confidence,
+    )
+    diagnostics["evaluated"] += 1
+    candidate_regime = observation["candidate_regime"]
+    if candidate_regime:
+        diagnostics["candidate_regimes"][candidate_regime] += 1
+        if observation["conditions"]["LOCAL_CONFIRMATION"]:
+            for name, value in observation["confidence_inputs"].items():
+                _update_score_distribution(
+                    diagnostics["confirmed_candidate_score_distributions"][name],
+                    value,
+                )
+
+    cumulative = True
+    first_failure = None
+    for stage in _DIRECTIONAL_FUNNEL_STAGES:
+        passed = bool(observation["conditions"][stage])
+        if candidate_regime and passed:
+            diagnostics["condition_pass_counts"][stage] += 1
+        cumulative = cumulative and passed
+        if cumulative:
+            diagnostics["stage_counts"][stage] += 1
+        elif first_failure is None:
+            first_failure = stage
+    if candidate_regime and first_failure is not None:
+        diagnostics["first_failure_counts"][first_failure] += 1
+    master_index = _DIRECTIONAL_FUNNEL_STAGES.index("MASTER_SIGNAL_SAME_SIDE")
+    if candidate_regime and all(
+        observation["conditions"][stage]
+        for stage in _DIRECTIONAL_FUNNEL_STAGES[: master_index + 1]
+    ):
+        _update_master_candidate_chain_audit(
+            diagnostics["master_candidate_chain_audit"],
+            observation["chain_audit"],
+        )
+
+
+def _directional_entry_funnel_observation(decision, requested_side, min_confidence):
+    side = str(requested_side or "").upper()
+    regime = str(decision.get("regime") or "")
+    candidate_regimes = (
+        DIRECTIONAL_LONG_ENTRY_RESEARCH_REGIMES
+        if side == "LONG"
+        else DIRECTIONAL_SHORT_ENTRY_RESEARCH_REGIMES
+    )
+    candidate_regime = regime if regime in candidate_regimes else None
+    evidence = (
+        (decision.get("research_gate_evidence") or {}).get(
+            "directional_entry_confirmation"
+        )
+        or {}
+    )
+    stack = decision.get("timeframe_stack") or {}
+    chain = stack.get("decision_chain") if isinstance(stack, dict) else None
+    chain = chain if isinstance(chain, dict) else {}
+    chain_signal = str((chain.get("signal") or {}).get("signal") or "").upper()
+    contradiction = dict(chain.get("contradiction") or {})
+    risk = dict(chain.get("risk") or {})
+    executor = dict(chain.get("executor") or {})
+    decision_timeframe = str(stack.get("decision_chain_timeframe") or "")
+    decision_record = next(
+        (
+            item
+            for item in (stack.get("timeframes") or ())
+            if str(item.get("timeframe") or "") == decision_timeframe
+        ),
+        None,
+    )
+    decision_intelligence = (
+        decision_record.get("intelligence")
+        if isinstance(decision_record, dict)
+        else None
+    )
+    blocked = set(decision.get("blocked_reasons") or ())
+    timeframe_blocks = {
+        "TIMEFRAME_STACK_UNAVAILABLE",
+        "HIGHER_TIMEFRAME_CONFLICT",
+        "TIMEFRAME_PERMISSION_CONFLICT",
+        "TIMEFRAME_STACK_STRONG_CONFLICT",
+    }
+    confidence = _optional_float(decision.get("confidence"))
+    final_score = _optional_float((decision.get("features") or {}).get("final_score"))
+    regime_confidence = _optional_float(decision.get("regime_confidence"))
+    atr = _optional_float((decision.get("features") or {}).get("atr"))
+    confirmation = stack.get("confirmation") if isinstance(stack, dict) else None
+    timeframe_penalty = _optional_float(
+        (confirmation or {}).get("confidence_penalty")
+        if isinstance(confirmation, dict)
+        else None
+    )
+    return {
+        "candidate_regime": candidate_regime,
+        "chain_audit": {
+            "master_signal": dict(chain.get("signal") or {}),
+            "contradiction": contradiction,
+            "risk": risk,
+            "executor": executor,
+            "current_price_available": bool(
+                isinstance(decision_intelligence, dict)
+                and decision_intelligence.get("current_price") is not None
+            ),
+        },
+        "confidence_inputs": {
+            "composite_confidence": confidence,
+            "directional_strength": (
+                final_score
+                if side == "LONG" or final_score is None
+                else 100 - final_score
+            ),
+            "regime_confidence": regime_confidence,
+            "timeframe_penalty": timeframe_penalty or 0.0,
+        },
+        "conditions": {
+            "SAME_SIDE_CANDIDATE_REGIME": candidate_regime is not None,
+            "LOCAL_CONFIRMATION": bool(evidence.get("confirmed")),
+            "CONFIDENCE_AT_OR_ABOVE_THRESHOLD": (
+                confidence is not None and confidence >= float(min_confidence)
+            ),
+            "ATR_AVAILABLE": atr is not None and atr > 0,
+            "TIMEFRAME_COMPATIBLE": not bool(blocked & timeframe_blocks),
+            "MASTER_SIGNAL_SAME_SIDE": chain_signal == side,
+            "CONTRADICTION_ALLOWED": bool(contradiction.get("trade_allowed")),
+            "RISK_APPROVED": str(risk.get("decision") or "").upper() == "APPROVE",
+            "EXECUTOR_READY": (
+                str(executor.get("verdict") or "").upper() == "WOULD_QUEUE"
+            ),
+            "FINAL_ELIGIBLE": bool(decision.get("eligible")),
+        },
+    }
+
+
+def _serialize_directional_entry_funnel(diagnostics):
+    evaluated = int(diagnostics.get("evaluated") or 0)
+    candidates = int(
+        (diagnostics.get("stage_counts") or {}).get(
+            "SAME_SIDE_CANDIDATE_REGIME",
+            0,
+        )
+    )
+    return {
+        "evaluated": evaluated,
+        "candidate_regimes": dict(
+            sorted((diagnostics.get("candidate_regimes") or {}).items())
+        ),
+        "cumulative_stage_counts": {
+            stage: int((diagnostics.get("stage_counts") or {}).get(stage, 0))
+            for stage in _DIRECTIONAL_FUNNEL_STAGES
+        },
+        "cumulative_stage_percent_of_candidates": {
+            stage: round(
+                int((diagnostics.get("stage_counts") or {}).get(stage, 0))
+                / candidates
+                * 100,
+                2,
+            )
+            if candidates
+            else 0.0
+            for stage in _DIRECTIONAL_FUNNEL_STAGES
+        },
+        "independent_condition_pass_counts": {
+            stage: int(
+                (diagnostics.get("condition_pass_counts") or {}).get(stage, 0)
+            )
+            for stage in _DIRECTIONAL_FUNNEL_STAGES
+        },
+        "first_failure_counts": dict(
+            sorted((diagnostics.get("first_failure_counts") or {}).items())
+        ),
+        "confirmed_candidate_score_distributions": {
+            name: _serialize_score_distribution(distribution)
+            for name, distribution in sorted(
+                (
+                    diagnostics.get("confirmed_candidate_score_distributions")
+                    or {}
+                ).items()
+            )
+        },
+        "master_candidate_chain_audit": _serialize_master_candidate_chain_audit(
+            diagnostics.get("master_candidate_chain_audit") or {}
+        ),
+        "contract": {
+            "scope": "READ_ONLY_DIAGNOSTIC",
+            "candidate_denominator": candidates,
+            "stage_order": list(_DIRECTIONAL_FUNNEL_STAGES),
+            "first_failures_reconcile_to_candidates": (
+                sum((diagnostics.get("first_failure_counts") or {}).values())
+                + int(
+                    (diagnostics.get("stage_counts") or {}).get(
+                        "FINAL_ELIGIBLE",
+                        0,
+                    )
+                )
+                == candidates
+            ),
+        },
+    }
+
+
+def _update_master_candidate_chain_audit(diagnostics, audit):
+    master_signal = dict(audit.get("master_signal") or {})
+    contradiction = dict(audit.get("contradiction") or {})
+    risk = dict(audit.get("risk") or {})
+    executor = dict(audit.get("executor") or {})
+    diagnostics["evaluated"] += 1
+    diagnostics["contradiction_statuses"][
+        str(contradiction.get("status") or "UNKNOWN")
+    ] += 1
+    diagnostics["contradiction_trade_allowed"][
+        "ALLOWED" if contradiction.get("trade_allowed") else "BLOCKED"
+    ] += 1
+    _update_score_distribution(
+        diagnostics["conflict_scores"],
+        contradiction.get("conflict_score"),
+    )
+    _update_score_distribution(
+        diagnostics["master_signal_scores"],
+        master_signal.get("score"),
+    )
+    _update_score_distribution(
+        diagnostics["master_signal_confidences"],
+        master_signal.get("confidence"),
+    )
+    _update_score_distribution(
+        diagnostics["risk_confidences"],
+        risk.get("confidence"),
+    )
+    for conflict in contradiction.get("conflicts") or ():
+        diagnostics["conflict_names"][str(conflict.get("name") or "UNKNOWN")] += 1
+        diagnostics["conflict_severities"][
+            str(conflict.get("severity") or "UNKNOWN")
+        ] += 1
+    for source, value in (contradiction.get("bias_map") or {}).items():
+        diagnostics["bias_maps"].setdefault(source, Counter())[str(value)] += 1
+    diagnostics["risk_decisions"][str(risk.get("decision") or "UNKNOWN")] += 1
+    diagnostics["risk_reasons"][str(risk.get("reason") or "UNKNOWN")] += 1
+    diagnostics["executor_verdicts"][
+        str(executor.get("verdict") or "UNKNOWN")
+    ] += 1
+    diagnostics["current_price_availability"][
+        "PRESENT" if audit.get("current_price_available") else "MISSING"
+    ] += 1
+
+
+def _serialize_master_candidate_chain_audit(diagnostics):
+    return {
+        "evaluated": int(diagnostics.get("evaluated") or 0),
+        "contradiction_statuses": dict(
+            sorted((diagnostics.get("contradiction_statuses") or {}).items())
+        ),
+        "contradiction_trade_allowed": dict(
+            sorted((diagnostics.get("contradiction_trade_allowed") or {}).items())
+        ),
+        "conflict_score_distribution": _serialize_score_distribution(
+            diagnostics.get("conflict_scores") or _new_score_distribution()
+        ),
+        "master_signal_score_distribution": _serialize_score_distribution(
+            diagnostics.get("master_signal_scores") or _new_score_distribution()
+        ),
+        "master_signal_confidence_distribution": _serialize_score_distribution(
+            diagnostics.get("master_signal_confidences") or _new_score_distribution()
+        ),
+        "risk_confidence_distribution": _serialize_score_distribution(
+            diagnostics.get("risk_confidences") or _new_score_distribution()
+        ),
+        "conflict_names": dict(
+            sorted((diagnostics.get("conflict_names") or {}).items())
+        ),
+        "conflict_severities": dict(
+            sorted((diagnostics.get("conflict_severities") or {}).items())
+        ),
+        "bias_maps": {
+            source: dict(sorted(values.items()))
+            for source, values in sorted(
+                (diagnostics.get("bias_maps") or {}).items()
+            )
+        },
+        "risk_decisions": dict(
+            sorted((diagnostics.get("risk_decisions") or {}).items())
+        ),
+        "risk_reasons": dict(
+            sorted((diagnostics.get("risk_reasons") or {}).items())
+        ),
+        "executor_verdicts": dict(
+            sorted((diagnostics.get("executor_verdicts") or {}).items())
+        ),
+        "current_price_availability": dict(
+            sorted((diagnostics.get("current_price_availability") or {}).items())
+        ),
+        "scope": "READ_ONLY_MASTER_CANDIDATES_AFTER_TIMEFRAME_GATE",
+    }
+
+
+def _stateful_regime_from_stack(stack_context):
+    if not isinstance(stack_context, dict) or stack_context.get("status") != "READY":
+        return None
+    decision_timeframe = str(stack_context.get("decision_chain_timeframe") or "")
+    if not decision_timeframe:
+        return None
+    record = next(
+        (
+            item
+            for item in (stack_context.get("timeframes") or ())
+            if str(item.get("timeframe") or "") == decision_timeframe
+        ),
+        None,
+    )
+    intelligence = record.get("intelligence") if isinstance(record, dict) else None
+    regime = intelligence.get("regime") if isinstance(intelligence, dict) else None
+    if not isinstance(regime, dict) or not regime.get("regime"):
+        return None
+    try:
+        confidence = float(regime.get("confidence"))
+    except (TypeError, ValueError):
+        return None
+    return {**regime, "confidence": confidence}
 
 
 def _timeframe_stack_gate(
@@ -1406,7 +2076,7 @@ def _timeframe_stack_gate(
 
     timeframes = list(stack_context.get("timeframes") or [])
     confirmation = dict(stack_context.get("confirmation") or {})
-    if len(timeframes) != 3:
+    if len(timeframes) != len(OFFICIAL_ENTRY_TIMEFRAMES):
         return 0, ["TIMEFRAME_STACK_UNAVAILABLE"]
 
     higher_bias = str(timeframes[-1].get("bias") or "").upper()
@@ -1675,6 +2345,171 @@ def _replay_rejection_family(reason):
     if reason in replay_only_map:
         return "REPLAY_ONLY_GATE", replay_only_map[reason]
     return "UNKNOWN", reason
+
+
+def _percentage_distribution(counts, total):
+    if not total:
+        return {}
+    return {
+        key: round((value / total) * 100, 2)
+        for key, value in sorted(counts.items())
+    }
+
+
+def _new_score_distribution(*, signed=False):
+    return {
+        "count": 0,
+        "value_sum": 0.0,
+        "minimum": None,
+        "maximum": None,
+        "buckets": Counter(),
+        "signed": bool(signed),
+    }
+
+
+def _update_score_distribution(distribution, value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return
+    distribution["count"] += 1
+    distribution["value_sum"] += numeric
+    distribution["minimum"] = (
+        numeric
+        if distribution["minimum"] is None
+        else min(distribution["minimum"], numeric)
+    )
+    distribution["maximum"] = (
+        numeric
+        if distribution["maximum"] is None
+        else max(distribution["maximum"], numeric)
+    )
+    if distribution.get("signed"):
+        lower = min(90, max(-100, int(numeric // 10) * 10))
+        if lower < 0:
+            label = f"NEG_{abs(lower):02d}_{abs(lower + 9):02d}"
+        elif lower == 0:
+            label = "ZERO_09"
+        else:
+            label = f"POS_{lower:02d}_{'100' if lower == 90 else f'{lower + 9:02d}'}"
+    else:
+        lower = min(90, max(0, int(numeric // 10) * 10))
+        label = f"{lower:02d}-{'100' if lower == 90 else f'{lower + 9:02d}'}"
+    distribution["buckets"][label] += 1
+
+
+def _serialize_score_distribution(distribution):
+    count = int(distribution["count"])
+    return {
+        "count": count,
+        "minimum": (
+            round(distribution["minimum"], 4)
+            if distribution["minimum"] is not None
+            else None
+        ),
+        "maximum": (
+            round(distribution["maximum"], 4)
+            if distribution["maximum"] is not None
+            else None
+        ),
+        "average": (
+            round(distribution["value_sum"] / count, 4) if count else None
+        ),
+        "value_sum": round(distribution["value_sum"], 6),
+        "buckets": dict(sorted(distribution["buckets"].items())),
+    }
+
+
+def _new_master_signal_diagnostics():
+    return {
+        "evaluated": 0,
+        "signals": Counter(),
+        "biases": Counter(),
+        "score_distribution": _new_score_distribution(signed=True),
+        "components": {},
+    }
+
+
+def _update_master_signal_diagnostics(diagnostics, decision):
+    stack = decision.get("timeframe_stack") or {}
+    chain = stack.get("decision_chain") or {}
+    signal = chain.get("signal") or {}
+    if not signal:
+        return
+    diagnostics["evaluated"] += 1
+    diagnostics["signals"][str(signal.get("signal") or "UNKNOWN")] += 1
+    diagnostics["biases"][str(signal.get("bias") or "UNKNOWN")] += 1
+    _update_score_distribution(diagnostics["score_distribution"], signal.get("score"))
+    profile = signal.get("scoring_profile") or {}
+    for component in profile.get("components") or ():
+        name = str(component.get("name") or "UNKNOWN")
+        aggregate = diagnostics["components"].setdefault(
+            name,
+            {
+                "values": Counter(),
+                "score_distribution": _new_score_distribution(signed=True),
+            },
+        )
+        aggregate["values"][str(component.get("value") or "NONE")] += 1
+        _update_score_distribution(
+            aggregate["score_distribution"],
+            component.get("score"),
+        )
+
+
+def _serialize_master_signal_diagnostics(diagnostics):
+    return {
+        "evaluated": diagnostics["evaluated"],
+        "signals": dict(sorted(diagnostics["signals"].items())),
+        "biases": dict(sorted(diagnostics["biases"].items())),
+        "score_distribution": _serialize_score_distribution(
+            diagnostics["score_distribution"]
+        ),
+        "components": {
+            name: {
+                "values": dict(sorted(component["values"].items())),
+                "score_distribution": _serialize_score_distribution(
+                    component["score_distribution"]
+                ),
+            }
+            for name, component in sorted(diagnostics["components"].items())
+        },
+    }
+
+
+def _independent_gate_passes(blocked_reasons):
+    blocked = set(blocked_reasons)
+    families = {
+        "MARKET_DATA": lambda reason: reason == "ATR_UNAVAILABLE",
+        "CONFIDENCE": lambda reason: reason.startswith("CONFIDENCE_"),
+        "TREND": lambda reason: reason.startswith("TREND_"),
+        "MOMENTUM": lambda reason: reason.startswith("MOMENTUM_"),
+        "FEATURE_SIGNAL": lambda reason: reason.startswith("FEATURE_SIGNAL_"),
+        "REGIME": lambda reason: reason.startswith("REGIME_")
+        or reason.startswith("BEAR_RALLY_"),
+        "TIMEFRAME_ALIGNMENT": lambda reason: reason
+        in {
+            "TIMEFRAME_STACK_UNAVAILABLE",
+            "HIGHER_TIMEFRAME_CONFLICT",
+            "TIMEFRAME_PERMISSION_CONFLICT",
+            "TIMEFRAME_STACK_STRONG_CONFLICT",
+        },
+        "DECISION_CHAIN": lambda reason: reason.startswith("REPLAY_")
+        or reason
+        in {
+            "CONTRADICTION_GATE_BLOCKED",
+            "RISK_GATE_REJECTED",
+            "EXECUTOR_NOT_READY",
+        },
+    }
+    passed = [
+        family
+        for family, matches in families.items()
+        if not any(matches(reason) for reason in blocked)
+    ]
+    if not blocked:
+        passed.append("ALL_PRE_ENTRY_GATES")
+    return passed
 
 
 def _eligibility_divergence_summary_text(comparable_counts, replay_only_counts, coverage_percent):

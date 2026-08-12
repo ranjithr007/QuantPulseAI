@@ -2,6 +2,15 @@
 
 QuantPulseAI is a FastAPI and React crypto-market intelligence platform aligned to the QuantPulse AI v3 architecture documents. It currently supports a local, paper-only workflow from market ingestion and multi-timeframe analysis through risk approval, simulated execution, monitoring, and performance reporting.
 
+## Governing Trading Invariants
+
+Permanent application-level trading rules are recorded in
+[`TRADING_INVARIANTS.md`](TRADING_INVARIANTS.md). In particular, QP-TI-001 governs
+independent `1h`/`2h`/`4h`/`1d` analysis, strongest-valid-signal selection, and the
+atomic one-active-trade-per-symbol requirement across all timeframes and trade
+directions. Current behavior must not be described as compliant until its required
+acceptance tests pass.
+
 ## Current Phase
 
 Phase 1 simulated-trading status: validated locally. Live exchange execution remains disabled.
@@ -80,8 +89,40 @@ Useful endpoints:
 - `GET /docs`
 - `GET /backtest/summary`
 - `GET /backtest/filtered-summary`
-- `GET /backtest/walk-forward`
+- `POST /backtest/walk-forward/jobs` (preferred; returns `202` immediately)
+- `GET /backtest/walk-forward/jobs/{job_id}` (poll until completed or failed)
+- `GET /backtest/walk-forward` (retired; returns `410` with the async submit URL)
 - `GET /paper-trade/measurement`
+
+The dashboard uses the queued walk-forward API. The replay runs after the submit
+response has been released, so reverse-proxy timeouts do not terminate a valid
+long-running calculation. Concurrent dashboard consumers with identical inputs
+share one five-minute job/result instead of running duplicate replays. Job status
+and completed results are stored durably in the canonical database.
+
+Before treating a walk-forward result as Phase 2 evidence, verify the canonical
+database contains sufficient finalized history for the selected symbol and all
+four entry timeframes (`1h`, `2h`, `4h`, and `1d`). The API fix prevents HTTP 504;
+it does not manufacture missing market history.
+
+The governed, resumable history command is:
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe -m app.governance.candle_history_backfill --dry-run
+.\venv\Scripts\python.exe -m app.governance.candle_history_backfill --days 550
+```
+
+For environments where network access and the application database run under
+different identities, use `--export-cache <path.jsonl.gz>` in the download
+context, followed by `--import-cache <path.jsonl.gz>` in the application context.
+The importer is idempotent and supports MSSQL, PostgreSQL, and SQLite fallback.
+
+`GET /regime/{symbol}/timeframe-summary` returns the latest independent regime,
+direction, and regime confidence for `1h`, `2h`, `4h`, and `1d`. It also reports
+aggregate direction percentages. Each canonical timeframe contributes exactly
+25%; the aggregate is display/selection context and is never fed back into an
+individual timeframe's regime calculation.
 
 ## Phase 2 Runtime Supervisor
 

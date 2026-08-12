@@ -3,6 +3,10 @@ from datetime import timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.database.models.market_candles import MarketCandle
 from app.repositories.market_repository import MarketRepository
 
 
@@ -91,6 +95,69 @@ def test_invalid_ohlc_is_rejected_before_query_or_write():
     db.query.assert_not_called()
     db.add.assert_not_called()
     db.commit.assert_not_called()
+
+
+def test_final_history_batch_inserts_missing_rows_once():
+    query = Mock()
+    query.filter.return_value = query
+    query.all.return_value = []
+    db = SimpleNamespace(
+        query=Mock(return_value=query),
+        add_all=Mock(),
+        commit=Mock(),
+        rollback=Mock(),
+    )
+
+    result = MarketRepository().insert_final_candles_batch(
+        db,
+        [_candle(is_final=True)],
+        now=datetime(2026, 7, 26, 13, 1, tzinfo=timezone.utc),
+    )
+
+    assert result == {"inserted": 1, "existing": 0, "rejected": 0}
+    entity = db.add_all.call_args.args[0][0]
+    assert entity.symbol == "DOGEUSDT"
+    assert entity.timeframe == "1h"
+    assert entity.is_final is True
+    assert entity.quality_state == "VERIFIED"
+    db.commit.assert_called_once()
+
+
+def test_final_history_batch_rejects_provisional_rows():
+    db = SimpleNamespace(
+        query=Mock(),
+        add_all=Mock(),
+        commit=Mock(),
+        rollback=Mock(),
+    )
+
+    result = MarketRepository().insert_final_candles_batch(
+        db,
+        [_candle(is_final=False)],
+        now=NOW,
+    )
+
+    assert result == {"inserted": 0, "existing": 0, "rejected": 1}
+    db.query.assert_not_called()
+    db.add_all.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_final_history_batch_assigns_ids_for_sqlite_bigint_schema():
+    engine = create_engine("sqlite:///:memory:")
+    MarketCandle.__table__.create(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        result = MarketRepository().insert_final_candles_batch(
+            session,
+            [_candle(is_final=True)],
+            now=datetime(2026, 7, 26, 13, 1, tzinfo=timezone.utc),
+        )
+        saved = session.query(MarketCandle).one()
+        assert result["inserted"] == 1
+        assert saved.id == 1
+    finally:
+        session.close()
 
 
 def _candle(

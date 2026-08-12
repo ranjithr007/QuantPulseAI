@@ -40,6 +40,7 @@ class RiskEngine:
         confidence,
         capital=10000,
         risk_percent=1,
+        min_confidence=None,
     ):
         raw_signal = str(signal).strip().upper() if signal is not None else ""
 
@@ -107,6 +108,7 @@ class RiskEngine:
             confidence=confidence,
             risk_percent=risk_percent,
             capital=capital,
+            min_confidence=min_confidence,
         )
 
         if result["decision"] == "APPROVE":
@@ -125,6 +127,7 @@ class RiskEngine:
         confidence=0,
         risk_percent=1,
         capital=10000,
+        min_confidence=None,
     ):
         # Required values must be checked before comparisons.
         if entry is None or stop_loss is None or target1 is None:
@@ -220,7 +223,25 @@ class RiskEngine:
                 "Confidence must be between 0 and 100",
             )
 
-        if confidence < self.MIN_CONFIDENCE:
+        effective_min_confidence = (
+            self.MIN_CONFIDENCE
+            if min_confidence is None
+            else self._to_finite_float("min_confidence", min_confidence)
+        )
+        if not 0 <= effective_min_confidence <= 100:
+            return self._reject_trade_plan(
+                symbol,
+                canonical_side,
+                entry,
+                stop_loss,
+                target1,
+                target2,
+                confidence,
+                risk_percent,
+                "Minimum confidence must be between 0 and 100",
+            )
+
+        if confidence < effective_min_confidence:
             return self._reject_trade_plan(
                 symbol,
                 canonical_side,
@@ -357,7 +378,7 @@ class RiskEngine:
                 risk_reward=round(raw_rr, 2),
             )
 
-        return {
+        result = {
             "symbol": symbol,
             "signal": canonical_side,
             "decision": "APPROVE",
@@ -374,6 +395,9 @@ class RiskEngine:
             "risk_amount": capital * risk_percent / 100,
             "confidence": confidence,
         }
+        if min_confidence is not None:
+            result["minimum_confidence"] = effective_min_confidence
+        return result
 
     @staticmethod
     def _to_finite_float(name, value):

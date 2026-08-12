@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import "./styles.css";
 import DashboardHeader from "./components/DashboardHeader";
+import AuthGate from "./components/AuthGate";
 import useDashboardData from "./hooks/useDashboardData";
 import { executePaperTradeCandidates, loadAutomationSettings, persistReadyWatchlistSetups, saveAutomationEmergencyStop, saveAutomationSettings } from "./hooks/dashboardApi";
 
@@ -36,7 +37,7 @@ const SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSD
 // Entry scanning and active trading decisions use the higher-timeframe stack.
 // Lower timeframes remain supported by backend diagnostics/history, but are not
 // offered as active dashboard scan choices.
-const TIMEFRAMES = ["1h", "4h", "1d"];
+const TIMEFRAMES = ["1h", "2h", "4h", "1d"];
 const MODES = ["scalp", "intraday", "swing", "position"];
 const AUTO_REFRESH_MS = 30000;
 const SECTION = "mx-auto w-full max-w-[1680px] px-4 sm:px-6 lg:px-8";
@@ -146,12 +147,14 @@ function buildPageUrl(page, view) {
 function App() {
   return (
     <BrowserRouter>
-      <DashboardApp />
+      <AuthGate>
+        {({ username, onLogout }) => <DashboardApp username={username} onLogout={onLogout} />}
+      </AuthGate>
     </BrowserRouter>
   );
 }
 
-function DashboardApp() {
+function DashboardApp({ username, onLogout }) {
   const location = useLocation();
   const navigate = useNavigate();
   const routeView = useMemo(() => getViewFromLocation(location.pathname, location.search), [location.pathname, location.search]);
@@ -377,11 +380,15 @@ function DashboardApp() {
       winningTrades={winningTrades}
       losingTrades={losingTrades}
       winRate={winRate}
+      username={username}
+      onLogout={onLogout}
     />
   );
 }
 
 function DashboardLayout({
+  username,
+  onLogout,
   activePage,
   onPageChange,
   getPageHref,
@@ -443,6 +450,8 @@ function DashboardLayout({
         signalRows={signalRows}
         setView={setView}
         setTick={setTick}
+        username={username}
+        onLogout={onLogout}
       />
 
       <main className="space-y-6 pb-24 lg:ml-72 lg:pb-8">

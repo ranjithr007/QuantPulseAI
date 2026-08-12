@@ -102,7 +102,7 @@ class Phase0FreshnessTests(unittest.TestCase):
         self.assertIn("FUTURE_CANDLE_TOLERANCE_SECONDS", candle_source)
         self.assertIn("usable_candidates", candle_source)
         self.assertIn("max_usable_time", source)
-        self.assertIn("normalize_timestamp_to_utc", job_source)
+        self.assertIn("repo.save_candle(db, candle)", job_source)
 
     def test_signal_pipeline_models_default_to_utc(self):
         model_files = [

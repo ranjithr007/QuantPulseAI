@@ -21,7 +21,7 @@ PHASE2_WALK_FORWARD_DAYS = {
     "step_days": 60,
     "minimum_folds": 6,
 }
-PHASE2_OFFICIAL_TIMEFRAMES = {"1h", "4h", "1d"}
+PHASE2_OFFICIAL_TIMEFRAMES = {"1h", "2h", "4h", "1d"}
 PHASE2_SUPPORTING_TIMEFRAMES = {"5m", "15m"}
 MIN_ANNUALIZED_SHARPE_TRADES = 30
 TIMEFRAME_MINUTES = {
@@ -29,6 +29,7 @@ TIMEFRAME_MINUTES = {
     "5m": 5,
     "15m": 15,
     "1h": 60,
+    "2h": 120,
     "4h": 240,
     "1d": 1440,
 }
@@ -123,6 +124,38 @@ def run_walk_forward(
     gate_evaluated = 0
     gate_signal_counts = Counter()
     gate_rejection_counts = Counter()
+    gate_regime_counts = Counter()
+    gate_regime_direction_counts = Counter()
+    gate_regime_source_counts = Counter()
+    gate_pass_counts = Counter()
+    gate_rejection_combination_counts = Counter()
+    gate_score_distributions = {}
+    gate_master_signal_diagnostics = {}
+    gate_directional_entry_funnel = {
+        "evaluated": 0,
+        "candidate_regimes": Counter(),
+        "cumulative_stage_counts": Counter(),
+        "independent_condition_pass_counts": Counter(),
+        "first_failure_counts": Counter(),
+        "confirmed_candidate_score_distributions": {},
+        "master_candidate_chain_audit": {
+            "evaluated": 0,
+            "contradiction_statuses": Counter(),
+            "contradiction_trade_allowed": Counter(),
+            "conflict_scores": {},
+            "master_signal_scores": {},
+            "master_signal_confidences": {},
+            "risk_confidences": {},
+            "conflict_names": Counter(),
+            "conflict_severities": Counter(),
+            "bias_maps": {},
+            "risk_decisions": Counter(),
+            "risk_reasons": Counter(),
+            "executor_verdicts": Counter(),
+            "current_price_availability": Counter(),
+        },
+        "contract": {},
+    }
     test_start = config.train_size
     frozen_selections = list(frozen_fold_parameters or [])
 
@@ -178,6 +211,29 @@ def run_walk_forward(
         gate_evaluated += int(decision_summary.get("evaluated") or 0)
         gate_signal_counts.update(decision_summary.get("signals") or {})
         gate_rejection_counts.update(decision_summary.get("rejections") or {})
+        gate_regime_counts.update(decision_summary.get("regimes") or {})
+        gate_regime_direction_counts.update(
+            decision_summary.get("regime_directions") or {}
+        )
+        gate_regime_source_counts.update(decision_summary.get("regime_sources") or {})
+        gate_pass_counts.update(
+            decision_summary.get("independent_gate_pass_counts") or {}
+        )
+        gate_rejection_combination_counts.update(
+            decision_summary.get("rejection_combinations") or {}
+        )
+        _merge_score_distributions(
+            gate_score_distributions,
+            decision_summary.get("feature_score_distributions") or {},
+        )
+        _merge_master_signal_diagnostics(
+            gate_master_signal_diagnostics,
+            decision_summary.get("master_signal_diagnostics") or {},
+        )
+        _merge_directional_entry_funnel(
+            gate_directional_entry_funnel,
+            decision_summary.get("directional_entry_funnel") or {},
+        )
         fold_trades = [
             {**trade, "fold": fold_number}
             for trade in oos_result.get("trades", [])
@@ -262,6 +318,36 @@ def run_walk_forward(
                 "evaluated_decisions": gate_evaluated,
                 "signals": dict(sorted(gate_signal_counts.items())),
                 "rejections": dict(sorted(gate_rejection_counts.items())),
+                "regimes": dict(sorted(gate_regime_counts.items())),
+                "regime_percentages": _percentage_distribution(
+                    gate_regime_counts,
+                    gate_evaluated,
+                ),
+                "regime_directions": dict(
+                    sorted(gate_regime_direction_counts.items())
+                ),
+                "regime_sources": dict(sorted(gate_regime_source_counts.items())),
+                "regime_direction_percentages": _percentage_distribution(
+                    gate_regime_direction_counts,
+                    gate_evaluated,
+                ),
+                "independent_gate_pass_counts": dict(sorted(gate_pass_counts.items())),
+                "independent_gate_pass_percentages": _percentage_distribution(
+                    gate_pass_counts,
+                    gate_evaluated,
+                ),
+                "rejection_combinations": dict(
+                    gate_rejection_combination_counts.most_common()
+                ),
+                "feature_score_distributions": _serialize_score_distributions(
+                    gate_score_distributions
+                ),
+                "master_signal_diagnostics": _serialize_master_signal_diagnostics(
+                    gate_master_signal_diagnostics
+                ),
+                "directional_entry_funnel": _serialize_directional_entry_funnel(
+                    gate_directional_entry_funnel
+                ),
             },
             "annualized_sharpe": _annualized_trade_horizon_sharpe(
                 all_oos_trades,
@@ -522,6 +608,244 @@ def _annualized_trade_horizon_sharpe(trades, timeframe):
     periods_per_year = (365 * 24 * 60) / minutes
     trades_per_year = periods_per_year / max(mean(durations), 1.0)
     return round((mean(returns) / deviation) * sqrt(trades_per_year), 4)
+
+
+def _percentage_distribution(counts, total):
+    if not total:
+        return {}
+    return {
+        key: round((value / total) * 100, 2)
+        for key, value in sorted(counts.items())
+    }
+
+
+def _merge_score_distributions(target, incoming):
+    for name, distribution in incoming.items():
+        aggregate = target.setdefault(
+            name,
+            {
+                "count": 0,
+                "value_sum": 0.0,
+                "minimum": None,
+                "maximum": None,
+                "buckets": Counter(),
+            },
+        )
+        count = int(distribution.get("count") or 0)
+        aggregate["count"] += count
+        aggregate["value_sum"] += float(distribution.get("value_sum") or 0)
+        minimum = distribution.get("minimum")
+        maximum = distribution.get("maximum")
+        if minimum is not None:
+            aggregate["minimum"] = (
+                float(minimum)
+                if aggregate["minimum"] is None
+                else min(aggregate["minimum"], float(minimum))
+            )
+        if maximum is not None:
+            aggregate["maximum"] = (
+                float(maximum)
+                if aggregate["maximum"] is None
+                else max(aggregate["maximum"], float(maximum))
+            )
+        aggregate["buckets"].update(distribution.get("buckets") or {})
+
+
+def _serialize_score_distributions(distributions):
+    result = {}
+    for name, distribution in sorted(distributions.items()):
+        count = distribution["count"]
+        result[name] = {
+            "count": count,
+            "minimum": distribution["minimum"],
+            "maximum": distribution["maximum"],
+            "average": (
+                round(distribution["value_sum"] / count, 4) if count else None
+            ),
+            "value_sum": round(distribution["value_sum"], 6),
+            "buckets": dict(sorted(distribution["buckets"].items())),
+        }
+    return result
+
+
+def _merge_master_signal_diagnostics(target, incoming):
+    for scope, diagnostics in incoming.items():
+        aggregate = target.setdefault(
+            scope,
+            {
+                "evaluated": 0,
+                "signals": Counter(),
+                "biases": Counter(),
+                "scores": {},
+                "components": {},
+            },
+        )
+        aggregate["evaluated"] += int(diagnostics.get("evaluated") or 0)
+        aggregate["signals"].update(diagnostics.get("signals") or {})
+        aggregate["biases"].update(diagnostics.get("biases") or {})
+        _merge_score_distributions(
+            aggregate["scores"],
+            {"master": diagnostics.get("score_distribution") or {}},
+        )
+        for name, component in (diagnostics.get("components") or {}).items():
+            component_aggregate = aggregate["components"].setdefault(
+                name,
+                {"values": Counter(), "scores": {}},
+            )
+            component_aggregate["values"].update(component.get("values") or {})
+            _merge_score_distributions(
+                component_aggregate["scores"],
+                {"component": component.get("score_distribution") or {}},
+            )
+
+
+def _serialize_master_signal_diagnostics(diagnostics):
+    result = {}
+    for scope, aggregate in sorted(diagnostics.items()):
+        scores = _serialize_score_distributions(aggregate["scores"])
+        result[scope] = {
+            "evaluated": aggregate["evaluated"],
+            "signals": dict(sorted(aggregate["signals"].items())),
+            "biases": dict(sorted(aggregate["biases"].items())),
+            "score_distribution": scores.get("master", {}),
+            "components": {},
+        }
+        for name, component in sorted(aggregate["components"].items()):
+            component_scores = _serialize_score_distributions(component["scores"])
+            result[scope]["components"][name] = {
+                "values": dict(sorted(component["values"].items())),
+                "score_distribution": component_scores.get("component", {}),
+            }
+    return result
+
+
+def _merge_directional_entry_funnel(target, incoming):
+    target["evaluated"] += int(incoming.get("evaluated") or 0)
+    target["candidate_regimes"].update(incoming.get("candidate_regimes") or {})
+    target["cumulative_stage_counts"].update(
+        incoming.get("cumulative_stage_counts") or {}
+    )
+    target["independent_condition_pass_counts"].update(
+        incoming.get("independent_condition_pass_counts") or {}
+    )
+    target["first_failure_counts"].update(incoming.get("first_failure_counts") or {})
+    _merge_score_distributions(
+        target["confirmed_candidate_score_distributions"],
+        incoming.get("confirmed_candidate_score_distributions") or {},
+    )
+    _merge_master_candidate_chain_audit(
+        target["master_candidate_chain_audit"],
+        incoming.get("master_candidate_chain_audit") or {},
+    )
+    contract = incoming.get("contract") or {}
+    if contract:
+        target["contract"] = contract
+
+
+def _serialize_directional_entry_funnel(diagnostics):
+    stage_order = list((diagnostics.get("contract") or {}).get("stage_order") or ())
+    cumulative = diagnostics.get("cumulative_stage_counts") or {}
+    candidates = int(cumulative.get("SAME_SIDE_CANDIDATE_REGIME", 0))
+    final_eligible = int(cumulative.get("FINAL_ELIGIBLE", 0))
+    first_failures = diagnostics.get("first_failure_counts") or {}
+    return {
+        "evaluated": int(diagnostics.get("evaluated") or 0),
+        "candidate_regimes": dict(sorted(diagnostics["candidate_regimes"].items())),
+        "cumulative_stage_counts": {
+            stage: int(cumulative.get(stage, 0)) for stage in stage_order
+        },
+        "cumulative_stage_percent_of_candidates": {
+            stage: round(int(cumulative.get(stage, 0)) / candidates * 100, 2)
+            if candidates
+            else 0.0
+            for stage in stage_order
+        },
+        "independent_condition_pass_counts": {
+            stage: int(
+                diagnostics["independent_condition_pass_counts"].get(stage, 0)
+            )
+            for stage in stage_order
+        },
+        "first_failure_counts": dict(sorted(first_failures.items())),
+        "confirmed_candidate_score_distributions": _serialize_score_distributions(
+            diagnostics["confirmed_candidate_score_distributions"]
+        ),
+        "master_candidate_chain_audit": _serialize_master_candidate_chain_audit(
+            diagnostics["master_candidate_chain_audit"]
+        ),
+        "contract": {
+            "scope": "READ_ONLY_DIAGNOSTIC",
+            "candidate_denominator": candidates,
+            "stage_order": stage_order,
+            "first_failures_reconcile_to_candidates": (
+                sum(first_failures.values()) + final_eligible == candidates
+            ),
+        },
+    }
+
+
+def _merge_master_candidate_chain_audit(target, incoming):
+    target["evaluated"] += int(incoming.get("evaluated") or 0)
+    for name in (
+        "contradiction_statuses",
+        "contradiction_trade_allowed",
+        "conflict_names",
+        "conflict_severities",
+        "risk_decisions",
+        "risk_reasons",
+        "executor_verdicts",
+        "current_price_availability",
+    ):
+        target[name].update(incoming.get(name) or {})
+    _merge_score_distributions(
+        target["conflict_scores"],
+        {"conflict_score": incoming.get("conflict_score_distribution") or {}},
+    )
+    _merge_score_distributions(
+        target["master_signal_scores"],
+        {"master_signal_score": incoming.get("master_signal_score_distribution") or {}},
+    )
+    _merge_score_distributions(
+        target["master_signal_confidences"],
+        {"master_signal_confidence": incoming.get("master_signal_confidence_distribution") or {}},
+    )
+    _merge_score_distributions(
+        target["risk_confidences"],
+        {"risk_confidence": incoming.get("risk_confidence_distribution") or {}},
+    )
+    for source, values in (incoming.get("bias_maps") or {}).items():
+        target["bias_maps"].setdefault(source, Counter()).update(values)
+
+
+def _serialize_master_candidate_chain_audit(diagnostics):
+    scores = _serialize_score_distributions(diagnostics["conflict_scores"])
+    master_scores = _serialize_score_distributions(diagnostics["master_signal_scores"])
+    master_confidences = _serialize_score_distributions(
+        diagnostics["master_signal_confidences"]
+    )
+    risk_confidences = _serialize_score_distributions(diagnostics["risk_confidences"])
+    return {
+        "evaluated": int(diagnostics.get("evaluated") or 0),
+        "contradiction_statuses": dict(sorted(diagnostics["contradiction_statuses"].items())),
+        "contradiction_trade_allowed": dict(sorted(diagnostics["contradiction_trade_allowed"].items())),
+        "conflict_score_distribution": scores.get("conflict_score", {}),
+        "master_signal_score_distribution": master_scores.get("master_signal_score", {}),
+        "master_signal_confidence_distribution": master_confidences.get(
+            "master_signal_confidence", {}
+        ),
+        "risk_confidence_distribution": risk_confidences.get("risk_confidence", {}),
+        "conflict_names": dict(sorted(diagnostics["conflict_names"].items())),
+        "conflict_severities": dict(sorted(diagnostics["conflict_severities"].items())),
+        "bias_maps": {
+            source: dict(sorted(values.items()))
+            for source, values in sorted(diagnostics["bias_maps"].items())
+        },
+        "risk_decisions": dict(sorted(diagnostics["risk_decisions"].items())),
+        "risk_reasons": dict(sorted(diagnostics["risk_reasons"].items())),
+        "executor_verdicts": dict(sorted(diagnostics["executor_verdicts"].items())),
+        "current_price_availability": dict(sorted(diagnostics["current_price_availability"].items())),
+        "scope": "READ_ONLY_MASTER_CANDIDATES_AFTER_TIMEFRAME_GATE",
+    }
 
 
 def _insufficient_data_result(

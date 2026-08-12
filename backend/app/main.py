@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from app.api.v1 import backtest_api
+from app.api.v1 import auth_api
 from app.api.v1 import automation_api
 from app.api.v1 import dataset_api
 from app.api.v1 import derivatives_api
@@ -44,6 +45,7 @@ from app.observability.http_operations import SlidingWindowRateLimiter
 from app.observability.http_operations import build_http_logger
 from app.repositories.automation_settings_repository import ensure_automation_settings_schema
 from app.repositories.trade_thesis_repository import ensure_trade_thesis_lineage_schema
+from app.security.app_auth import request_has_valid_session
 
 
 @asynccontextmanager
@@ -101,6 +103,7 @@ rate_limiter = SlidingWindowRateLimiter()
 http_logger = build_http_logger()
 
 ALLOWED_ORIGINS = set(settings.allowed_origins)
+PUBLIC_PATHS = {"/health/live", "/health/ready", "/auth/login", "/auth/session", "/auth/logout"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -118,14 +121,27 @@ async def ensure_cors_headers(request: Request, call_next):
     request_id = _request_id(request)
     request.state.request_id = request_id
     mutating = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    public_path = request.url.path in PUBLIC_PATHS
+    app_auth_enabled = getattr(settings, "require_app_auth", False)
+    session_authenticated = app_auth_enabled and request_has_valid_session(request, settings)
 
-    if _rate_limit_exceeded(request, mutating):
+    if request.method.upper() == "OPTIONS":
+        response = await _call_with_error_boundary(request, call_next)
+    elif _rate_limit_exceeded(request, mutating):
         response = JSONResponse(
             {"detail": "Rate limit exceeded"},
             status_code=429,
             headers={"Retry-After": "60"},
         )
-    elif mutating and settings.require_admin_auth:
+    elif app_auth_enabled and not public_path and not session_authenticated:
+        response = JSONResponse(
+            {"detail": "Login required"},
+            status_code=401,
+            headers={"WWW-Authenticate": "Session"},
+        )
+    elif session_authenticated and mutating and origin and origin not in ALLOWED_ORIGINS:
+        response = JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+    elif mutating and settings.require_admin_auth and not public_path and not session_authenticated:
         supplied_key = _admin_api_key_from_request(request)
         if not supplied_key or not secrets.compare_digest(supplied_key, settings.admin_api_key):
             response = JSONResponse(
@@ -240,6 +256,7 @@ def _apply_security_headers(response, request_id):
         )
 
 app.include_router(health_api.router)
+app.include_router(auth_api.router)
 app.include_router(automation_api.router)
 app.include_router(derivatives_api.router)
 app.include_router(market_api.router)

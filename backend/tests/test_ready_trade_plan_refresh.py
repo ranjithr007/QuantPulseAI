@@ -32,7 +32,7 @@ def _ready_payload():
                 },
             }
         ],
-        "timeframes_used": ["1h", "4h", "1d"],
+        "timeframes_used": ["1h", "2h", "4h", "1d"],
         "mode": "intraday",
     }
 

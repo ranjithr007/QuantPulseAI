@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import datetime
 from datetime import timedelta
 
@@ -8,6 +9,8 @@ from app.api.v1 import backtest_api
 from app.backtesting.walk_forward_validator import WalkForwardConfig
 from app.backtesting.walk_forward_validator import phase2_walk_forward_defaults
 from app.backtesting.walk_forward_validator import run_walk_forward
+from app.backtesting.walk_forward_validator import _merge_directional_entry_funnel
+from app.backtesting.walk_forward_validator import _serialize_directional_entry_funnel
 
 
 class Candle:
@@ -81,6 +84,55 @@ def test_parameter_selection_never_receives_test_candles():
                 {"label": items[0].candle_time.isoformat(), "equity": start_capital},
                 {"label": items[-1].candle_time.isoformat(), "equity": final_capital},
             ],
+            "decision_summary": {
+                "evaluated": len(items),
+                "signals": {"WAIT": len(items)},
+                "rejections": {"REGIME_NOT_BULLISH": len(items)},
+                "regimes": {"RANGE_NEUTRAL": len(items)},
+                "regime_directions": {"NEUTRAL": len(items)},
+                "independent_gate_pass_counts": {"MARKET_DATA": len(items)},
+                "rejection_combinations": {
+                    "REGIME_NOT_BULLISH": len(items),
+                },
+                "feature_score_distributions": {
+                    "final_score": {
+                        "count": len(items),
+                        "minimum": 50,
+                        "maximum": 50,
+                        "average": 50,
+                        "value_sum": 50 * len(items),
+                        "buckets": {"50-59": len(items)},
+                    }
+                },
+                "master_signal_diagnostics": {
+                    "regime_gate_pass_decisions": {
+                        "evaluated": len(items),
+                        "signals": {"WAIT": len(items)},
+                        "biases": {"NEUTRAL": len(items)},
+                        "score_distribution": {
+                            "count": len(items),
+                            "minimum": 10,
+                            "maximum": 10,
+                            "average": 10,
+                            "value_sum": 10 * len(items),
+                            "buckets": {"10-19": len(items)},
+                        },
+                        "components": {
+                            "feature": {
+                                "values": {"SIDEWAYS": len(items)},
+                                "score_distribution": {
+                                    "count": len(items),
+                                    "minimum": 1,
+                                    "maximum": 1,
+                                    "average": 1,
+                                    "value_sum": len(items),
+                                    "buckets": {"00-09": len(items)},
+                                },
+                            }
+                        },
+                    }
+                },
+            },
         }
 
     result = run_walk_forward(
@@ -104,6 +156,27 @@ def test_parameter_selection_never_receives_test_candles():
     assert oos_calls[0]["times"] == [START + timedelta(minutes=index) for index in range(5, 9)]
     assert oos_calls[1]["times"] == [START + timedelta(minutes=index) for index in range(8, 12)]
     assert all(fold["selected_parameters"]["stop_percent"] == 1 for fold in result["folds"])
+    gate_diagnostics = result["out_of_sample"]["gate_diagnostics"]
+    assert gate_diagnostics["regimes"] == {"RANGE_NEUTRAL": 8}
+    assert gate_diagnostics["regime_percentages"] == {"RANGE_NEUTRAL": 100.0}
+    assert gate_diagnostics["regime_direction_percentages"] == {"NEUTRAL": 100.0}
+    assert gate_diagnostics["independent_gate_pass_percentages"] == {"MARKET_DATA": 100.0}
+    assert gate_diagnostics["rejection_combinations"] == {"REGIME_NOT_BULLISH": 8}
+    assert gate_diagnostics["feature_score_distributions"]["final_score"] == {
+        "count": 8,
+        "minimum": 50.0,
+        "maximum": 50.0,
+        "average": 50.0,
+        "value_sum": 400.0,
+        "buckets": {"50-59": 8},
+    }
+    master = gate_diagnostics["master_signal_diagnostics"][
+        "regime_gate_pass_decisions"
+    ]
+    assert master["evaluated"] == 8
+    assert master["signals"] == {"WAIT": 8}
+    assert master["score_distribution"]["average"] == 10.0
+    assert master["components"]["feature"]["values"] == {"SIDEWAYS": 8}
 
 
 def test_rolling_mode_keeps_training_window_fixed():
@@ -318,3 +391,140 @@ def test_walk_forward_contract_summary_marks_official_config_as_pass_with_six_fo
     assert contract["configuration_matches_contract"] is True
     assert contract["minimum_fold_requirement"] == 6
     assert contract["contract_status"] == "PASS"
+
+
+def test_walk_forward_merges_directional_funnel_counts_across_folds():
+    target = {
+        "evaluated": 0,
+        "candidate_regimes": Counter(),
+        "cumulative_stage_counts": Counter(),
+        "independent_condition_pass_counts": Counter(),
+        "first_failure_counts": Counter(),
+        "confirmed_candidate_score_distributions": {},
+        "master_candidate_chain_audit": {
+            "evaluated": 0,
+            "contradiction_statuses": Counter(),
+            "contradiction_trade_allowed": Counter(),
+            "conflict_scores": {},
+            "master_signal_scores": {},
+            "master_signal_confidences": {},
+            "risk_confidences": {},
+            "conflict_names": Counter(),
+            "conflict_severities": Counter(),
+            "bias_maps": {},
+            "risk_decisions": Counter(),
+            "risk_reasons": Counter(),
+            "executor_verdicts": Counter(),
+            "current_price_availability": Counter(),
+        },
+        "contract": {},
+    }
+    incoming = {
+        "evaluated": 4,
+        "candidate_regimes": {"BULL_PULLBACK": 2},
+        "cumulative_stage_counts": {
+            "SAME_SIDE_CANDIDATE_REGIME": 2,
+            "LOCAL_CONFIRMATION": 1,
+            "CONFIDENCE_AT_OR_ABOVE_THRESHOLD": 1,
+            "FINAL_ELIGIBLE": 0,
+        },
+        "independent_condition_pass_counts": {
+            "SAME_SIDE_CANDIDATE_REGIME": 2,
+            "LOCAL_CONFIRMATION": 1,
+            "CONFIDENCE_AT_OR_ABOVE_THRESHOLD": 2,
+            "FINAL_ELIGIBLE": 0,
+        },
+        "first_failure_counts": {"LOCAL_CONFIRMATION": 1, "FINAL_ELIGIBLE": 1},
+        "confirmed_candidate_score_distributions": {
+            "composite_confidence": {
+                "count": 1,
+                "minimum": 65,
+                "maximum": 65,
+                "average": 65,
+                "value_sum": 65,
+                "buckets": {"60-69": 1},
+            }
+        },
+        "master_candidate_chain_audit": {
+            "evaluated": 1,
+            "contradiction_statuses": {"INVALIDATED": 1},
+            "contradiction_trade_allowed": {"BLOCKED": 1},
+            "conflict_score_distribution": {
+                "count": 1,
+                "minimum": 100,
+                "maximum": 100,
+                "average": 100,
+                "value_sum": 100,
+                "buckets": {"90-100": 1},
+            },
+            "master_signal_score_distribution": {
+                "count": 1,
+                "minimum": 42,
+                "maximum": 42,
+                "average": 42,
+                "value_sum": 42,
+                "buckets": {"40-49": 1},
+            },
+            "master_signal_confidence_distribution": {
+                "count": 1,
+                "minimum": 42,
+                "maximum": 42,
+                "average": 42,
+                "value_sum": 42,
+                "buckets": {"40-49": 1},
+            },
+            "risk_confidence_distribution": {
+                "count": 1,
+                "minimum": 42,
+                "maximum": 42,
+                "average": 42,
+                "value_sum": 42,
+                "buckets": {"40-49": 1},
+            },
+            "conflict_names": {"missing_candle": 1},
+            "conflict_severities": {"critical": 1},
+            "bias_maps": {"signal": {"LONG": 1}},
+            "risk_decisions": {"REJECT": 1},
+            "risk_reasons": {"Contradiction blocked": 1},
+            "executor_verdicts": {"BLOCKED": 1},
+            "current_price_availability": {"MISSING": 1},
+        },
+        "contract": {
+            "stage_order": [
+                "SAME_SIDE_CANDIDATE_REGIME",
+                "LOCAL_CONFIRMATION",
+                "CONFIDENCE_AT_OR_ABOVE_THRESHOLD",
+                "FINAL_ELIGIBLE",
+            ]
+        },
+    }
+
+    _merge_directional_entry_funnel(target, incoming)
+    _merge_directional_entry_funnel(target, incoming)
+    result = _serialize_directional_entry_funnel(target)
+
+    assert result["evaluated"] == 8
+    assert result["candidate_regimes"] == {"BULL_PULLBACK": 4}
+    assert result["cumulative_stage_counts"]["LOCAL_CONFIRMATION"] == 2
+    assert result["independent_condition_pass_counts"][
+        "CONFIDENCE_AT_OR_ABOVE_THRESHOLD"
+    ] == 4
+    assert result["first_failure_counts"] == {
+        "FINAL_ELIGIBLE": 2,
+        "LOCAL_CONFIRMATION": 2,
+    }
+    assert result["confirmed_candidate_score_distributions"][
+        "composite_confidence"
+    ]["count"] == 2
+    assert result["confirmed_candidate_score_distributions"][
+        "composite_confidence"
+    ]["average"] == 65
+    audit = result["master_candidate_chain_audit"]
+    assert audit["evaluated"] == 2
+    assert audit["conflict_names"] == {"missing_candle": 2}
+    assert audit["conflict_score_distribution"]["count"] == 2
+    assert audit["current_price_availability"] == {"MISSING": 2}
+    assert audit["master_signal_score_distribution"]["count"] == 2
+    assert audit["master_signal_confidence_distribution"]["average"] == 42
+    assert audit["risk_confidence_distribution"]["average"] == 42
+    assert result["contract"]["first_failures_reconcile_to_candidates"] is True

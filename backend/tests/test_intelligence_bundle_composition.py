@@ -56,7 +56,7 @@ def test_multi_timeframe_context_is_reused_across_bundle_builders(monkeypatch):
         object(), "BTCUSDT", mode="intraday", context=context
     )
 
-    assert diagnostics_calls == ["5m", "15m", "1h"]
+    assert diagnostics_calls == ["1h", "2h", "4h", "1d"]
 
 
 def test_intelligence_bundle_uses_session_aware_payload_builders():
@@ -108,11 +108,23 @@ def test_intelligence_as_of_snapshot_endpoint_uses_point_in_time_tables(monkeypa
             snapshot_json='{"kind":"decision"}',
         )
 
+    def point_in_time_bundle(db, symbol, timeframe, as_of):
+        feature = feature_snapshot(db, symbol, timeframe, as_of)
+        decision = decision_snapshot(db, symbol, timeframe, as_of)
+        return {
+            "feature_snapshot": feature,
+            "decision_snapshot": decision,
+            "serialized": {"thesis_snapshot": None},
+            "feature_leakage_diagnostics": {
+                "status": "PASS",
+                "feature": {"within_as_of": True},
+                "decision": {"version_matches": True},
+            },
+            "thesis_leakage_diagnostics": {"status": "NO_DATA"},
+        }
+
     monkeypatch.setattr(
-        intelligence_api, "get_feature_snapshot_as_of", feature_snapshot
-    )
-    monkeypatch.setattr(
-        intelligence_api, "get_decision_snapshot_as_of", decision_snapshot
+        intelligence_api, "build_point_in_time_bundle", point_in_time_bundle
     )
 
     class FakeDb:
@@ -133,8 +145,8 @@ def test_intelligence_as_of_snapshot_endpoint_uses_point_in_time_tables(monkeypa
     assert calls["feature"][0] == "BTCUSDT"
     assert calls["decision"][1] == "15m"
     assert payload["source"] == "point_in_time_snapshot"
-    assert payload["feature_snapshot"]["kind"] == "feature"
-    assert payload["decision_snapshot"]["kind"] == "decision"
+    assert payload["feature_snapshot"]["snapshot"]["kind"] == "feature"
+    assert payload["decision_snapshot"]["snapshot"]["kind"] == "decision"
     assert payload["leakage_diagnostics"]["status"] == "PASS"
     assert payload["leakage_diagnostics"]["feature"]["within_as_of"] is True
     assert payload["leakage_diagnostics"]["decision"]["version_matches"] is True

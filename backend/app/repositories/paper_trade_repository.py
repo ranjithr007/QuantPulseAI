@@ -4,6 +4,7 @@ from sqlalchemy import inspect, text
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.paper_trade import PaperTrade
+from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
@@ -41,6 +42,13 @@ class PaperTradeRepository:
                         f"ALTER TABLE paper_trades ADD COLUMN {column} {definition}"
                     )
                 )
+        db.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_paper_trades_one_open_symbol ON paper_trades(symbol) "
+                "WHERE status = 'OPEN'"
+            )
+        )
         db.commit()
 
     def get_open_trades(self, db):
@@ -73,13 +81,18 @@ class PaperTradeRepository:
 
         return query.all()
 
-    def has_open_trade(self, db, symbol, side):
+    def has_open_trade(self, db, symbol, side=None):
+        """Return whether the symbol already has an active position.
+
+        ``side`` remains accepted for older callers but is intentionally not
+        part of the lock key. QP-TI-001 permits one open trade per symbol
+        across every timeframe and direction.
+        """
         self.ensure_table(db)
 
         return (
             db.query(PaperTrade)
-            .filter(PaperTrade.symbol == symbol)
-            .filter(PaperTrade.side == side)
+            .filter(PaperTrade.symbol == str(symbol).upper())
             .filter(PaperTrade.status == "OPEN")
             .first()
             is not None
@@ -107,7 +120,7 @@ class PaperTradeRepository:
             trade_plan_id=trade_plan["id"],
             risk_decision_id=risk["id"],
             thesis_id=trade_plan.get("thesis_id"),
-            symbol=candidate["symbol"],
+            symbol=str(candidate["symbol"]).upper(),
             side=candidate["side"],
             entry_price=entry_price,
             stop_loss=trade_plan["stop_loss"],
@@ -192,6 +205,33 @@ class PaperTradeRepository:
                 reason=f"Paper trade closed with result {result}",
                 commit=False,
             )
+
+        # No plan generated while this position was active may remain queued
+        # after the symbol lock is released. The next pipeline stages must
+        # reconstruct a fresh four-timeframe opportunity.
+        open_plans = (
+            db.query(TradePlan)
+            .filter(TradePlan.symbol == trade.symbol)
+            .filter(TradePlan.status == "OPEN")
+            .all()
+        )
+        for plan in open_plans:
+            plan.status = "CLOSED"
+            plan.closed_at = closed_at
+            if plan.id == trade.trade_plan_id:
+                plan.result = result
+                plan.exit_price = exit_price
+            else:
+                plan.result = "STALE_AFTER_CLOSE"
+                plan.exit_price = plan.entry_price
+                if getattr(plan, "thesis_id", None):
+                    TradeThesisRepository().set_lifecycle_state(
+                        db,
+                        plan.thesis_id,
+                        "INVALIDATED",
+                        reason="Queued plan invalidated after active symbol trade closed",
+                        commit=False,
+                    )
 
         commit_or_rollback(db)
         db.refresh(trade)

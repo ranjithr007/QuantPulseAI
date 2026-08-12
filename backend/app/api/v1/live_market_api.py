@@ -7,6 +7,8 @@ from app.services.live_market_service import get_live_market_service
 from app.services.live_market_service import start_live_market_listener
 from app.utils.network_resilience import summarize_network_error
 from app.contracts.control import LiveMarketResponse
+from app.config import get_settings
+from app.security.app_auth import websocket_has_valid_session
 
 
 router = APIRouter(tags=["Live Market"])
@@ -57,6 +59,9 @@ async def start_live_market(symbols: str | None = Query(default=None)):
 
 @router.websocket("/ws/live-market")
 async def live_market_websocket(websocket: WebSocket, symbols: str | None = None):
+    if not websocket_has_valid_session(websocket, get_settings()):
+        await websocket.close(code=4401, reason="Login required")
+        return
     service = get_live_market_service()
     start_live_market_listener(symbols)
     await websocket.accept()

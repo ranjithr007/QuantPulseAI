@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app.api.v1.scheduler_api import list_jobs
@@ -59,7 +60,12 @@ def test_master_ai_v2_returns_structured_failure_when_inputs_fail():
 
 def test_master_ai_v2_includes_fusion_contract_on_success():
     fake_db = Mock()
-    candle = Mock(close_price=100.0, candle_time=datetime(2026, 6, 24, 3, 0, 0))
+    candle_time = datetime(2026, 6, 24, 3, 0, 0)
+    candle = SimpleNamespace(
+        close_price=100.0,
+        candle_time=candle_time,
+        close_time=candle_time,
+    )
     feature = Mock(ATR=1.5, CreatedAt=datetime(2026, 6, 24, 2, 59, 0))
     regime = Mock(CreatedAt=datetime(2026, 6, 24, 2, 59, 0))
     orderflow = Mock(CreatedAt=datetime(2026, 6, 24, 2, 59, 0))

@@ -155,7 +155,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         )
 
         self.assertEqual("WAITING_FOR_READY", status)
-        self.assertIn("1h/4h/1d", next_action)
+        self.assertIn("1h/2h/4h/1d", next_action)
 
     def test_lifecycle_funnel_does_not_queue_historical_ready_evidence(self):
         status, next_action = _phase2_lifecycle_state(

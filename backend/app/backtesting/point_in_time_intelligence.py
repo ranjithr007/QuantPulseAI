@@ -1,5 +1,7 @@
 """Leakage-safe reconstruction of candle-derived intelligence for replay."""
 
+from bisect import bisect_left
+from bisect import bisect_right
 from types import SimpleNamespace
 
 from app.features.point_in_time_feature_service import build_feature_snapshot
@@ -9,6 +11,17 @@ from app.regimes.regime_engine import analyze_market
 from app.regimes.rules import detect_regime
 from app.smc.smc_engine import analyze_smc
 from app.utils.freshness import normalize_timestamp_to_utc
+
+
+class IntelligenceTimeline(list):
+    """List-compatible replay timeline with a binary-search timestamp index."""
+
+    def __init__(self, records=()):
+        super().__init__(records)
+        self.effective_timestamps = [
+            item.get("effective_timestamp")
+            for item in self
+        ]
 
 
 def build_candle_intelligence_as_of(
@@ -21,6 +34,8 @@ def build_candle_intelligence_as_of(
     previous_regime=None,
     previous_cvd=None,
     state_only=False,
+    regime_detector=None,
+    transition_policy=None,
 ):
     feature_contract = build_feature_snapshot(
         symbol,
@@ -43,9 +58,14 @@ def build_candle_intelligence_as_of(
     )
 
     regime = (
-        analyze_market(feature_row, previous_regime)
+        analyze_market(
+            feature_row,
+            previous_regime,
+            regime_detector=regime_detector,
+            transition_policy=transition_policy,
+        )
         if previous_regime is not None
-        else detect_regime(feature_row)
+        else (regime_detector or detect_regime)(feature_row)
     )
     regime_row = SimpleNamespace(
         Regime=regime.get("regime"),
@@ -183,6 +203,8 @@ def build_stateful_intelligence_timeline(
     history_limit=300,
     minimum_history=50,
     full_snapshots=False,
+    regime_detector=None,
+    transition_policy=None,
 ):
     ordered = sorted(
         list(candles or []),
@@ -209,6 +231,8 @@ def build_stateful_intelligence_timeline(
             previous_regime=previous_regime,
             previous_cvd=previous_cvd,
             state_only=not full_snapshots,
+            regime_detector=regime_detector,
+            transition_policy=transition_policy,
         )
         state = intelligence["state"]
         previous_regime = SimpleNamespace(**state["regime"])
@@ -219,35 +243,39 @@ def build_stateful_intelligence_timeline(
                 "intelligence": intelligence,
             }
         )
-    return timeline
+    return IntelligenceTimeline(timeline)
 
 
 def resolve_intelligence_timeline(timeline, as_of_timestamp):
     cutoff = normalize_timestamp_to_utc(as_of_timestamp)
     if cutoff is None:
         return None
-    eligible = [
-        item
-        for item in timeline or []
-        if item["effective_timestamp"] is not None
-        and item["effective_timestamp"] <= cutoff
-    ]
-    return eligible[-1]["intelligence"] if eligible else None
+    records, timestamps = _timeline_index(timeline or [])
+    index = bisect_right(timestamps, cutoff) - 1
+    return records[index]["intelligence"] if index >= 0 else None
 
 
 def resolve_state_before(timeline, as_of_timestamp):
     cutoff = normalize_timestamp_to_utc(as_of_timestamp)
     if cutoff is None:
         return None
-    eligible = [
-        item
-        for item in timeline or []
-        if item["effective_timestamp"] is not None
-        and item["effective_timestamp"] < cutoff
-    ]
-    if not eligible:
+    records, timestamps = _timeline_index(timeline or [])
+    index = bisect_left(timestamps, cutoff) - 1
+    if index < 0:
         return None
-    return eligible[-1]["intelligence"].get("state")
+    return records[index]["intelligence"].get("state")
+
+
+def _timeline_index(timeline):
+    indexed = getattr(timeline, "effective_timestamps", None)
+    if indexed is not None:
+        return timeline, indexed
+    records = [
+        item
+        for item in timeline
+        if item.get("effective_timestamp") is not None
+    ]
+    return records, [item["effective_timestamp"] for item in records]
 
 
 def _value(item, name):

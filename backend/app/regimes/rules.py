@@ -2,72 +2,107 @@ REGIME_DEFINITIONS = {
     "TRENDING_BULL": {
         "strategy": "BUY_PULLBACK",
         "bias": "BULLISH",
+        "direction": "BULLISH",
         "risk_mode": "NORMAL",
     },
     "TRENDING_BEAR": {
         "strategy": "SHORT_RALLY",
         "bias": "BEARISH",
+        "direction": "BEARISH",
         "risk_mode": "NORMAL",
     },
     "BULL_PULLBACK": {
         "strategy": "WAIT_FOR_LONG_RECLAIM",
         "bias": "BULLISH_PULLBACK",
+        "direction": "BULLISH",
         "risk_mode": "REDUCED",
     },
     "BEAR_RALLY": {
         "strategy": "WAIT_FOR_SHORT_REJECTION",
         "bias": "BEARISH_RALLY",
+        "direction": "BEARISH",
         "risk_mode": "REDUCED",
     },
     "RANGE_ACCUMULATION": {
         "strategy": "BUY_RANGE_LOW_OR_BREAKOUT",
         "bias": "ACCUMULATION",
+        "direction": "BULLISH",
         "risk_mode": "REDUCED",
     },
     "RANGE_DISTRIBUTION": {
         "strategy": "SELL_RANGE_HIGH_OR_BREAKDOWN",
         "bias": "DISTRIBUTION",
+        "direction": "BEARISH",
         "risk_mode": "REDUCED",
     },
     "RANGE_NEUTRAL": {
         "strategy": "WAIT_RANGE_EXTREMES",
         "bias": "NEUTRAL",
+        "direction": "NEUTRAL",
         "risk_mode": "REDUCED",
     },
     "HIGH_VOLATILITY_BREAKOUT": {
         "strategy": "BUY_BREAKOUT_CONFIRMATION",
         "bias": "BULLISH_VOLATILE",
+        "direction": "BULLISH",
         "risk_mode": "STRICT",
     },
     "HIGH_VOLATILITY_BREAKDOWN": {
         "strategy": "SHORT_BREAKDOWN_CONFIRMATION",
         "bias": "BEARISH_VOLATILE",
+        "direction": "BEARISH",
         "risk_mode": "STRICT",
     },
     "LOW_VOLATILITY_COMPRESSION": {
         "strategy": "WAIT_EXPANSION",
         "bias": "NEUTRAL_COMPRESSION",
+        "direction": "NEUTRAL",
         "risk_mode": "STRICT",
     },
     "LIQUIDITY_GRAB_BULLISH": {
         "strategy": "BUY_AFTER_SWEEP_RECLAIM",
         "bias": "BULLISH_REVERSAL",
+        "direction": "BULLISH",
         "risk_mode": "STRICT",
     },
     "LIQUIDITY_GRAB_BEARISH": {
         "strategy": "SHORT_AFTER_SWEEP_REJECTION",
         "bias": "BEARISH_REVERSAL",
+        "direction": "BEARISH",
         "risk_mode": "STRICT",
     },
     "MANIPULATION_PHASE": {
         "strategy": "WAIT",
         "bias": "DANGEROUS_NEUTRAL",
+        "direction": "NEUTRAL",
         "risk_mode": "BLOCK",
     },
 }
 
 
 def detect_regime(features):
+    return _detect_regime(
+        features,
+        trending_bull_momentum=62,
+        trending_bear_momentum=38,
+    )
+
+
+def detect_regime_momentum_boundary_research(features):
+    """Research-only detector aligned to the feature factory's 40-60 bounds."""
+    return _detect_regime(
+        features,
+        trending_bull_momentum=60,
+        trending_bear_momentum=40,
+    )
+
+
+def _detect_regime(
+    features,
+    *,
+    trending_bull_momentum,
+    trending_bear_momentum,
+):
     trend = _score(features, "TrendScore")
     momentum = _score(features, "MomentumScore")
     volatility = _score(features, "VolatilityScore")
@@ -115,14 +150,14 @@ def detect_regime(features):
             "Volatility compression inside a non-trending structure",
         )
 
-    if trend >= 72 and momentum >= 62:
+    if trend >= 72 and momentum >= trending_bull_momentum:
         return _result(
             "TRENDING_BULL",
             _confidence(78, trend, momentum),
             "Trend and momentum are strongly bullish",
         )
 
-    if trend <= 28 and momentum <= 38:
+    if trend <= 28 and momentum <= trending_bear_momentum:
         return _result(
             "TRENDING_BEAR",
             _confidence(78, 100 - trend, 100 - momentum),
@@ -178,6 +213,13 @@ def detect_regime(features):
     )
 
 
+def regime_direction(regime):
+    definition = REGIME_DEFINITIONS.get(str(regime or "").upper())
+    if definition is None:
+        return "UNKNOWN"
+    return definition["direction"]
+
+
 def _result(regime, confidence, reason):
     definition = REGIME_DEFINITIONS[regime]
 
@@ -186,6 +228,7 @@ def _result(regime, confidence, reason):
         "confidence": min(95, max(0, round(float(confidence), 2))),
         "strategy": definition["strategy"],
         "bias": definition["bias"],
+        "direction": definition["direction"],
         "risk_mode": definition["risk_mode"],
         "reason": reason,
     }

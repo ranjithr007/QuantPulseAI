@@ -1,9 +1,16 @@
-const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.PROD
+  ? new URL("/api/", window.location.origin).toString()
+  : import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+
+function apiUrl(path) {
+  return new URL(String(path).replace(/^\/+/, ""), API_BASE);
+}
 const STALE_AFTER_BY_TIMEFRAME = {
   "1m": 5 * 60,
   "5m": 15 * 60,
   "15m": 25 * 60,
   "1h": 65 * 60,
+  "2h": (2 * 60 + 5) * 60,
   "4h": (4 * 60 + 5) * 60,
   "1d": (24 * 60 + 25) * 60,
 };
@@ -30,7 +37,7 @@ const SYMBOL_SCOPED_PAPER_PAGES = new Set([
 ]);
 
 export function liveMarketWebSocketUrl(symbols = []) {
-  const url = new URL("/ws/live-market", API_BASE);
+  const url = apiUrl("/ws/live-market");
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 
   if (symbols.length) {
@@ -128,8 +135,8 @@ export async function loadBacktestSummary({ symbol, signalSide, timeframe = "1h"
 }
 
 export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "1h", signal }) {
-  const response = await requestJson(
-    "/backtest/walk-forward",
+  const job = await requestJson(
+    "/backtest/walk-forward/jobs",
     {
       symbol,
       signal: signalSide,
@@ -137,10 +144,15 @@ export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "
       min_train_trades: 1,
     },
     signal,
-    120000
+    20000,
+    "POST"
   );
 
-  return response || null;
+  if (!job?.job_id) {
+    throw new Error("Walk-forward job submission did not return a job id");
+  }
+
+  return pollWalkForwardJob(job.job_id, signal);
 }
 
 export async function loadPaperTradeMeasurement({ symbol, signal } = {}) {
@@ -456,7 +468,7 @@ async function resolveBatch(requests) {
 }
 
 async function requestJson(path, params = {}, signal, timeoutMs = 60000, method = "GET", body) {
-  const url = new URL(path, API_BASE);
+  const url = apiUrl(path);
   Object.entries(params).forEach(([key, value]) => {
     if (value !== null && value !== undefined && value !== "" && value !== "ALL") {
       url.searchParams.set(key, String(value));
@@ -478,6 +490,7 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
   try {
     response = await fetch(url, {
       method,
+      credentials: "include",
       headers: {
         Accept: "application/json",
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -491,8 +504,57 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
+    if (response.status === 401) {
+      window.dispatchEvent(new Event("quantpulse:unauthorized"));
+    }
     throw new Error(`${url.pathname} returned ${response.status}${text ? ` - ${text}` : ""}`);
   }
 
   return response.json();
+}
+
+async function pollWalkForwardJob(jobId, signal) {
+  const deadline = Date.now() + 15 * 60 * 1000;
+
+  while (Date.now() < deadline) {
+    const job = await requestJson(
+      `/backtest/walk-forward/jobs/${encodeURIComponent(jobId)}`,
+      {},
+      signal,
+      20000
+    );
+
+    if (job?.status === "COMPLETED") {
+      if (!job.response) {
+        throw new Error("Walk-forward job completed without a response");
+      }
+      return job.response;
+    }
+    if (job?.status === "FAILED") {
+      throw new Error(job.error || "Walk-forward validation failed");
+    }
+
+    await abortableDelay(2000, signal);
+  }
+
+  throw new Error("Walk-forward validation is still running after 15 minutes");
+}
+
+function abortableDelay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("The operation was aborted", "AbortError"));
+      return;
+    }
+
+    const timeoutId = window.setTimeout(resolve, milliseconds);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timeoutId);
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      },
+      { once: true }
+    );
+  });
 }

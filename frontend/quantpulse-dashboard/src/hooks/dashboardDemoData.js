@@ -332,8 +332,8 @@ function buildDemoMultiTimeframe(signal) {
     source: "multi_timeframe_confirmation",
     overall_bias: signal.bias,
     trade_permission: signal.signal === "SHORT" ? "SHORT_ALLOWED" : signal.signal === "WAIT" ? "WAIT" : "LONG_ONLY",
-    timeframes_used: ["1h", "4h", "1d"],
-    prediction_stack: ["1h", "4h", "1d"],
+    timeframes_used: ["1h", "2h", "4h", "1d"],
+    prediction_stack: ["1h", "2h", "4h", "1d"],
     entry_stack: [],
     timing_stack: [],
     confirmation: {
@@ -360,7 +360,7 @@ function buildDemoTradeSetup(signal) {
     trade_plan: signal.trade_plan,
     trade_plan_validation: { is_valid: signal.signal !== "WAIT", errors: [] },
     timeframes: [],
-    prediction_stack: ["1h", "4h", "1d"],
+    prediction_stack: ["1h", "2h", "4h", "1d"],
     entry_stack: [],
     timing_stack: [],
   };
@@ -384,7 +384,7 @@ function buildDemoEntryTrigger(signal) {
     trade_plan: signal.trade_plan,
     trade_plan_validation: { is_valid: signal.signal !== "WAIT", errors: [] },
     timeframes: [],
-    prediction_stack: ["1h", "4h", "1d"],
+    prediction_stack: ["1h", "2h", "4h", "1d"],
     entry_stack: [],
     timing_stack: [],
   };
