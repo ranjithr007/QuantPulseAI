@@ -8,6 +8,7 @@ from app.api.v1.paper_trade_api import build_paper_trade_bundle
 from app.api.v1.signals_api import build_multi_timeframe_signal_payload
 from app.api.v1.signals_api import build_signal_payload
 from app.database.sqlserver import SessionLocal
+from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
 from app.risk.risk_engine import RiskEngine
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
@@ -174,7 +175,11 @@ def get_risk_bundle(
     max_open_trades: int = Query(default=4, ge=1),
     max_leverage: int = Query(default=5, ge=1),
     max_position_size: float = Query(default=25000, ge=0),
-    min_confidence: float = Query(default=70, ge=0, le=100),
+    min_confidence: float = Query(
+        default=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+        ge=0,
+        le=100,
+    ),
     direction: str = Query(default="BOTH"),
 ):
     db = SessionLocal()
@@ -341,7 +346,10 @@ def _normalize_auto_settings(auto):
         "maxOpenTrades": int(_safe_number(auto.get("maxOpenTrades"), 4)),
         "maxLeverage": int(_safe_number(auto.get("maxLeverage"), 5)),
         "maxPositionSize": _safe_number(auto.get("maxPositionSize"), 25000),
-        "minConfidence": _safe_number(auto.get("minConfidence"), 70),
+        "minConfidence": _safe_number(
+            auto.get("minConfidence"),
+            MIN_ADJUSTED_ENTRY_CONFIDENCE,
+        ),
         "direction": direction,
     }
 

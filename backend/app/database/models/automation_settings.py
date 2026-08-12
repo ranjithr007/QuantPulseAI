@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
 
 from app.database.sqlserver import Base
+from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
 
 
 class AutomationSetting(Base):
@@ -18,7 +19,11 @@ class AutomationSetting(Base):
     max_open_trades = Column(Integer, nullable=False, default=4)
     max_leverage = Column(Integer, nullable=False, default=5)
     max_position_size = Column(Float, nullable=False, default=25000)
-    min_confidence = Column(Float, nullable=False, default=70)
+    min_confidence = Column(
+        Float,
+        nullable=False,
+        default=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+    )
     direction = Column(String(10), nullable=False, default="BOTH")
     execution_mode = Column(String(20), nullable=False, default="PAPER")
     version = Column(Integer, nullable=False, default=1)

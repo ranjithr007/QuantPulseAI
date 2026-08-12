@@ -16,6 +16,7 @@ from app.paper_trading.fill_model import build_fill_profile
 from app.regimes.rules import detect_regime, regime_direction
 from app.intelligence.multi_timeframe_engine import BEARISH_BIASES
 from app.intelligence.multi_timeframe_engine import BULLISH_BIASES
+from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.freshness import normalize_timestamp_to_utc
 
@@ -167,7 +168,7 @@ GATE_PROFILES = {
 class FilteredReplayConfig:
     initial_capital: float = 10_000.0
     position_size_percent: float = 100.0
-    min_confidence: float = 70.0
+    min_confidence: float = MIN_ADJUSTED_ENTRY_CONFIDENCE
     stop_atr_multiple: float = 1.5
     target_atr_multiple: float = 3.5
     cooldown_candles: int = 3
@@ -256,7 +257,7 @@ def run_filtered_replay(
     stack_resolver=None,
     initial_capital=10_000,
     position_size_percent=100,
-    min_confidence=70,
+    min_confidence=MIN_ADJUSTED_ENTRY_CONFIDENCE,
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,

@@ -35,7 +35,7 @@ export default function LiveMarketSection({
   const selectedLiveState = marketState.liveState;
   const candleState = marketState.candleState;
   const feedConnected = Boolean(liveStatus?.connected);
-  const enrichedRows = signalRows.map((row) => enrichRow(row, watchlist, liveStatus, auto?.minConfidence ?? 65));
+  const enrichedRows = signalRows.map((row) => enrichRow(row, watchlist, liveStatus, auto?.minConfidence ?? 60));
   const eligibleRows = enrichedRows.filter((row) => row.riskLabel === "Eligible" || row.riskLabel === "Ready to execute");
   const eligibilityState = deriveSelectedEligibilityState({ auto, autoDecision, selectedDetail, selectedRisk, openTrades });
   const feedText = feedConnected
@@ -196,7 +196,7 @@ export default function LiveMarketSection({
             watchlist={watchlist}
             liveStatus={liveStatus}
             paperTradeCandidates={paperTradeCandidates}
-            minConfidence={auto?.minConfidence ?? 65}
+            minConfidence={auto?.minConfidence ?? 60}
             activeSymbol={view.symbol}
             onOpenSymbol={onOpenSymbol}
             getSymbolHref={getSymbolHref}

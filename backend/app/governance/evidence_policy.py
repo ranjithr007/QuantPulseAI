@@ -9,6 +9,7 @@ R0_EFFECTIVE_AT = datetime(2026, 7, 26, tzinfo=timezone.utc)
 LEGACY_EVIDENCE_STATUS = "LEGACY_INVALIDATED_DATA_V1"
 CURRENT_EVIDENCE_STATUS = "R0_RESEARCH_ONLY_DATA_UNVERIFIED"
 OFFICIAL_ENTRY_TIMEFRAMES = ("1h", "2h", "4h", "1d")
+MIN_ADJUSTED_ENTRY_CONFIDENCE = 60.0
 
 
 def r0_runtime_policy():
@@ -20,6 +21,7 @@ def r0_runtime_policy():
         "promotion_enabled": False,
         "ml_authority_enabled": False,
         "official_entry_timeframes": list(OFFICIAL_ENTRY_TIMEFRAMES),
+        "min_adjusted_entry_confidence": MIN_ADJUSTED_ENTRY_CONFIDENCE,
         "reason": (
             "Canonical candle finality and full point-in-time replay parity "
             "must pass R1-R4 before promotion can resume."

@@ -60,6 +60,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     assert sorted(path.name for path in versions) == [
         "pg_20260809_baseline.py",
         "pg_20260811_one_open_paper_trade_per_symbol.py",
+        "pg_20260812_confidence_60.py",
         "pg_20260812_walk_forward_jobs.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
@@ -73,3 +74,8 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     jobs = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260812_walk_forward_jobs.py").read_text(encoding="utf-8")
     assert 'down_revision = "pg_20260811_one_open_symbol"' in jobs
     assert "walk_forward_jobs" in jobs
+
+    confidence = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260812_confidence_60.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260812_wf_jobs"' in confidence
+    assert ".where(settings.c.id == 1)" in confidence
+    assert ".values(min_confidence=60.0)" in confidence
