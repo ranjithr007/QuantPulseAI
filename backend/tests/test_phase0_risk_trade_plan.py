@@ -41,6 +41,9 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertEqual(risk["risk_reward"], 2.0)
         self.assertGreater(risk["position_size"], 0)
         self.assertEqual(risk["risk_percent"], 1)
+        self.assertEqual(risk["position_tier"], "MAXIMUM")
+        self.assertEqual(risk["requested_risk_percent"], 1)
+        self.assertEqual(risk["risk_amount"], 100)
         self.assertNotIn("minimum_confidence", risk)
 
     def test_research_override_does_not_change_default_risk_confidence(self):
@@ -50,7 +53,7 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
             entry=100.0,
             stop_loss=99.0,
             target1=102.0,
-            confidence=50,
+            confidence=39,
         )
         research = RiskEngine().analyze_trade_plan(
             symbol="BTCUSDT",
@@ -58,24 +61,25 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
             entry=100.0,
             stop_loss=99.0,
             target1=102.0,
-            confidence=50,
-            min_confidence=45,
+            confidence=39,
+            min_confidence=35,
         )
 
         self.assertEqual(default["decision"], "REJECT")
         self.assertEqual(default["reason"], "Confidence below risk threshold")
         self.assertEqual(research["decision"], "APPROVE")
-        self.assertEqual(research["minimum_confidence"], 45)
-        self.assertEqual(RiskEngine.MIN_CONFIDENCE, 60)
+        self.assertEqual(research["minimum_confidence"], 35)
+        self.assertEqual(research["position_tier"], "MINIMUM")
+        self.assertEqual(RiskEngine.MIN_CONFIDENCE, 40)
 
-    def test_adjusted_confidence_boundary_allows_60_and_rejects_below(self):
+    def test_signal_confidence_boundary_allows_40_and_rejects_below(self):
         at_boundary = RiskEngine().analyze_trade_plan(
             symbol="BTCUSDT",
             side="LONG",
             entry=100.0,
             stop_loss=99.0,
             target1=102.0,
-            confidence=60,
+            confidence=40,
         )
         below_boundary = RiskEngine().analyze_trade_plan(
             symbol="BTCUSDT",
@@ -83,7 +87,7 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
             entry=100.0,
             stop_loss=99.0,
             target1=102.0,
-            confidence=59.99,
+            confidence=39.99,
         )
 
         self.assertEqual(at_boundary["decision"], "APPROVE")
@@ -92,6 +96,75 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
             below_boundary["reason"],
             "Confidence below risk threshold",
         )
+
+    def test_minimum_confidence_tier_uses_half_percent_risk_for_long(self):
+        risk = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=59.99,
+            risk_percent=1.0,
+            capital=10000,
+        )
+
+        self.assertEqual(risk["decision"], "APPROVE")
+        self.assertEqual(risk["position_tier"], "MINIMUM")
+        self.assertEqual(risk["risk_percent"], 0.5)
+        self.assertEqual(risk["requested_risk_percent"], 1.0)
+        self.assertEqual(risk["risk_amount"], 50.0)
+        self.assertEqual(risk["position_size"], 50.0)
+
+    def test_minimum_confidence_tier_uses_half_percent_risk_for_short(self):
+        risk = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="SHORT",
+            entry=100.0,
+            stop_loss=101.0,
+            target1=98.0,
+            confidence=40.0,
+            risk_percent=1.0,
+            capital=10000,
+        )
+
+        self.assertEqual(risk["decision"], "APPROVE")
+        self.assertEqual(risk["position_tier"], "MINIMUM")
+        self.assertEqual(risk["risk_percent"], 0.5)
+        self.assertEqual(risk["risk_amount"], 50.0)
+
+    def test_full_confidence_tier_starts_at_60(self):
+        risk = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=60.0,
+            risk_percent=1.0,
+            capital=10000,
+        )
+
+        self.assertEqual(risk["decision"], "APPROVE")
+        self.assertEqual(risk["position_tier"], "MAXIMUM")
+        self.assertEqual(risk["risk_percent"], 1.0)
+        self.assertEqual(risk["risk_amount"], 100.0)
+
+    def test_minimum_tier_never_exceeds_configured_risk_cap(self):
+        risk = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=50.0,
+            risk_percent=0.3,
+            capital=10000,
+        )
+
+        self.assertEqual(risk["position_tier"], "MINIMUM")
+        self.assertEqual(risk["risk_percent"], 0.3)
+        self.assertEqual(risk["risk_amount"], 30.0)
 
     def test_risk_engine_rejects_invalid_persisted_trade_plan_direction(self):
         risk = RiskEngine().analyze_trade_plan(

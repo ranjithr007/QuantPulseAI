@@ -209,8 +209,6 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
   const signalSide = signalType(signal);
   const confidence = effectiveConfidence(signal);
   const stackState = timeframeStackState(multiTimeframe);
-  const confidencePenalty = stackState === "MIXED_STRONG" ? 15 : stackState === "MIXED_LIGHT" ? 5 : 0;
-  const adjustedConfidence = Math.max(0, confidence - confidencePenalty);
   const invalidation = signalInvalidationReason(signal);
   const dailyLoss = sumWithinDays(openTrades, 1, "unrealized_pnl_percent") + sumWithinDays(performance?.closedTrades || [], 1);
   const directionAllowed =
@@ -227,7 +225,7 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
   if (invalidation) reasons.push(invalidation);
   if (stackState === "MIXED_LIGHT" || stackState === "MIXED_STRONG") warnings.push("Timeframe stack is mixed");
   if (stackState === "MIXED_STRONG") reasons.push("Timeframe stack is strongly mixed");
-  if (adjustedConfidence < auto.minConfidence) reasons.push("Confidence below minimum");
+  if (confidence < auto.minConfidence) reasons.push("Confidence below minimum");
   if (openTrades.length >= auto.maxOpenTrades) reasons.push("Open trade cap reached");
   if (safeNumber(performance?.open_trades, 0) >= auto.maxOpenTrades) reasons.push("Backend open trade cap reached");
   if (safeNumber(performance?.total_pnl_percent, 0) <= -Math.abs(auto.dailyLossLimit)) reasons.push("Daily loss limit reached");
@@ -236,7 +234,7 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
 
   const allowed = reasons.length === 0;
   const reason = allowed
-    ? `Selected signal passes allowlist, direction, confidence, and risk checks.${warnings.length ? " Timeframe stack is mixed, so confidence was reduced." : ""}`
+    ? "Selected signal passes allowlist, direction, confidence, and risk checks."
     : `Automatic execution blocked by ${reasons.join(", ")}.`;
 
   return {
@@ -245,9 +243,8 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
     reasons,
     warnings,
     signalSide,
-    confidence: adjustedConfidence,
+    confidence,
     rawConfidence: confidence,
-    confidencePenalty,
     stackState,
     dailyLoss,
   };

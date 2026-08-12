@@ -1,20 +1,20 @@
 class DecisionEngine:
 
-    def decide(self, confidence):
+    def decide(self, score):
 
-        if confidence >= 75:
+        if score >= 60:
 
             return "STRONG_LONG"
 
-        elif confidence >= 60:
+        elif score >= 40:
 
             return "LONG"
 
-        elif confidence <= 25:
+        elif score <= -60:
 
             return "STRONG_SHORT"
 
-        elif confidence <= 40:
+        elif score <= -40:
 
             return "SHORT"
 

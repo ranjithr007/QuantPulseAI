@@ -15,7 +15,7 @@ class FusionEngine:
 
             decision = "STRONG_LONG"
 
-        elif total_score >= 20:
+        elif total_score >= 40:
 
             decision = "LONG"
 
@@ -23,7 +23,7 @@ class FusionEngine:
 
             decision = "STRONG_SHORT"
 
-        elif total_score <= -20:
+        elif total_score <= -40:
 
             decision = "SHORT"
 

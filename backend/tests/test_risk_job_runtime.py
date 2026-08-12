@@ -59,7 +59,8 @@ def test_approve_open_trade_plans_continues_after_one_trade_error():
             "reason": None,
             "risk_reward": 2.0,
             "position_size": 1.0,
-            "risk_percent": 1.0,
+            "risk_percent": 0.5,
+            "position_tier": "MINIMUM",
         },
         {
             "decision": "REJECT",
@@ -92,6 +93,8 @@ def test_approve_open_trade_plans_continues_after_one_trade_error():
     assert engine.analyze_trade_plan.call_count == 2
 
     assert risk_repo.save.call_count == 2
+    assert risk_repo.save.call_args_list[0].args[0]["risk_percent"] == 0.5
+    assert risk_repo.save.call_args_list[0].args[0]["position_tier"] == "MINIMUM"
     db.rollback.assert_called_once()
     db.commit.assert_called_once()
 
@@ -120,6 +123,23 @@ def test_approve_open_trade_plans_excludes_legacy_entry_timeframes():
 
     assert summary["processed"] == 0
     engine.analyze_trade_plan.assert_not_called()
+
+
+def test_risk_job_uses_persisted_configured_max_risk_percent():
+    settings = SimpleNamespace(max_risk_per_trade=1.5)
+    query = Mock()
+    query.filter.return_value.first.return_value = settings
+    db = SimpleNamespace(query=Mock(return_value=query))
+    job = RiskJob(
+        config=RiskJobConfig(trade_plan_risk_percent=1.0),
+        session_factory=Mock(),
+        master_repo=Mock(),
+        risk_repo=Mock(),
+        trade_plan_repo=Mock(),
+        engine=Mock(),
+    )
+
+    assert job._configured_max_risk_percent(db) == 1.5
 
 
 def test_run_risk_job_continues_after_one_signal_error():

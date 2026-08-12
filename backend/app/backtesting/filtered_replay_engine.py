@@ -16,7 +16,8 @@ from app.paper_trading.fill_model import build_fill_profile
 from app.regimes.rules import detect_regime, regime_direction
 from app.intelligence.multi_timeframe_engine import BEARISH_BIASES
 from app.intelligence.multi_timeframe_engine import BULLISH_BIASES
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+from app.risk.confidence_sizing import confidence_sizing_profile
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.freshness import normalize_timestamp_to_utc
 
@@ -168,7 +169,7 @@ GATE_PROFILES = {
 class FilteredReplayConfig:
     initial_capital: float = 10_000.0
     position_size_percent: float = 100.0
-    min_confidence: float = MIN_ADJUSTED_ENTRY_CONFIDENCE
+    min_confidence: float = MIN_ENTRY_CONFIDENCE
     stop_atr_multiple: float = 1.5
     target_atr_multiple: float = 3.5
     cooldown_candles: int = 3
@@ -257,7 +258,7 @@ def run_filtered_replay(
     stack_resolver=None,
     initial_capital=10_000,
     position_size_percent=100,
-    min_confidence=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+    min_confidence=MIN_ENTRY_CONFIDENCE,
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,
@@ -481,13 +482,22 @@ def run_filtered_replay(
             continue
 
         capital_before = capital
+        effective_risk_percent = config.risk_percent_per_trade
+        position_tier = None
+        if effective_risk_percent is not None:
+            sizing_profile = confidence_sizing_profile(
+                decision["confidence"],
+                effective_risk_percent,
+            )
+            effective_risk_percent = sizing_profile["risk_percent"]
+            position_tier = sizing_profile["position_tier"]
         sizing = _position_sizing(
             capital=capital,
             entry=entry_fill,
             stop_distance=stop_distance,
             position_size_percent=config.position_size_percent,
             max_leverage=config.max_leverage,
-            risk_percent_per_trade=config.risk_percent_per_trade,
+            risk_percent_per_trade=effective_risk_percent,
             target_trade_volatility_percent=config.target_trade_volatility_percent,
             atr=atr,
         )
@@ -698,6 +708,9 @@ def run_filtered_replay(
                 "duration_candles": duration_candles,
                 "sizing": {
                     "mode": sizing_mode,
+                    "position_tier": position_tier,
+                    "risk_percent": effective_risk_percent,
+                    "requested_risk_percent": config.risk_percent_per_trade,
                     "quantity": round(quantity, 8),
                     "notional": round(quantity * entry_fill, 4),
                     "planned_risk_amount": (
@@ -864,7 +877,7 @@ def run_filtered_replay(
             "stop_model": "ATR_MULTIPLE",
             "target_model": "ATR_MULTIPLE",
             "timeframe_stack_policy": (
-                "STRONG_HIGHER_TIMEFRAME_CONFLICT_BLOCKS_MIXED_LIGHT_PENALIZES"
+                "CONFLICTS_BLOCK_WITHOUT_CONFIDENCE_PENALTY"
                 if stack_resolver is not None
                 else "NOT_APPLIED"
             ),
@@ -1396,12 +1409,11 @@ def build_candle_decision(
     if profile is None:
         raise ValueError(f"gate_profile must be one of {sorted(GATE_PROFILES)}")
 
-    stack_penalty, stack_blocks = _timeframe_stack_gate(
+    _, stack_blocks = _timeframe_stack_gate(
         stack_context,
         requested_side,
         enforce_decision_chain=profile.get("enforce_decision_chain", True),
     )
-    confidence = round(max(0, confidence - stack_penalty), 2)
     blocked.extend(stack_blocks)
 
     if atr <= 0:
@@ -1716,7 +1728,6 @@ def _new_directional_entry_funnel():
                 "composite_confidence",
                 "directional_strength",
                 "regime_confidence",
-                "timeframe_penalty",
             )
         },
         "master_candidate_chain_audit": {
@@ -1831,12 +1842,6 @@ def _directional_entry_funnel_observation(decision, requested_side, min_confiden
     final_score = _optional_float((decision.get("features") or {}).get("final_score"))
     regime_confidence = _optional_float(decision.get("regime_confidence"))
     atr = _optional_float((decision.get("features") or {}).get("atr"))
-    confirmation = stack.get("confirmation") if isinstance(stack, dict) else None
-    timeframe_penalty = _optional_float(
-        (confirmation or {}).get("confidence_penalty")
-        if isinstance(confirmation, dict)
-        else None
-    )
     return {
         "candidate_regime": candidate_regime,
         "chain_audit": {
@@ -1857,7 +1862,6 @@ def _directional_entry_funnel_observation(decision, requested_side, min_confiden
                 else 100 - final_score
             ),
             "regime_confidence": regime_confidence,
-            "timeframe_penalty": timeframe_penalty or 0.0,
         },
         "conditions": {
             "SAME_SIDE_CANDIDATE_REGIME": candidate_regime is not None,
@@ -2118,7 +2122,7 @@ def _timeframe_stack_gate(
         if str(executor.get("verdict") or "").upper() != "WOULD_QUEUE":
             return 0, ["EXECUTOR_NOT_READY"]
 
-    return float(confirmation.get("confidence_penalty") or 0), []
+    return 0, []
 
 
 def _point_in_time_flags(metadata):

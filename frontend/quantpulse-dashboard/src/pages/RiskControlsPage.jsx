@@ -186,9 +186,10 @@ function RiskDecisionPanel({ auto, autoDecision, selectedRisk, selectedDetail, s
         <Pill tone={state.tone}>{state.label}</Pill>
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-2">
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
         <StatusBox label="Signal" value={selectedDetail.signalType || "WAIT"} />
         <StatusBox label="Confidence" value={formatPercent(selectedDetail.confidence, 0, "-")} />
+        <StatusBox label="Size tier" value={humanizeMachineStatus(selectedRisk?.position_tier, "-")} />
         <StatusBox label="Risk %" value={formatPercent(selectedRisk?.risk_percent, 1, "-")} />
         <StatusBox label="Position" value={formatNumber(selectedRisk?.position_size, 2, "-")} />
       </div>

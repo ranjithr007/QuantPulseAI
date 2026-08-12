@@ -29,10 +29,18 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertFalse(settings["liveExecutionEnabled"])
             self.assertFalse(settings["governance"]["promotion_enabled"])
             self.assertFalse(settings["governance"]["ml_authority_enabled"])
-            self.assertEqual(60.0, settings["minConfidence"])
+            self.assertEqual(40.0, settings["minConfidence"])
+            self.assertEqual(
+                40.0,
+                settings["governance"]["min_entry_confidence"],
+            )
             self.assertEqual(
                 60.0,
-                settings["governance"]["min_adjusted_entry_confidence"],
+                settings["governance"]["full_size_entry_confidence"],
+            )
+            self.assertEqual(
+                0.5,
+                settings["governance"]["minimum_tier_risk_percent"],
             )
             self.assertEqual(
                 ["1h", "2h", "4h", "1d"],

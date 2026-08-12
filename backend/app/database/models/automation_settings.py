@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
 
 from app.database.sqlserver import Base
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 
 
 class AutomationSetting(Base):
@@ -22,7 +22,7 @@ class AutomationSetting(Base):
     min_confidence = Column(
         Float,
         nullable=False,
-        default=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+        default=MIN_ENTRY_CONFIDENCE,
     )
     direction = Column(String(10), nullable=False, default="BOTH")
     execution_mode = Column(String(20), nullable=False, default="PAPER")

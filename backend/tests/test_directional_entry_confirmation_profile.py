@@ -198,7 +198,7 @@ def test_joint_funnel_is_read_only_and_reconciles_an_eligible_candidate():
     assert distributions["composite_confidence"]["average"] == 72.5
     assert distributions["directional_strength"]["average"] == 65.0
     assert distributions["regime_confidence"]["average"] == 80.0
-    assert distributions["timeframe_penalty"]["average"] == 0.0
+    assert "timeframe_penalty" not in distributions
     audit = result["master_candidate_chain_audit"]
     assert audit["evaluated"] == 1
     assert audit["contradiction_statuses"] == {"UNKNOWN": 1}

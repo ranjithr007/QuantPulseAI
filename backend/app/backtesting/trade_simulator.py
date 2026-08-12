@@ -21,7 +21,7 @@ from app.backtesting.point_in_time_intelligence import (
 from app.backtesting.replay_derivatives import build_derivatives_as_of
 from app.backtesting.replay_decision_chain import build_replay_decision_chain
 from app.intelligence.master_ai_engine import generate_master_signal
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.features.point_in_time_feature_service import build_point_in_time_bundle
 from app.features.point_in_time_feature_service import build_features_as_of
@@ -101,7 +101,7 @@ def execute_filtered_backtest(
     limit=500,
     initial_capital=10_000,
     position_size_percent=100,
-    min_confidence=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+    min_confidence=MIN_ENTRY_CONFIDENCE,
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,
@@ -163,7 +163,7 @@ def execute_portfolio_backtest(
     limit=500,
     initial_capital=10_000,
     position_size_percent=25,
-    min_confidence=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+    min_confidence=MIN_ENTRY_CONFIDENCE,
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,
@@ -235,7 +235,7 @@ def execute_collision_sensitivity_backtest(
     limit=500,
     initial_capital=10_000,
     position_size_percent=100,
-    min_confidence=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+    min_confidence=MIN_ENTRY_CONFIDENCE,
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,
@@ -424,7 +424,7 @@ def execute_walk_forward(
     fee_bps=4,
     slippage_bps=2,
     strategy="SIGNAL_GATED",
-    min_confidence=MIN_ADJUSTED_ENTRY_CONFIDENCE,
+    min_confidence=MIN_ENTRY_CONFIDENCE,
     cooldown_candles=3,
     risk_percent_per_trade=None,
     target_trade_volatility_percent=None,
@@ -527,7 +527,7 @@ def execute_walk_forward(
                 "production_hysteresis",
             )
             risk_min_confidence_key = (
-                "production_65"
+                "production_40"
                 if risk_min_confidence is None
                 else f"research_{float(risk_min_confidence):g}"
             )
@@ -870,7 +870,7 @@ def _build_in_memory_stack_resolver(
         "production_hysteresis",
     )
     risk_min_confidence_key = (
-        "production_65"
+        "production_40"
         if risk_min_confidence is None
         else f"research_{float(risk_min_confidence):g}"
     )

@@ -2,12 +2,17 @@ from math import isfinite
 
 from app.risk.stop_loss_engine import StopLossEngine
 from app.risk.target_engine import TargetEngine
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import FULL_SIZE_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MINIMUM_TIER_RISK_PERCENT
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+from app.risk.confidence_sizing import confidence_sizing_profile
 from app.risk.position_sizing import PositionSizer
 
 
 class RiskEngine:
-    MIN_CONFIDENCE = MIN_ADJUSTED_ENTRY_CONFIDENCE
+    MIN_CONFIDENCE = MIN_ENTRY_CONFIDENCE
+    FULL_SIZE_CONFIDENCE = FULL_SIZE_ENTRY_CONFIDENCE
+    MINIMUM_TIER_RISK_PERCENT = MINIMUM_TIER_RISK_PERCENT
     MIN_RISK_REWARD = 2.0
 
     SIGNAL_TO_SIDE = {
@@ -281,6 +286,12 @@ class RiskEngine:
                 "Risk percentage must be greater than 0 and at most 100",
             )
 
+        sizing_profile = confidence_sizing_profile(
+            confidence,
+            risk_percent,
+        )
+        effective_risk_percent = sizing_profile["risk_percent"]
+
         if canonical_side == "LONG":
             if not stop_loss < entry < target1:
                 return self._reject_trade_plan(
@@ -361,7 +372,7 @@ class RiskEngine:
         try:
             position_size = self.sizer.calculate(
                 capital=capital,
-                risk_percent=risk_percent,
+                risk_percent=effective_risk_percent,
                 entry=entry,
                 stop=stop_loss,
             )
@@ -392,8 +403,11 @@ class RiskEngine:
             },
             "risk_reward": round(raw_rr, 2),
             "position_size": position_size,
-            "risk_percent": risk_percent,
-            "risk_amount": capital * risk_percent / 100,
+            "risk_percent": effective_risk_percent,
+            "requested_risk_percent": sizing_profile["requested_risk_percent"],
+            "position_tier": sizing_profile["position_tier"],
+            "full_size_confidence": self.FULL_SIZE_CONFIDENCE,
+            "risk_amount": capital * effective_risk_percent / 100,
             "confidence": confidence,
         }
         if min_confidence is not None:

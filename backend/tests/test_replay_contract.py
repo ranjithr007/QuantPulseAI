@@ -154,7 +154,7 @@ def test_replay_gate_blocks_strong_higher_timeframe_conflict():
     assert blocks == ["HIGHER_TIMEFRAME_CONFLICT"]
 
 
-def test_replay_gate_penalizes_mixed_light_without_hard_block():
+def test_replay_gate_does_not_penalize_mixed_light():
     context = {
         "status": "READY",
         "timeframes": [
@@ -172,7 +172,7 @@ def test_replay_gate_penalizes_mixed_light_without_hard_block():
 
     penalty, blocks = _timeframe_stack_gate(context, "LONG")
 
-    assert penalty == 5
+    assert penalty == 0
     assert blocks == []
 
 

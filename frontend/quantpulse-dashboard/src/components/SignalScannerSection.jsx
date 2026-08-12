@@ -15,7 +15,7 @@ export default function F({ view, filters, setView, setFilters, signalRows, watc
   }
 
   const enrichedRows = signalRows.map((row) =>
-    enrichRow(row, watchlist, liveStatus, auto?.minConfidence ?? 60, paperTradeCandidates)
+    enrichRow(row, watchlist, liveStatus, auto?.minConfidence ?? 40, paperTradeCandidates)
   );
   const filteredRows = enrichedRows.filter((row) => matchesExecutorFilter(row, filters.executorStatus));
 
@@ -73,7 +73,7 @@ export default function F({ view, filters, setView, setFilters, signalRows, watc
             watchlist={watchlist}
             liveStatus={liveStatus}
             paperTradeCandidates={paperTradeCandidates}
-            minConfidence={auto?.minConfidence ?? 60}
+            minConfidence={auto?.minConfidence ?? 40}
             activeSymbol={view.symbol}
             onOpenSymbol={selectSignal}
             getSymbolHref={getSymbolHref}

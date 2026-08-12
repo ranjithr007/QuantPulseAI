@@ -23,6 +23,7 @@ from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.paper_trading.validation_policy import build_architecture_paper_gate
 from app.risk.risk_engine import RiskEngine
+from app.risk.confidence_sizing import confidence_sizing_profile
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.point_in_time_snapshot_repository import list_decision_snapshots
@@ -1405,6 +1406,13 @@ def _risk_decision_payload(risk, stale_after_seconds):
             "freshness": freshness_status(None, stale_after_seconds),
         }
 
+    sizing_profile = confidence_sizing_profile(
+        risk.confidence or 0,
+        risk.risk_percent or 1.0,
+    )
+    if str(risk.decision or "").upper() != "APPROVE":
+        sizing_profile["position_tier"] = None
+
     return {
         "id": risk.id,
         "signal": risk.signal,
@@ -1417,6 +1425,8 @@ def _risk_decision_payload(risk, stale_after_seconds):
         "risk_reward": risk.risk_reward,
         "position_size": risk.position_size,
         "risk_percent": risk.risk_percent,
+        "position_tier": sizing_profile["position_tier"],
+        "full_size_confidence": risk_engine.FULL_SIZE_CONFIDENCE,
         "confidence": risk.confidence,
         "created_at": risk.created_at,
         "freshness": freshness_status(risk.created_at, stale_after_seconds),

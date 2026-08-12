@@ -28,7 +28,7 @@ from app.backtesting.walk_forward_jobs import load_walk_forward_job
 from app.backtesting.walk_forward_jobs import mark_walk_forward_job_running
 from app.backtesting.walk_forward_jobs import public_walk_forward_job
 from app.database.sqlserver import SessionLocal
-from app.governance.evidence_policy import MIN_ADJUSTED_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
@@ -51,7 +51,7 @@ def filtered_backtest_summary(
     limit: int = Query(default=500, ge=51, le=5000),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
-    min_confidence: float = Query(default=MIN_ADJUSTED_ENTRY_CONFIDENCE, ge=0, le=100),
+    min_confidence: float = Query(default=MIN_ENTRY_CONFIDENCE, ge=0, le=100),
     stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
     target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
     cooldown_candles: int = Query(default=3, ge=0, le=100),
@@ -111,7 +111,7 @@ def portfolio_replay_report(
     limit: int = Query(default=500, ge=51, le=5000),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=25, gt=0, le=100),
-    min_confidence: float = Query(default=MIN_ADJUSTED_ENTRY_CONFIDENCE, ge=0, le=100),
+    min_confidence: float = Query(default=MIN_ENTRY_CONFIDENCE, ge=0, le=100),
     stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
     target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
     cooldown_candles: int = Query(default=3, ge=0, le=100),
@@ -212,7 +212,7 @@ def collision_sensitivity_report(
     limit: int = Query(default=500, ge=51, le=5000),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
-    min_confidence: float = Query(default=MIN_ADJUSTED_ENTRY_CONFIDENCE, ge=0, le=100),
+    min_confidence: float = Query(default=MIN_ENTRY_CONFIDENCE, ge=0, le=100),
     stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
     target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
     cooldown_candles: int = Query(default=3, ge=0, le=100),

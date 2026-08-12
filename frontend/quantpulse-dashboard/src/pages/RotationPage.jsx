@@ -9,7 +9,7 @@ import { formatPercent, formatSigned, tooltipStyle } from "../utils/formatters";
 const COLORS = ["#34d399", "#fb7185", "#94a3b8"];
 
 export default function RotationPage({ signalRows, watchlist, auto, getSymbolHref }) {
-  const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 60));
+  const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 40));
   const longRows = rows.filter((row) => row.type === "BUY");
   const shortRows = rows.filter((row) => row.type === "SELL");
   const waitRows = rows.filter((row) => row.type === "WAIT");
