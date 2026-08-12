@@ -23,11 +23,12 @@ def combine_timeframe_signals(timeframes):
         }
 
     lower_bias = lower["bias"]
-    middle_bias = middle["bias"]
     higher_bias = higher["bias"]
     lower_label = lower["timeframe"]
-    middle_label = middle["timeframe"]
     higher_label = higher["timeframe"]
+    timeframe_labels = ", ".join(item["timeframe"] for item in timeframes)
+    bullish_count = sum(1 for item in timeframes if _is_bullish(item["bias"]))
+    bearish_count = sum(1 for item in timeframes if _is_bearish(item["bias"]))
 
     if _is_bullish(higher_bias) and _is_bearish(lower_bias):
         return {
@@ -51,7 +52,7 @@ def combine_timeframe_signals(timeframes):
         return {
             "overall_bias": "BULLISH_ALIGNMENT",
             "trade_permission": "LONG_ALLOWED",
-            "reason": f"{lower_label}, {middle_label}, and {higher_label} are bullish",
+            "reason": f"{timeframe_labels} are bullish",
             "stack_state": "ALIGNED",
             "confidence_penalty": 0,
         }
@@ -60,14 +61,12 @@ def combine_timeframe_signals(timeframes):
         return {
             "overall_bias": "BEARISH_ALIGNMENT",
             "trade_permission": "SHORT_ALLOWED",
-            "reason": f"{lower_label}, {middle_label}, and {higher_label} are bearish",
+            "reason": f"{timeframe_labels} are bearish",
             "stack_state": "ALIGNED",
             "confidence_penalty": 0,
         }
 
-    if _is_bullish(higher_bias) and (
-        _is_bullish(middle_bias) or _is_bullish(lower_bias)
-    ):
+    if _is_bullish(higher_bias) and bullish_count >= 3:
         return {
             "overall_bias": "BULLISH_CONTINUATION",
             "trade_permission": "LONG_ALLOWED",
@@ -76,9 +75,7 @@ def combine_timeframe_signals(timeframes):
             "confidence_penalty": 0,
         }
 
-    if _is_bearish(higher_bias) and (
-        _is_bearish(middle_bias) or _is_bearish(lower_bias)
-    ):
+    if _is_bearish(higher_bias) and bearish_count >= 3:
         return {
             "overall_bias": "BEARISH_CONTINUATION",
             "trade_permission": "SHORT_ALLOWED",
@@ -102,10 +99,10 @@ def _has_no_data(timeframes):
 
 
 def _required_timeframes(timeframes):
-    if len(timeframes) != 3:
-        raise ValueError("Exactly three timeframes are required")
+    if len(timeframes) < 3:
+        raise ValueError("At least three timeframes are required")
 
-    return timeframes[0], timeframes[1], timeframes[2]
+    return timeframes[0], timeframes[len(timeframes) // 2], timeframes[-1]
 
 
 def _is_bullish(bias):

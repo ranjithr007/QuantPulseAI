@@ -8,10 +8,18 @@ HYSTERESIS_MARGIN = 7
 MIN_TRANSITION_CONFIDENCE = 62
 
 
-def analyze_market(feature, previous_regime=None):
-    candidate = detect_regime(feature)
+def analyze_market(
+    feature,
+    previous_regime=None,
+    *,
+    regime_detector=None,
+    transition_policy=None,
+):
+    regime_detector = regime_detector or detect_regime
+    transition_policy = transition_policy or _transition_decision
+    candidate = regime_detector(feature)
     previous = _previous_state(previous_regime)
-    transition = _transition_decision(candidate, previous)
+    transition = transition_policy(candidate, previous)
     selected = candidate
 
     if transition["decision"] == "HELD_PREVIOUS":
@@ -20,6 +28,7 @@ def analyze_market(feature, previous_regime=None):
             "confidence": previous["confidence"],
             "strategy": REGIME_DEFINITIONS[previous["regime"]]["strategy"],
             "bias": REGIME_DEFINITIONS[previous["regime"]]["bias"],
+            "direction": REGIME_DEFINITIONS[previous["regime"]]["direction"],
             "risk_mode": REGIME_DEFINITIONS[previous["regime"]]["risk_mode"],
             "reason": "Previous regime held by hysteresis",
         }
@@ -36,6 +45,11 @@ def analyze_market(feature, previous_regime=None):
         "dwell_cycles": dwell_cycles,
         "hysteresis_margin": HYSTERESIS_MARGIN,
         "min_transition_confidence": MIN_TRANSITION_CONFIDENCE,
+        "transition_policy": getattr(
+            transition_policy,
+            "__name__",
+            str(transition_policy),
+        ),
         "candidate_reason": candidate["reason"],
         "selected_reason": selected["reason"],
         "feature_snapshot": _feature_snapshot(feature),
@@ -48,6 +62,7 @@ def analyze_market(feature, previous_regime=None):
         "confidence": selected["confidence"],
         "strategy": selected["strategy"],
         "bias": selected["bias"],
+        "direction": selected["direction"],
         "risk_mode": selected["risk_mode"],
         "dwell_cycles": dwell_cycles,
         "transition_decision": transition["decision"],
@@ -72,6 +87,7 @@ def build_regime_contract():
             "regime": regime,
             "strategy": definition["strategy"],
             "bias": definition["bias"],
+            "direction": definition["direction"],
             "risk_mode": definition["risk_mode"],
         }
         for regime, definition in REGIME_DEFINITIONS.items()
@@ -134,6 +150,24 @@ def _transition_decision(candidate, previous):
         "decision": "CONFIRMED_TRANSITION",
         "confidence": candidate["confidence"],
     }
+
+
+def direction_aware_transition_research(candidate, previous):
+    """Research-only policy allowing confident Bull/Bear direction reversals."""
+    baseline = _transition_decision(candidate, previous)
+    if not previous or candidate["regime"] == previous["regime"]:
+        return baseline
+    if candidate["confidence"] < MIN_TRANSITION_CONFIDENCE:
+        return baseline
+
+    candidate_direction = REGIME_DEFINITIONS[candidate["regime"]]["direction"]
+    previous_direction = REGIME_DEFINITIONS[previous["regime"]]["direction"]
+    if {candidate_direction, previous_direction} == {"BULLISH", "BEARISH"}:
+        return {
+            "decision": "CONFIRMED_DIRECTION_REVERSAL_RESEARCH",
+            "confidence": candidate["confidence"],
+        }
+    return baseline
 
 
 def _previous_state(previous_regime):

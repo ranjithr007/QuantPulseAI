@@ -9,6 +9,7 @@ from app.collectors.binances.mark_price_collector import MarkPriceCollector
 from app.collectors.binances.leverage_bracket_collector import LeverageBracketCollector
 from app.repositories.derivative_repository import DerivativeRepository
 from app.repositories._db_utils import safe_rollback
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
 
@@ -25,7 +26,7 @@ def run_derivative_job():
             oi = OpenInterestCollector().get_data(s.symbol)
             mark_prices = []
             margin_brackets = bracket_collector.get_brackets(s.symbol)
-            for timeframe in ("1h", "4h", "1d"):
+            for timeframe in OFFICIAL_ENTRY_TIMEFRAMES:
                 mark_prices.extend(
                     MarkPriceCollector().get_klines(
                         s.symbol,

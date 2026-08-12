@@ -196,7 +196,7 @@ def test_manifest_requires_all_tables_and_reviewed_fingerprint(tmp_path):
     }
     (tmp_path / MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
 
-    assert load_manifest(tmp_path)["table_count"] == 39
+    assert load_manifest(tmp_path)["table_count"] == 40
 
     manifest["schema_fingerprint"] = "changed"
     (tmp_path / MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")

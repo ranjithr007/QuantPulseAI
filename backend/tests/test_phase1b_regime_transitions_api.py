@@ -6,6 +6,7 @@ from app.api.v1.regime_api import _build_transition_history
 from app.api.v1.regime_api import _count_transition_values
 from app.api.v1.regime_api import _recent_transitions
 from app.api.v1.regime_api import _regime_payload
+from app.api.v1.regime_api import _direction_percentages
 from app.api.v1.regime_api import _count_values
 
 
@@ -74,6 +75,23 @@ class Phase1BRegimeTransitionsApiTests(unittest.TestCase):
         payload = _regime_payload(record, 900)
         self.assertEqual(payload["audit"]["transition_decision"], "HELD_PREVIOUS")
         self.assertEqual(payload["Regime"], "TRENDING_BEAR")
+        self.assertEqual(payload["Direction"], "BEARISH")
+        self.assertEqual(payload["RegimeConfidencePercent"], 85.0)
+
+    def test_direction_percentages_give_each_canonical_timeframe_25_percent(self):
+        result = _direction_percentages(
+            [
+                {"Direction": "BULLISH"},
+                {"Direction": "BULLISH"},
+                {"Direction": "BEARISH"},
+                {"Direction": "NEUTRAL"},
+            ]
+        )
+        self.assertEqual(result["bullish"], 50.0)
+        self.assertEqual(result["bearish"], 25.0)
+        self.assertEqual(result["neutral"], 25.0)
+        self.assertEqual(result["unknown"], 0.0)
+        self.assertEqual(result["denominator"], 4)
 
     def test_recent_transitions_extracts_compact_view(self):
         items = [

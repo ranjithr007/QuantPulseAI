@@ -285,7 +285,7 @@ def _trade_plan_snapshot(trade_plan):
 
 
 def _required_timeframes(timeframes):
-    if len(timeframes) != 3:
-        raise ValueError("Exactly three timeframes are required")
+    if len(timeframes) < 3:
+        raise ValueError("At least three timeframes are required")
 
-    return timeframes[0], timeframes[1], timeframes[2]
+    return timeframes[0], timeframes[len(timeframes) // 2], timeframes[-1]

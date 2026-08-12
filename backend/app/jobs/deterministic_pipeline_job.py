@@ -25,6 +25,7 @@ from app.utils.network_resilience import summarize_network_error
 
 STAGE_ORDER = (
     ("market", run_market_job),
+    ("paper_trade_monitor", run_paper_trade_monitor_job),
     ("feature", run_feature_job),
     ("regime", run_regime_job),
     ("orderflow", run_orderflow_job),
@@ -33,8 +34,8 @@ STAGE_ORDER = (
     ("watchlist_persist", run_watchlist_persist_job),
     ("risk", run_risk_job),
     ("paper_trade_execute", run_paper_trade_execute_job),
-    ("paper_trade_monitor", run_paper_trade_monitor_job),
 )
+STALE_PIPELINE_AFTER_SECONDS = 1800
 
 
 def run_deterministic_pipeline_job():
@@ -52,6 +53,10 @@ def run_deterministic_pipeline_job():
     if not USING_SQLITE_FALLBACK:
         try:
             ledger_db = SessionLocal()
+            results["ledger_recovery"] = ledger.recover_stale_running(
+                ledger_db,
+                stale_after_seconds=STALE_PIPELINE_AFTER_SECONDS,
+            )
             pipeline_record, _ = ledger.start_pipeline(
                 ledger_db,
                 generation_id,

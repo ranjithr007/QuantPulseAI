@@ -7,10 +7,11 @@ from app.market_data.quality import assess_window_coverage
 from app.repositories.candle_repository import get_candles_as_of
 from app.utils.freshness import normalize_timestamp_to_utc
 from app.utils.timeframes import timeframe_seconds
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 
 
 VALIDATION_SYMBOLS = ("BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT")
-VALIDATION_TIMEFRAMES = ("1h", "4h", "1d")
+VALIDATION_TIMEFRAMES = OFFICIAL_ENTRY_TIMEFRAMES
 INSPECTED_CUTOFF = datetime(2026, 7, 27, 15, tzinfo=timezone.utc)
 TARGET_UNTOUCHED_1H_CANDLES = 1440
 _LAST_REPORT = None

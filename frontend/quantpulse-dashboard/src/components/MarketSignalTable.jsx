@@ -396,6 +396,7 @@ function resolveRsScore(row, watchRow) {
     timeframeKey ? watchRow?.[timeframeKey] : null,
     watchRow?.score_1d,
     watchRow?.score_4h,
+    watchRow?.score_2h,
     watchRow?.score_1h,
     watchRow?.score_15m,
     watchRow?.score_5m,
@@ -409,6 +410,7 @@ function scoreKeyForTimeframe(timeframe) {
     "5m": "score_5m",
     "15m": "score_15m",
     "1h": "score_1h",
+    "2h": "score_2h",
     "4h": "score_4h",
     "1d": "score_1d",
   }[String(timeframe || "").toLowerCase()] || null;
@@ -417,7 +419,7 @@ function scoreKeyForTimeframe(timeframe) {
 function inferStage(row, watchRow) {
   const timeframeBias = timeframeBiasForRow(row, watchRow);
   const primaryText = `${row.regime || ""} ${timeframeBias || ""}`.trim().toUpperCase();
-  const fallbackText = `${watchRow.overall_bias || ""} ${watchRow.bias_1d || ""} ${watchRow.bias_4h || ""} ${watchRow.bias_1h || ""} ${watchRow.bias_15m || ""} ${watchRow.bias_5m || ""}`.toUpperCase();
+  const fallbackText = `${watchRow.overall_bias || ""} ${watchRow.bias_1d || ""} ${watchRow.bias_4h || ""} ${watchRow.bias_2h || ""} ${watchRow.bias_1h || ""} ${watchRow.bias_15m || ""} ${watchRow.bias_5m || ""}`.toUpperCase();
   const text = primaryText || fallbackText;
   if (row.type === "BUY" || text.includes("BULL") || text.includes("LONG")) return "Stage 2 Uptrend";
   if (row.type === "SELL" || text.includes("BEAR") || text.includes("SHORT")) return "Stage 4 Downtrend";
@@ -430,6 +432,7 @@ function timeframeBiasForRow(row, watchRow) {
     "5m": watchRow?.bias_5m,
     "15m": watchRow?.bias_15m,
     "1h": watchRow?.bias_1h,
+    "2h": watchRow?.bias_2h,
     "4h": watchRow?.bias_4h,
     "1d": watchRow?.bias_1d,
   }[String(row?.timeframe || "").toLowerCase()] || null;

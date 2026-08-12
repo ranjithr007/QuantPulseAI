@@ -11,6 +11,8 @@ def build_replay_decision_chain(
     *,
     capital=10_000,
     risk_percent=1,
+    risk_min_confidence=None,
+    risk_confidence_scope=None,
 ):
     return evaluate_frozen_decision(
         symbol,
@@ -19,4 +21,6 @@ def build_replay_decision_chain(
         derivatives,
         capital=capital,
         risk_percent=risk_percent,
+        risk_min_confidence=risk_min_confidence,
+        risk_confidence_scope=risk_confidence_scope,
     )

@@ -21,7 +21,6 @@ import {
   loadBacktestSummary,
   loadPhase2ValidationArtifact,
   loadPhase2ValidationHistory,
-  loadPhase2ValidationReport,
   loadPhase2ValidationSummary,
   loadWalkForwardSummary,
 } from "../hooks/dashboardApi";
@@ -235,14 +234,8 @@ export default function BacktestPage({
       setSelectedArtifactLoading(false);
 
       try {
-        const [walkForwardResponse, phase2ReportResponse, phase2HistoryResponse, phase2SummaryResponse] = await Promise.allSettled([
+        const [walkForwardResponse, phase2HistoryResponse, phase2SummaryResponse] = await Promise.allSettled([
           loadWalkForwardSummary({
-            symbol: view.symbol,
-            signalSide,
-            timeframe: view.timeframe || "1h",
-            signal: controller.signal,
-          }),
-          loadPhase2ValidationReport({
             symbol: view.symbol,
             signalSide,
             timeframe: view.timeframe || "1h",
@@ -268,16 +261,12 @@ export default function BacktestPage({
 
         if (walkForwardResponse.status === "fulfilled") {
           setWalkForwardSummary(walkForwardResponse.value);
+          setPhase2ReportSummary(walkForwardResponse.value);
         } else {
           setWalkForwardSummary(null);
-          setWalkForwardError(walkForwardResponse.reason instanceof Error ? walkForwardResponse.reason.message : "Unable to load walk-forward summary");
-        }
-
-        if (phase2ReportResponse.status === "fulfilled") {
-          setPhase2ReportSummary(phase2ReportResponse.value);
-        } else {
           setPhase2ReportSummary(null);
-          setPhase2ReportError(phase2ReportResponse.reason instanceof Error ? phase2ReportResponse.reason.message : "Unable to load Phase 2 validation report");
+          setWalkForwardError(walkForwardResponse.reason instanceof Error ? walkForwardResponse.reason.message : "Unable to load walk-forward summary");
+          setPhase2ReportError(walkForwardResponse.reason instanceof Error ? walkForwardResponse.reason.message : "Unable to load Phase 2 validation report");
         }
 
         if (phase2HistoryResponse.status === "fulfilled") {
@@ -2112,7 +2101,7 @@ function compareSavedAtDesc(leftSavedAt, rightSavedAt) {
 }
 
 function timeframeSortOrder(left, right) {
-  const order = ["5m", "15m", "1h", "4h", "1d"];
+  const order = ["5m", "15m", "1h", "2h", "4h", "1d"];
   const leftIndex = order.indexOf(left);
   const rightIndex = order.indexOf(right);
   if (leftIndex === -1 && rightIndex === -1) return String(left).localeCompare(String(right));

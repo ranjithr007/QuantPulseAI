@@ -7,12 +7,14 @@ from app.collectors.binances.mark_price_collector import MarkPriceCollector
 from app.config import DEFAULT_LIVE_MARKET_SYMBOLS
 from app.database.sqlserver import SessionLocal
 from app.repositories.derivative_repository import DerivativeRepository
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 
 
 CHECKPOINT_VERSION = "r4_mark_price_backfill_v1"
-OFFICIAL_TIMEFRAMES = ("1h", "4h", "1d")
+OFFICIAL_TIMEFRAMES = OFFICIAL_ENTRY_TIMEFRAMES
 TIMEFRAME_MILLISECONDS = {
     "1h": 3_600_000,
+    "2h": 7_200_000,
     "4h": 14_400_000,
     "1d": 86_400_000,
 }

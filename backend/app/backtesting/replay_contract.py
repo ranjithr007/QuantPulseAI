@@ -21,7 +21,8 @@ def build_replay_input_contract(timeframe):
     timeframe_key = str(timeframe or "").strip().lower()
     official = timeframe_key in set(OFFICIAL_ENTRY_TIMEFRAMES)
     higher = {
-        "1h": ["4h", "1d"],
+        "1h": ["2h", "4h", "1d"],
+        "2h": ["4h", "1d"],
         "4h": ["1d"],
         "1d": [],
     }.get(timeframe_key, [])
@@ -88,7 +89,7 @@ def build_point_in_time_stack(
     history_limit=300,
     minimum_history=50,
 ):
-    """Build the official 1h/4h/1d context from one immutable event cutoff."""
+    """Build the official 1h/2h/4h/1d context from one immutable event cutoff."""
     cutoff = normalize_timestamp_to_utc(as_of_timestamp)
     timeframe_records = []
 
@@ -106,6 +107,7 @@ def build_point_in_time_stack(
                     "status": "NO_DATA",
                     "signal": "NO_DATA",
                     "bias": "NO_DATA",
+                    "direction": "UNKNOWN",
                     "confidence": 0,
                     "score": 0,
                     "candle_count": len(history),
@@ -163,6 +165,7 @@ def build_point_in_time_stack(
                 "status": "OK",
                 "signal": signal,
                 "bias": bias,
+                "direction": _market_direction(bias, signal),
                 "confidence": round(confidence, 2),
                 "score": round(score, 2),
                 "feature_score": round(final_score, 2),
@@ -202,6 +205,15 @@ def _feature_direction(final_score):
     if final_score <= 45:
         return "WAIT", "WEAK_SHORT"
     return "WAIT", "NEUTRAL"
+
+
+def _market_direction(bias, signal=None):
+    text = f"{bias or ''} {signal or ''}".upper()
+    if any(token in text for token in ("LONG", "BULL", "BUY")):
+        return "BULLISH"
+    if any(token in text for token in ("SHORT", "BEAR", "SELL")):
+        return "BEARISH"
+    return "NEUTRAL" if "NO_DATA" not in text else "UNKNOWN"
 
 
 def _candle_time(candle):

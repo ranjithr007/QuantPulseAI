@@ -105,3 +105,14 @@ def test_protected_stop_applies_only_after_activation_candle(monkeypatch):
     assert trade["exit"] == 100
     assert trade["profit_protection"]["activated"] is True
     assert trade["profit_protection"]["activation_applies_from_next_candle"] is True
+    decision_summary = result["decision_summary"]
+    assert sum(decision_summary["regimes"].values()) == decision_summary["evaluated"]
+    assert decision_summary["regime_percentages"] == {"RANGE_DISTRIBUTION": 100.0}
+    assert decision_summary["regime_direction_percentages"] == {"BEARISH": 100.0}
+    assert decision_summary["rejection_combinations"] == {"PASS": 1}
+    assert decision_summary["independent_gate_pass_percentages"][
+        "ALL_PRE_ENTRY_GATES"
+    ] == 100.0
+    assert decision_summary["feature_score_distributions"]["confidence"][
+        "average"
+    ] == 70.0

@@ -17,7 +17,7 @@ def test_r0_runtime_policy_is_paper_only_and_blocks_promotion_and_ml():
     assert policy["live_execution_enabled"] is False
     assert policy["promotion_enabled"] is False
     assert policy["ml_authority_enabled"] is False
-    assert policy["official_entry_timeframes"] == ["1h", "4h", "1d"]
+    assert policy["official_entry_timeframes"] == ["1h", "2h", "4h", "1d"]
 
 
 def test_r0_marks_old_artifacts_legacy_and_current_reports_research_only():

@@ -32,6 +32,7 @@ from app.repositories.candle_repository import get_latest_candle
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.intelligence_repository import get_ai_inputs
 from app.repositories.master_signal_repository import MasterSignalRepository
+from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories._db_utils import safe_rollback
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.symbol_repository import SymbolRepository
@@ -49,15 +50,15 @@ from app.utils.signal_validation import validate_trade_plan_direction
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
 _risk_engine = RiskEngine()
-SUPPORTED_TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h", "1d"}
-DEFAULT_TIMEFRAME_STACK = ["1h", "4h", "1d"]
+SUPPORTED_TIMEFRAMES = {"1m", "5m", "15m", "1h", "2h", "4h", "1d"}
+DEFAULT_TIMEFRAME_STACK = ["1h", "2h", "4h", "1d"]
 TIMEFRAME_MODES = {
-    "scalp": ["1h", "4h", "1d"],
-    "intraday": ["1h", "4h", "1d"],
-    "swing": ["1h", "4h", "1d"],
-    "position": ["1h", "4h", "1d"],
+    "scalp": ["1h", "2h", "4h", "1d"],
+    "intraday": ["1h", "2h", "4h", "1d"],
+    "swing": ["1h", "2h", "4h", "1d"],
+    "position": ["1h", "2h", "4h", "1d"],
 }
-PREDICTION_TIMEFRAME_STACK = ["1h", "4h", "1d"]
+PREDICTION_TIMEFRAME_STACK = ["1h", "2h", "4h", "1d"]
 ENTRY_TIMING_TIMEFRAME_MODES = {
     "scalp": [],
     "intraday": [],
@@ -157,7 +158,7 @@ def build_trade_setup_payload(
     timeframes = context.get("prediction_timeframes") or context.get("timeframes")
     confirmation = context["confirmation"]
     setup = build_trade_setup_decision(confirmation, timeframes)
-    scenario = build_scenario_plan(confirmation, timeframes) if len(timeframes) == 3 else None
+    scenario = build_scenario_plan(confirmation, timeframes) if len(timeframes) >= 3 else None
     trade_plan = None
     validation = None
 
@@ -167,7 +168,7 @@ def build_trade_setup_payload(
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
         trade_plan = build_trade_plan(setup["side"], current_price, atr)
-        if len(timeframes) == 3:
+        if len(timeframes) >= 3:
             scenario = build_scenario_plan(
                 confirmation,
                 timeframes,
@@ -257,7 +258,7 @@ def build_entry_trigger_payload(
     # entry-trigger payload usable for partial/mocked contexts as well.
     scenario = (
         build_scenario_plan(confirmation, timeframes)
-        if len(timeframes or []) == 3
+        if len(timeframes or []) >= 3
         else None
     )
     trade_plan = None
@@ -270,7 +271,7 @@ def build_entry_trigger_payload(
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
         trade_plan = build_trade_plan(trigger["side"], current_price, atr)
-        if len(timeframes or []) == 3:
+        if len(timeframes or []) >= 3:
             scenario = build_scenario_plan(
                 confirmation,
                 timeframes,
@@ -396,9 +397,6 @@ def _build_entry_trigger_payload(db, symbol, timeframes_to_use, stale_after_seco
     return build_entry_trigger_payload(
         db,
         symbol,
-        lower=timeframes_to_use[0] if len(timeframes_to_use) > 0 else None,
-        middle=timeframes_to_use[1] if len(timeframes_to_use) > 1 else None,
-        higher=timeframes_to_use[2] if len(timeframes_to_use) > 2 else None,
         stale_after_seconds=stale_after_seconds,
     )
 
@@ -409,10 +407,15 @@ def _resolve_prediction_timeframe_stack(mode=None, lower=None, middle=None, high
         _normalize_timeframe_value(middle),
         _normalize_timeframe_value(higher),
     ]
-    if all(explicit):
-        stack = explicit
-    else:
-        stack = list(PREDICTION_TIMEFRAME_STACK)
+    if any(explicit) and explicit != ["1h", "4h", "1d"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The governed prediction stack is fixed to 1h, 2h, 4h, and 1d; "
+                "custom timeframe stacks are not permitted"
+            ),
+        )
+    stack = list(PREDICTION_TIMEFRAME_STACK)
 
     for timeframe in stack:
         if timeframe not in SUPPORTED_TIMEFRAMES:
@@ -421,10 +424,10 @@ def _resolve_prediction_timeframe_stack(mode=None, lower=None, middle=None, high
                 detail=f"Unsupported timeframe: {timeframe}",
             )
 
-    if len(set(stack)) != 3:
+    if len(set(stack)) != 4:
         raise HTTPException(
             status_code=400,
-            detail="lower, middle, and higher timeframes must be different",
+            detail="The governed prediction stack must contain four distinct timeframes",
         )
 
     return stack
@@ -775,7 +778,7 @@ def recover_watchlist_opportunity_gaps(
 @router.get("/batch", response_model=SignalBatchResponse)
 def get_signal_batch(
     symbols: str | None = Query(default=None),
-    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     stale_after_seconds: int = Query(default=900, ge=1),
 ):
     db = SessionLocal()
@@ -888,7 +891,7 @@ def get_scenario(
 @router.get("/{symbol}/contradiction", response_model=SymbolContextResponse)
 def get_contradiction(
     symbol: str,
-    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     stale_after_seconds: int = Query(default=900, ge=1),
 ):
     db = SessionLocal()
@@ -907,7 +910,7 @@ def get_contradiction(
 @router.get("/{symbol}/probability", response_model=SymbolContextResponse)
 def get_probability(
     symbol: str,
-    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     stale_after_seconds: int = Query(default=900, ge=1),
 ):
     db = SessionLocal()
@@ -926,7 +929,7 @@ def get_probability(
 @router.get("/{symbol}/data-quality")
 def get_data_quality(
     symbol: str,
-    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     stale_after_seconds: int = Query(default=900, ge=1),
     limit: int = Query(default=20, ge=2, le=100),
     persist: bool = Query(default=True),
@@ -950,7 +953,7 @@ def get_data_quality(
 @router.get("/{symbol}/data-quality/ledger")
 def get_data_quality_ledger(
     symbol: str,
-    timeframe: str | None = Query(default=None, enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    timeframe: str | None = Query(default=None, enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     limit: int = Query(default=100, ge=1, le=500),
 ):
     db = SessionLocal()
@@ -1012,7 +1015,7 @@ def get_entry_trigger(
 @router.get("/{symbol}/diagnostics", response_model=SymbolContextResponse)
 def get_signal_diagnostics(
     symbol: str,
-    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     stale_after_seconds: int = Query(default=900, ge=1),
 ):
     db = SessionLocal()
@@ -1211,7 +1214,7 @@ def build_signal_batch_payload(db, symbols, timeframe="5m", stale_after_seconds=
 @router.get("/{symbol}", response_model=SignalResponse)
 def get_signal(
     symbol: str,
-    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "4h", "1d"]),
+    timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     stale_after_seconds: int = Query(default=900, ge=1),
 ):
     db = SessionLocal()
@@ -1246,9 +1249,14 @@ def _resolve_timeframe_stack(mode=None, lower=None, middle=None, higher=None):
     stack = _timeframe_stack_from_mode(mode)
     explicit = [_normalize_timeframe_value(lower), _normalize_timeframe_value(middle), _normalize_timeframe_value(higher)]
 
-    for index, timeframe in enumerate(explicit):
-        if timeframe:
-            stack[index] = timeframe
+    if any(explicit) and explicit != ["1h", "4h", "1d"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The governed prediction stack is fixed to 1h, 2h, 4h, and 1d; "
+                "custom timeframe stacks are not permitted"
+            ),
+        )
 
     for timeframe in stack:
         if timeframe not in SUPPORTED_TIMEFRAMES:
@@ -1257,10 +1265,10 @@ def _resolve_timeframe_stack(mode=None, lower=None, middle=None, higher=None):
                 detail=f"Unsupported timeframe: {timeframe}",
             )
 
-    if len(set(stack)) != 3:
+    if len(set(stack)) != 4:
         raise HTTPException(
             status_code=400,
-            detail="lower, middle, and higher timeframes must be different",
+            detail="The governed prediction stack must contain four distinct timeframes",
         )
 
     return stack
@@ -1408,6 +1416,7 @@ def _watchlist_priority_key(item):
     score = abs(
         item.get("entry_score")
         or item.get("score_1h")
+        or item.get("score_2h")
         or item.get("score_4h")
         or item.get("score_1d")
         or item.get("score_15m")
@@ -1470,6 +1479,13 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
             **base,
             "action": "skipped_invalid_trade_plan",
             "validation_errors": validation["errors"] if validation else [],
+        }
+
+    if hasattr(db, "query") and PaperTradeRepository().has_open_trade(db, symbol):
+        return {
+            **base,
+            "action": "skipped_active_symbol_trade",
+            "message": "An active paper trade already holds the symbol lock",
         }
 
     replaced_trade_plan_id = None
@@ -1815,11 +1831,13 @@ def _watchlist_row(payload, risk=None):
         "bias_5m": _timeframe_value(timeframes, "5m", "bias"),
         "bias_15m": _timeframe_value(timeframes, "15m", "bias"),
         "bias_1h": _timeframe_value(timeframes, "1h", "bias"),
+        "bias_2h": _timeframe_value(timeframes, "2h", "bias"),
         "bias_4h": _timeframe_value(timeframes, "4h", "bias"),
         "bias_1d": _timeframe_value(timeframes, "1d", "bias"),
         "score_5m": _timeframe_value(timeframes, "5m", "score"),
         "score_15m": _timeframe_value(timeframes, "15m", "score"),
         "score_1h": _timeframe_value(timeframes, "1h", "score"),
+        "score_2h": _timeframe_value(timeframes, "2h", "score"),
         "score_4h": _timeframe_value(timeframes, "4h", "score"),
         "score_1d": _timeframe_value(timeframes, "1d", "score"),
         "entry": trade_plan.get("entry"),
@@ -2030,6 +2048,7 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
             "data_scope": "timeframe",
             "signal": "NO_DATA",
             "bias": "NO_DATA",
+            "direction": "UNKNOWN",
             "confidence": 0,
             "score": 0,
             "freshness": freshness_status(None, freshness_window),
@@ -2056,6 +2075,7 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
         "data_scope": "timeframe",
         "signal": signal["signal"],
         "bias": signal["bias"],
+        "direction": _market_direction(signal["bias"], signal["signal"]),
         "confidence": signal["confidence"],
         "score": signal["score"],
         "current_price": float(candle.close_price),
@@ -2088,6 +2108,17 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
             ),
         },
     }
+
+
+def _market_direction(bias, signal=None):
+    text = f"{bias or ''} {signal or ''}".upper()
+    if any(token in text for token in ("LONG", "BULL", "BUY")):
+        return "BULLISH"
+    if any(token in text for token in ("SHORT", "BEAR", "SELL")):
+        return "BEARISH"
+    if "NO_DATA" in text:
+        return "UNKNOWN"
+    return "NEUTRAL"
 
 
 def _latest_atr(feature, current_price):

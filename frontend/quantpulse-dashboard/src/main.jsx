@@ -37,7 +37,7 @@ const SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSD
 // Entry scanning and active trading decisions use the higher-timeframe stack.
 // Lower timeframes remain supported by backend diagnostics/history, but are not
 // offered as active dashboard scan choices.
-const TIMEFRAMES = ["1h", "4h", "1d"];
+const TIMEFRAMES = ["1h", "2h", "4h", "1d"];
 const MODES = ["scalp", "intraday", "swing", "position"];
 const AUTO_REFRESH_MS = 30000;
 const SECTION = "mx-auto w-full max-w-[1680px] px-4 sm:px-6 lg:px-8";

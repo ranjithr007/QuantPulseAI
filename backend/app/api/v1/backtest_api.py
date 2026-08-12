@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from sqlalchemy.exc import SQLAlchemyError
 from app.contracts.backtest import BacktestResponse
 
@@ -21,6 +21,12 @@ from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.backtesting.walk_forward_validator import PHASE2_WALK_FORWARD_DAYS
 from app.backtesting.walk_forward_validator import minimum_candles_for_folds
 from app.backtesting.walk_forward_validator import phase2_walk_forward_defaults
+from app.backtesting.walk_forward_jobs import complete_walk_forward_job
+from app.backtesting.walk_forward_jobs import create_walk_forward_job
+from app.backtesting.walk_forward_jobs import fail_walk_forward_job
+from app.backtesting.walk_forward_jobs import load_walk_forward_job
+from app.backtesting.walk_forward_jobs import mark_walk_forward_job_running
+from app.backtesting.walk_forward_jobs import public_walk_forward_job
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.measurement import attach_regime_outcome_context
@@ -40,7 +46,7 @@ WALK_FORWARD_STRATEGIES = (
 def filtered_backtest_summary(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
-    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     limit: int = Query(default=500, ge=51, le=5000),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
@@ -100,7 +106,7 @@ def filtered_backtest_summary(
 def portfolio_replay_report(
     symbols: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
-    timeframe: str = Query(default="1h", pattern="^(1h|4h|1d)$"),
+    timeframe: str = Query(default="1h", pattern="^(1h|2h|4h|1d)$"),
     limit: int = Query(default=500, ge=51, le=5000),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=25, gt=0, le=100),
@@ -201,7 +207,7 @@ def r5_strategy_evidence(payload: dict):
 def collision_sensitivity_report(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
-    timeframe: str = Query(default="1h", pattern="^(1h|4h|1d)$"),
+    timeframe: str = Query(default="1h", pattern="^(1h|2h|4h|1d)$"),
     limit: int = Query(default=500, ge=51, le=5000),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
@@ -252,11 +258,29 @@ def collision_sensitivity_report(
     }
 
 
-@router.get("/walk-forward", response_model=BacktestResponse)
+@router.get("/walk-forward", deprecated=True)
+def retired_walk_forward_validation(
+    symbol: str,
+):
+    del symbol
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "SYNCHRONOUS_WALK_FORWARD_RETIRED",
+            "message": (
+                "Synchronous walk-forward execution was retired to prevent "
+                "gateway timeouts. Submit an asynchronous job instead."
+            ),
+            "submit_url": "/api/backtest/walk-forward/jobs",
+            "method": "POST",
+        },
+    )
+
+
 def walk_forward_validation(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
-    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
     train_size: int | None = Query(default=None, ge=2, le=60000),
     test_size: int | None = Query(default=None, ge=1, le=30000),
@@ -283,11 +307,22 @@ def walk_forward_validation(
     as_of: datetime | None = Query(default=None),
     frozen_fold_parameters_json: str = Query(default="[]"),
 ):
+    """Run the calculation directly for trusted in-process callers only.
+
+    The public HTTP route is intentionally retired; API clients must submit a
+    persistent asynchronous job through ``POST /walk-forward/jobs``.
+    """
     _validate_sizing_authority(
         risk_percent_per_trade,
         target_trade_volatility_percent,
     )
-    resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
+    resolved = _resolve_walk_forward_configuration(
+        timeframe,
+        limit,
+        train_size,
+        test_size,
+        step_size,
+    )
 
     return {
         "source": "walk_forward_validation_v1",
@@ -326,11 +361,130 @@ def walk_forward_validation(
     }
 
 
+@router.post("/walk-forward/jobs", status_code=202)
+def submit_walk_forward_validation_job(
+    background_tasks: BackgroundTasks,
+    symbol: str,
+    signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
+    timeframe: str = Query(default="1h", pattern="^(1h|2h|4h|1d)$"),
+    limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
+    train_size: int | None = Query(default=None, ge=2, le=60000),
+    test_size: int | None = Query(default=None, ge=1, le=30000),
+    step_size: int | None = Query(default=None, ge=1, le=30000),
+    mode: str = Query(default="EXPANDING", pattern="^(EXPANDING|ROLLING)$"),
+    min_train_trades: int = Query(default=3, ge=1, le=1000),
+    stop_grid: str = Query(default="0.75,1,1.25,1.5"),
+    target_grid: str = Query(default="1.5,2,2.5,3"),
+    initial_capital: float = Query(default=10_000, gt=0),
+    position_size_percent: float = Query(default=100, gt=0, le=100),
+    fee_bps: float = Query(default=4, ge=0, le=1000),
+    slippage_bps: float = Query(default=2, ge=0, le=1000),
+    strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
+    risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
+    target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
+    max_leverage: float = Query(default=1, ge=1, le=20),
+    max_open_positions: int = Query(default=20, ge=1, le=100),
+    max_gross_exposure_percent: float = Query(default=500, gt=0, le=2000),
+    initial_portfolio_json: str = Query(default="[]"),
+    collision_policy: str = Query(
+        default="STOP_FIRST",
+        pattern="^(STOP_FIRST|TARGET_FIRST|LOWER_TIMEFRAME_REQUIRED)$",
+    ),
+    as_of: datetime | None = Query(default=None),
+    frozen_fold_parameters_json: str = Query(default="[]"),
+):
+    _validate_sizing_authority(
+        risk_percent_per_trade,
+        target_trade_volatility_percent,
+    )
+    resolved = _resolve_walk_forward_configuration(
+        timeframe,
+        limit,
+        train_size,
+        test_size,
+        step_size,
+    )
+    parameters = {
+        "symbol": str(symbol).upper(),
+        "timeframe": timeframe,
+        "signal": signal,
+        "limit": resolved["limit"],
+        "stop_grid": _parse_grid(stop_grid, "stop_grid"),
+        "target_grid": _parse_grid(target_grid, "target_grid"),
+        "train_size": resolved["train_size"],
+        "test_size": resolved["test_size"],
+        "step_size": resolved["step_size"],
+        "mode": mode,
+        "min_train_trades": min_train_trades,
+        "initial_capital": initial_capital,
+        "position_size_percent": position_size_percent,
+        "fee_bps": fee_bps,
+        "slippage_bps": slippage_bps,
+        "strategy": strategy,
+        "risk_percent_per_trade": risk_percent_per_trade,
+        "target_trade_volatility_percent": target_trade_volatility_percent,
+        "max_leverage": max_leverage,
+        "max_open_positions": max_open_positions,
+        "max_gross_exposure_percent": max_gross_exposure_percent,
+        "initial_portfolio_positions": _parse_initial_portfolio(
+            initial_portfolio_json
+        ),
+        "collision_policy": collision_policy,
+        **_as_of_options(as_of),
+        **_frozen_fold_options(frozen_fold_parameters_json),
+    }
+    record, created = create_walk_forward_job(parameters)
+    if created:
+        background_tasks.add_task(
+            _run_walk_forward_validation_job,
+            record["job_id"],
+            parameters,
+        )
+    return public_walk_forward_job(record)
+
+
+@router.get("/walk-forward/jobs/{job_id}")
+def get_walk_forward_validation_job(job_id: str):
+    try:
+        record = load_walk_forward_job(job_id)
+    except ValueError:
+        record = None
+    if record is None:
+        raise HTTPException(status_code=404, detail="Walk-forward job not found")
+    return public_walk_forward_job(record)
+
+
+def _run_walk_forward_validation_job(job_id, parameters):
+    mark_walk_forward_job_running(job_id)
+    try:
+        result = execute_walk_forward(**parameters)
+        symbol = parameters["symbol"]
+        timeframe = parameters["timeframe"]
+        signal = parameters["signal"]
+        response = {
+            "source": "walk_forward_validation_v1",
+            "symbol": symbol,
+            "signal": signal,
+            "timeframe": timeframe,
+            "result": result,
+            "report": build_phase2_validation_report(
+                result,
+                symbol=symbol,
+                timeframe=timeframe,
+                signal=signal,
+                paper_measurement=_load_paper_measurement(symbol),
+            ),
+        }
+        complete_walk_forward_job(job_id, response)
+    except Exception as exc:
+        fail_walk_forward_job(job_id, exc)
+
+
 @router.get("/phase2-report")
 def phase2_validation_report(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
-    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
     train_size: int | None = Query(default=None, ge=2, le=60000),
     test_size: int | None = Query(default=None, ge=1, le=30000),
@@ -389,7 +543,7 @@ def phase2_validation_report(
 def export_phase2_validation_report(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
-    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
     train_size: int | None = Query(default=None, ge=2, le=60000),
     test_size: int | None = Query(default=None, ge=1, le=30000),
@@ -451,7 +605,7 @@ def export_phase2_validation_report(
 @router.get("/phase2-report/history")
 def phase2_validation_history(
     symbol: str | None = Query(default=None),
-    timeframe: str | None = Query(default=None, pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str | None = Query(default=None, pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     signal: str | None = Query(default=None, pattern="^(LONG|SHORT)$"),
     limit: int = Query(default=10, ge=1, le=100),
 ):
@@ -482,7 +636,7 @@ def get_phase2_validation_artifact(artifact_id: str):
 @router.get("/phase2-report/summary")
 def phase2_validation_summary(
     symbol: str | None = Query(default=None),
-    timeframe: str | None = Query(default=None, pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str | None = Query(default=None, pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     signal: str | None = Query(default=None, pattern="^(LONG|SHORT)$"),
     limit: int = Query(default=20, ge=1, le=100),
 ):
@@ -509,7 +663,7 @@ def backtest(symbol: str, signal: str):
 def backtest_summary(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
-    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     limit: int = Query(default=500, ge=2, le=5000),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
@@ -751,7 +905,7 @@ def _load_paper_measurement(symbol):
         attach_regime_outcome_context(db, trades)
         # Phase 2 evidence is scoped to the official entry stack. Legacy 5m/
         # 15m trades remain visible in the paper-trade ledger but cannot be
-        # used to claim evidence for the current 1h/4h/1d strategy.
+        # used to claim evidence for the current 1h/2h/4h/1d strategy.
         trades = [
             trade
             for trade in trades

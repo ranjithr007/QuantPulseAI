@@ -24,7 +24,7 @@ import {
 } from "./dashboardTransforms";
 
 const LIVE_SNAPSHOT_REFRESH_MS = 10_000;
-const OFFICIAL_PAPER_ENTRY_TIMEFRAMES = new Set(["1h", "4h", "1d"]);
+const OFFICIAL_PAPER_ENTRY_TIMEFRAMES = new Set(["1h", "2h", "4h", "1d"]);
 
 function createInitialDashboardData() {
   return {

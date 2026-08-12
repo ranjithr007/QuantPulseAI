@@ -8,7 +8,7 @@ BACKEND = PROJECT_ROOT / "backend"
 
 class Phase1HigherTimeframeStaticTests(unittest.TestCase):
     def test_background_jobs_generate_higher_timeframe_inputs(self):
-        expected = 'TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]'
+        expected = "TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)"
 
         for relative_path in [
             "app/jobs/feature_jobs.py",

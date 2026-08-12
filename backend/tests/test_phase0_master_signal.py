@@ -12,10 +12,20 @@ class Obj:
 class Phase0MasterSignalTests(unittest.TestCase):
     def test_uses_database_style_uppercase_fields(self):
         result = generate_master_signal(
-            feature=Obj(Trend="BULLISH"),
-            regime=Obj(Regime="TRENDING_BULL"),
-            orderflow=Obj(FlowSignal="BUYERS_CONTROL"),
-            smc=Obj(smc_bias="LONG"),
+            feature=Obj(
+                Trend="BULLISH",
+                FinalScore=100,
+                TrendScore=100,
+                LiquidityScore=100,
+            ),
+            regime=Obj(Regime="TRENDING_BULL", Confidence=100),
+            orderflow=Obj(
+                FlowSignal="BUYERS_CONTROL",
+                Confidence=100,
+                BuyerStrength=100,
+                SellerStrength=0,
+            ),
+            smc=Obj(smc_bias="LONG", confidence=100),
         )
 
         self.assertEqual(result["signal"], "LONG")
@@ -25,7 +35,12 @@ class Phase0MasterSignalTests(unittest.TestCase):
 
     def test_wait_can_show_weak_short_bias(self):
         result = generate_master_signal(
-            feature=Obj(Trend="BEARISH"),
+            feature=Obj(
+                Trend="BEARISH",
+                FinalScore=0,
+                TrendScore=0,
+                LiquidityScore=0,
+            ),
             regime=None,
             orderflow=None,
             smc=None,
@@ -33,13 +48,18 @@ class Phase0MasterSignalTests(unittest.TestCase):
 
         self.assertEqual(result["signal"], "WAIT")
         self.assertEqual(result["bias"], "WEAK_SHORT")
-        self.assertEqual(result["score"], -20)
+        self.assertEqual(result["score"], -24)
 
     def test_wait_can_show_weak_long_bias(self):
         result = generate_master_signal(
             feature=None,
             regime=None,
-            orderflow=Obj(FlowSignal="BUYERS_CONTROL"),
+            orderflow=Obj(
+                FlowSignal="BUYERS_CONTROL",
+                Confidence=100,
+                BuyerStrength=100,
+                SellerStrength=0,
+            ),
             smc=None,
         )
 
@@ -57,7 +77,7 @@ class Phase0MasterSignalTests(unittest.TestCase):
 
         self.assertEqual(result["signal"], "WAIT")
         self.assertEqual(result["bias"], "NEUTRAL")
-        self.assertEqual(result["score"], 5)
+        self.assertEqual(result["score"], 2)
 
     def test_component_scores_explain_total_score(self):
         components = score_master_signal_components(
@@ -67,21 +87,31 @@ class Phase0MasterSignalTests(unittest.TestCase):
             smc=None,
         )
 
-        self.assertEqual(components["feature"]["score"], -20)
-        self.assertEqual(components["regime"]["score"], -25)
-        self.assertEqual(components["orderflow"]["score"], 25)
+        self.assertEqual(components["feature"]["score"], -12)
+        self.assertEqual(components["regime"]["score"], -15)
+        self.assertEqual(components["orderflow"]["score"], 14)
         self.assertEqual(components["smc"]["score"], 0)
         self.assertEqual(
             sum(component["score"] for component in components.values()),
-            -20,
+            -13,
         )
 
     def test_master_signal_includes_governed_scoring_profile(self):
         result = generate_master_signal(
-            feature=Obj(Trend="BULLISH"),
-            regime=Obj(Regime="TRENDING_BULL"),
-            orderflow=Obj(FlowSignal="BUYERS_CONTROL"),
-            smc=Obj(smc_bias="LONG"),
+            feature=Obj(
+                Trend="BULLISH",
+                FinalScore=100,
+                TrendScore=100,
+                LiquidityScore=100,
+            ),
+            regime=Obj(Regime="TRENDING_BULL", Confidence=100),
+            orderflow=Obj(
+                FlowSignal="BUYERS_CONTROL",
+                Confidence=100,
+                BuyerStrength=100,
+                SellerStrength=0,
+            ),
+            smc=Obj(smc_bias="LONG", confidence=100),
         )
 
         profile = result["scoring_profile"]

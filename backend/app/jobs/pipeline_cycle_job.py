@@ -9,6 +9,9 @@ from app.repositories.pipeline_run_repository import PipelineRunRepository
 from app.utils.network_resilience import summarize_network_error
 
 
+STALE_PIPELINE_AFTER_SECONDS = 1800
+
+
 def run_pipeline_cycle_job():
     results = {}
     ledger_db = None
@@ -19,6 +22,10 @@ def run_pipeline_cycle_job():
     if not USING_SQLITE_FALLBACK:
         try:
             ledger_db = SessionLocal()
+            results["ledger_recovery"] = ledger.recover_stale_running(
+                ledger_db,
+                stale_after_seconds=STALE_PIPELINE_AFTER_SECONDS,
+            )
             pipeline_record, _ = ledger.start_pipeline(
                 ledger_db,
                 generation_id,
@@ -33,10 +40,10 @@ def run_pipeline_cycle_job():
             print(f"Pipeline ledger unavailable: {summarize_network_error(exc)}")
 
     for name, job in [
+        ("paper_trade_monitor", run_paper_trade_monitor_job),
         ("watchlist_persist", run_watchlist_persist_job),
         ("risk", run_risk_job),
         ("paper_trade_execute", run_paper_trade_execute_job),
-        ("paper_trade_monitor", run_paper_trade_monitor_job),
     ]:
         job_record = None
         if ledger_db is not None and pipeline_record is not None:
@@ -84,10 +91,10 @@ def run_pipeline_cycle_job():
         "pipeline_run_id": getattr(pipeline_record, "id", None),
         "status": status,
         "order": [
+            "paper_trade_monitor",
             "watchlist_persist",
             "risk",
             "paper_trade_execute",
-            "paper_trade_monitor",
         ],
         "results": results,
     }

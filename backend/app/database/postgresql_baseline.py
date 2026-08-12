@@ -13,12 +13,21 @@ from app.database import models as _models  # noqa: F401
 POSTGRESQL_BASELINE_FINGERPRINT = (
     "8e9bc680f8885819d8f838728b4324efd117019867268fce94218ffa8ebeb27f"
 )
+POSTGRESQL_POST_BASELINE_TABLES = frozenset({"walk_forward_jobs"})
+
+
+def _baseline_tables():
+    return [
+        table
+        for table in Base.metadata.sorted_tables
+        if table.name not in POSTGRESQL_POST_BASELINE_TABLES
+    ]
 
 
 def compiled_postgresql_schema():
     dialect = postgresql.dialect()
     statements = []
-    for table in Base.metadata.sorted_tables:
+    for table in _baseline_tables():
         statements.append(str(CreateTable(table).compile(dialect=dialect)).strip())
         for index in sorted(table.indexes, key=lambda item: item.name or ""):
             statements.append(str(CreateIndex(index).compile(dialect=dialect)).strip())
@@ -44,11 +53,11 @@ def create_postgresql_baseline(bind):
     if bind.dialect.name != "postgresql":
         raise RuntimeError("The PostgreSQL baseline only supports PostgreSQL.")
     assert_reviewed_postgresql_schema()
-    Base.metadata.create_all(bind=bind, checkfirst=False)
+    Base.metadata.create_all(bind=bind, tables=_baseline_tables(), checkfirst=False)
 
 
 def drop_postgresql_baseline(bind):
     if bind.dialect.name != "postgresql":
         raise RuntimeError("The PostgreSQL baseline only supports PostgreSQL.")
     assert_reviewed_postgresql_schema()
-    Base.metadata.drop_all(bind=bind, checkfirst=True)
+    Base.metadata.drop_all(bind=bind, tables=_baseline_tables(), checkfirst=True)

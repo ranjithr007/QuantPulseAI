@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from app.database.models.pipeline_runs import JobRun, PipelineRun
@@ -19,6 +19,58 @@ def _json(value):
 
 
 class PipelineRunRepository:
+    def recover_stale_running(
+        self,
+        db,
+        *,
+        now=None,
+        stale_after_seconds=1800,
+    ):
+        """Fail abandoned ledger rows while preserving their recorded evidence."""
+        current = now or datetime.utcnow()
+        if current.tzinfo is not None:
+            current = current.replace(tzinfo=None)
+        threshold = current - timedelta(seconds=max(1, int(stale_after_seconds)))
+        pipelines = (
+            db.query(PipelineRun)
+            .filter(PipelineRun.status == "RUNNING")
+            .filter(PipelineRun.started_at < threshold)
+            .order_by(PipelineRun.started_at.asc(), PipelineRun.id.asc())
+            .all()
+        )
+        recovered_jobs = 0
+        for pipeline in pipelines:
+            jobs = (
+                db.query(JobRun)
+                .filter(JobRun.pipeline_run_id == pipeline.id)
+                .filter(JobRun.status == "RUNNING")
+                .all()
+            )
+            for job in jobs:
+                job.status = "FAILED"
+                job.completed_at = current
+                job.error_category = "STALE_RUN_RECOVERY"
+                job.error_message = (
+                    "Recovered abandoned RUNNING job after its pipeline exceeded "
+                    f"{int(stale_after_seconds)} seconds."
+                )
+                recovered_jobs += 1
+            pipeline.status = "FAILED"
+            pipeline.completed_at = current
+            pipeline.error_category = "STALE_RUN_RECOVERY"
+            pipeline.error_message = (
+                "Recovered abandoned RUNNING pipeline after exceeding "
+                f"{int(stale_after_seconds)} seconds."
+            )
+        if pipelines:
+            commit_or_rollback(db)
+        return {
+            "recovered_pipelines": len(pipelines),
+            "recovered_jobs": recovered_jobs,
+            "pipeline_ids": [pipeline.id for pipeline in pipelines],
+            "threshold": threshold.isoformat(),
+        }
+
     def latest_pipeline(self, db):
         return (
             db.query(PipelineRun)

@@ -4,10 +4,12 @@ import unittest
 from app.intelligence.master_ai_engine import score_master_signal_components
 from app.regimes.regime_engine import analyze_market
 from app.regimes.regime_engine import build_regime_contract
+from app.regimes.regime_engine import direction_aware_transition_research
 from app.regimes.regime_engine import parse_regime_audit
 from app.regimes.regime_engine import regime_catalog
 from app.regimes.rules import REGIME_DEFINITIONS
 from app.regimes.rules import detect_regime
+from app.regimes.rules import detect_regime_momentum_boundary_research
 
 
 class Obj:
@@ -77,6 +79,36 @@ class Phase1BRegimeEngineTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertEqual(detect_regime(item)["regime"], expected)
 
+        self.assertEqual(detect_regime(feature(trend=82, momentum=74))["direction"], "BULLISH")
+        self.assertEqual(detect_regime(feature(trend=18, momentum=24))["direction"], "BEARISH")
+        self.assertEqual(
+            detect_regime(feature(trend=50, momentum=50, volatility=18))["direction"],
+            "NEUTRAL",
+        )
+
+    def test_research_momentum_boundaries_do_not_change_production_detector(self):
+        bullish_boundary = feature(trend=82, momentum=60)
+        bearish_boundary = feature(trend=18, momentum=40)
+
+        self.assertNotEqual(detect_regime(bullish_boundary)["regime"], "TRENDING_BULL")
+        self.assertNotEqual(detect_regime(bearish_boundary)["regime"], "TRENDING_BEAR")
+        self.assertEqual(
+            detect_regime_momentum_boundary_research(bullish_boundary)["regime"],
+            "TRENDING_BULL",
+        )
+        self.assertEqual(
+            detect_regime_momentum_boundary_research(bearish_boundary)["regime"],
+            "TRENDING_BEAR",
+        )
+        self.assertEqual(
+            analyze_market(
+                bullish_boundary,
+                None,
+                regime_detector=detect_regime_momentum_boundary_research,
+            )["regime"],
+            "TRENDING_BULL",
+        )
+
     def test_hysteresis_holds_previous_regime_and_increments_dwell(self):
         previous = Obj(
             Regime="TRENDING_BULL",
@@ -104,6 +136,35 @@ class Phase1BRegimeEngineTests(unittest.TestCase):
         self.assertEqual(result["transition_decision"], "CONFIRMED_TRANSITION")
         self.assertEqual(result["dwell_cycles"], 1)
 
+    def test_direction_aware_research_policy_does_not_change_production_hysteresis(self):
+        previous = Obj(
+            Regime="TRENDING_BULL",
+            Confidence=80,
+            Reason=json.dumps({"dwell_cycles": 5}),
+        )
+        bearish_boundary = feature(trend=18, momentum=40)
+
+        production = analyze_market(
+            bearish_boundary,
+            previous,
+            regime_detector=detect_regime_momentum_boundary_research,
+        )
+        research = analyze_market(
+            bearish_boundary,
+            previous,
+            regime_detector=detect_regime_momentum_boundary_research,
+            transition_policy=direction_aware_transition_research,
+        )
+
+        self.assertEqual(production["regime"], "TRENDING_BULL")
+        self.assertEqual(production["transition_decision"], "HELD_PREVIOUS")
+        self.assertEqual(research["regime"], "TRENDING_BEAR")
+        self.assertEqual(
+            research["transition_decision"],
+            "CONFIRMED_DIRECTION_REVERSAL_RESEARCH",
+        )
+        self.assertEqual(research["dwell_cycles"], 1)
+
     def test_regime_audit_reason_is_json_serialized(self):
         result = analyze_market(feature(trend=82, momentum=74), None)
 
@@ -125,8 +186,8 @@ class Phase1BRegimeEngineTests(unittest.TestCase):
             None,
         )
 
-        self.assertEqual(bullish["regime"]["score"], 25)
-        self.assertEqual(bearish["regime"]["score"], -25)
+        self.assertEqual(bullish["regime"]["score"], 15)
+        self.assertEqual(bearish["regime"]["score"], -15)
 
 
 if __name__ == "__main__":

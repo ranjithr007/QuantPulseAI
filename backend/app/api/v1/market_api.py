@@ -14,7 +14,7 @@ from app.contracts.control import MarketRefreshResponse
 
 
 router = APIRouter(prefix="/market", tags=["Market"])
-FUTURES_REFRESH_ORDER = ["1d", "4h", "1h", "15m", "5m", "1m"]
+FUTURES_REFRESH_ORDER = ["1d", "4h", "2h", "1h", "15m", "5m", "1m"]
 
 
 @router.get("/{symbol}/candles", response_model=MarketCandlesResponse)

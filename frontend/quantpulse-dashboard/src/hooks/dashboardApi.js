@@ -10,6 +10,7 @@ const STALE_AFTER_BY_TIMEFRAME = {
   "5m": 15 * 60,
   "15m": 25 * 60,
   "1h": 65 * 60,
+  "2h": (2 * 60 + 5) * 60,
   "4h": (4 * 60 + 5) * 60,
   "1d": (24 * 60 + 25) * 60,
 };
@@ -134,8 +135,8 @@ export async function loadBacktestSummary({ symbol, signalSide, timeframe = "1h"
 }
 
 export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "1h", signal }) {
-  const response = await requestJson(
-    "/backtest/walk-forward",
+  const job = await requestJson(
+    "/backtest/walk-forward/jobs",
     {
       symbol,
       signal: signalSide,
@@ -143,10 +144,15 @@ export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "
       min_train_trades: 1,
     },
     signal,
-    120000
+    20000,
+    "POST"
   );
 
-  return response || null;
+  if (!job?.job_id) {
+    throw new Error("Walk-forward job submission did not return a job id");
+  }
+
+  return pollWalkForwardJob(job.job_id, signal);
 }
 
 export async function loadPaperTradeMeasurement({ symbol, signal } = {}) {
@@ -505,4 +511,50 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
   }
 
   return response.json();
+}
+
+async function pollWalkForwardJob(jobId, signal) {
+  const deadline = Date.now() + 15 * 60 * 1000;
+
+  while (Date.now() < deadline) {
+    const job = await requestJson(
+      `/backtest/walk-forward/jobs/${encodeURIComponent(jobId)}`,
+      {},
+      signal,
+      20000
+    );
+
+    if (job?.status === "COMPLETED") {
+      if (!job.response) {
+        throw new Error("Walk-forward job completed without a response");
+      }
+      return job.response;
+    }
+    if (job?.status === "FAILED") {
+      throw new Error(job.error || "Walk-forward validation failed");
+    }
+
+    await abortableDelay(2000, signal);
+  }
+
+  throw new Error("Walk-forward validation is still running after 15 minutes");
+}
+
+function abortableDelay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("The operation was aborted", "AbortError"));
+      return;
+    }
+
+    const timeoutId = window.setTimeout(resolve, milliseconds);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timeoutId);
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      },
+      { once: true }
+    );
+  });
 }

@@ -3,7 +3,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Body, Query
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.contracts.bundle import PaperTradeBundleResponse
 from app.contracts.control import PaperTradeExecutionResponse
 
@@ -648,6 +648,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
         executed = []
         skipped = []
 
+        eligible_by_symbol = defaultdict(list)
         for candidate in records:
             if not candidate["eligible"]:
                 skipped.append(
@@ -659,17 +660,33 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                     }
                 )
                 continue
+            eligible_by_symbol[str(candidate["symbol"]).upper()].append(candidate)
 
-            if repo.has_open_trade(db, candidate["symbol"], candidate["side"]):
-                skipped.append(
+        for candidate_symbol, candidates in sorted(eligible_by_symbol.items()):
+            if repo.has_open_trade(db, candidate_symbol):
+                skipped.extend(
                     {
                         "symbol": candidate["symbol"],
                         "side": candidate["side"],
                         "action": "skipped_existing_open_paper_trade",
                     }
+                    for candidate in candidates
                 )
                 continue
 
+            winner = max(candidates, key=_paper_trade_candidate_rank)
+            skipped.extend(
+                {
+                    "symbol": candidate["symbol"],
+                    "side": candidate["side"],
+                    "action": "skipped_weaker_symbol_candidate",
+                    "selected_trade_plan_id": winner["trade_plan"]["id"],
+                }
+                for candidate in candidates
+                if candidate is not winner
+            )
+
+            candidate = winner
             trade_plan_id = candidate["trade_plan"]["id"]
             if repo.has_trade_for_plan(db, trade_plan_id):
                 skipped.append(
@@ -682,7 +699,18 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 continue
 
-            paper_trade = repo.save_candidate(db, candidate)
+            try:
+                paper_trade = repo.save_candidate(db, candidate)
+            except IntegrityError:
+                db.rollback()
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_concurrent_open_paper_trade",
+                    }
+                )
+                continue
             executed.append(
                 _paper_trade_payload(
                     paper_trade,
@@ -708,6 +736,29 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
 
     finally:
         db.close()
+
+
+QP_TI_001_TIMEFRAME_PRIORITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
+
+
+def _paper_trade_candidate_rank(candidate):
+    """Deterministically rank eligible candidates for one symbol.
+
+    Validated risk confidence is authoritative, followed by plan confidence,
+    reward/risk, higher-timeframe durability, recency, and plan id.
+    """
+    risk = candidate.get("risk_decision") or {}
+    plan = candidate.get("trade_plan") or {}
+    created_at = plan.get("created_at")
+    created_rank = created_at.timestamp() if hasattr(created_at, "timestamp") else 0.0
+    return (
+        float(risk.get("confidence") or 0),
+        float(plan.get("confidence") or 0),
+        float(plan.get("risk_reward") or 0),
+        QP_TI_001_TIMEFRAME_PRIORITY.get(str(plan.get("entry_timeframe") or "").lower(), 0),
+        created_rank,
+        int(plan.get("id") or 0),
+    )
 
 
 def build_paper_trade_candidates(
@@ -796,7 +847,7 @@ def _phase2_lifecycle_state(
         return "QUEUE_PENDING", "Persist the live READY setup as an official trade plan."
     return (
         "WAITING_FOR_READY",
-        "Continue scheduled 1h/4h/1d evaluation until a setup is READY.",
+        "Continue scheduled 1h/2h/4h/1d evaluation until a setup is READY.",
     )
 
 

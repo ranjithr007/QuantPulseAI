@@ -435,6 +435,12 @@ def execute_walk_forward(
     as_of_timestamp=None,
     frozen_fold_parameters=None,
     replay_context=None,
+    regime_detector=None,
+    transition_policy=None,
+    research_label=None,
+    research_gate_profile=None,
+    risk_min_confidence=None,
+    risk_confidence_scope=None,
 ):
     db = SessionLocal() if replay_context is None else None
     try:
@@ -477,7 +483,13 @@ def execute_walk_forward(
             "BEAR_RALLY_EXHAUSTION",
             "PROFIT_PROTECTION_RESEARCH",
         }:
-            is_research = strategy_key != "SIGNAL_GATED"
+            detector_research = (
+                regime_detector is not None
+                or transition_policy is not None
+                or risk_min_confidence is not None
+                or risk_confidence_scope is not None
+            )
+            is_research = strategy_key != "SIGNAL_GATED" or detector_research
             gate_profile = {
                 "SIGNAL_GATED": "STRICT",
                 "RESEARCH_CALIBRATION": "RESEARCH_RELAXED",
@@ -485,13 +497,54 @@ def execute_walk_forward(
                 "BEAR_RALLY_EXHAUSTION": "BEAR_RALLY_EXHAUSTION_RESEARCH",
                 "PROFIT_PROTECTION_RESEARCH": "RESEARCH_RELAXED",
             }[strategy_key]
+            if research_gate_profile is not None:
+                requested_research_profile = str(research_gate_profile).upper()
+                if not detector_research or not requested_research_profile.endswith(
+                    "_RESEARCH"
+                ):
+                    raise ValueError(
+                        "research_gate_profile requires an injected research "
+                        "detector/policy and a *_RESEARCH profile"
+                    )
+                gate_profile = requested_research_profile
             profit_protection_mode = (
                 "BREAKEVEN_AFTER_R"
                 if strategy_key == "PROFIT_PROTECTION_RESEARCH"
                 else "NONE"
             )
-            effective_min_confidence = 60 if is_research else min_confidence
-            context_key = _frozen_replay_context_key(symbol, timeframe, limit, normalized_as_of)
+            effective_min_confidence = (
+                60 if strategy_key != "SIGNAL_GATED" else min_confidence
+            )
+            regime_detector_key = getattr(
+                regime_detector,
+                "__name__",
+                "detect_regime",
+            )
+            transition_policy_key = getattr(
+                transition_policy,
+                "__name__",
+                "production_hysteresis",
+            )
+            risk_min_confidence_key = (
+                "production_65"
+                if risk_min_confidence is None
+                else f"research_{float(risk_min_confidence):g}"
+            )
+            risk_confidence_scope_key = str(
+                risk_confidence_scope or "PRODUCTION_ALL"
+            ).upper()
+            context_key = (
+                *_frozen_replay_context_key(
+                    symbol,
+                    timeframe,
+                    limit,
+                    normalized_as_of,
+                ),
+                regime_detector_key,
+                transition_policy_key,
+                risk_min_confidence_key,
+                risk_confidence_scope_key,
+            )
             context = replay_context.get("_runtime") if replay_context is not None else (
                 _FROZEN_REPLAY_CONTEXT_CACHE.get(context_key)
                 if normalized_as_of is not None
@@ -521,6 +574,10 @@ def execute_walk_forward(
                     stack_candles,
                     derivative_history=derivative_history,
                     feature_timeframe=timeframe,
+                    regime_detector=regime_detector,
+                    transition_policy=transition_policy,
+                    risk_min_confidence=risk_min_confidence,
+                    risk_confidence_scope=risk_confidence_scope,
                 )
                 feature_resolver = getattr(stack_resolver, "feature_resolver", None)
                 if feature_resolver is None:
@@ -531,6 +588,7 @@ def execute_walk_forward(
                     )
                 context = {
                     "candles": candles,
+                    "stack_candles": stack_candles,
                     "derivative_history": derivative_history,
                     "stack_resolver": stack_resolver,
                     "feature_resolver": feature_resolver,
@@ -565,6 +623,7 @@ def execute_walk_forward(
                     fee_bps=options["fee_bps"],
                     slippage_bps=options["slippage_bps"],
                     gate_profile=gate_profile,
+                    regime_detector=regime_detector,
                     risk_percent_per_trade=risk_percent_per_trade,
                     target_trade_volatility_percent=target_trade_volatility_percent,
                     max_leverage=max_leverage,
@@ -580,6 +639,9 @@ def execute_walk_forward(
                 )
 
             strategy_name = (
+                f"RESEARCH_{research_label}_V1"
+                if detector_research and research_label
+                else
                 {
                     "SIGNAL_GATED": "CANDLE_RECONSTRUCTED_REGIME_FILTER_V1",
                     "RESEARCH_CALIBRATION": "CANDLE_RECONSTRUCTED_RESEARCH_GATE_V1",
@@ -593,13 +655,21 @@ def execute_walk_forward(
                 }[strategy_key]
             )
             strategy_metadata = {
-                "mode": strategy_key,
+                "mode": research_label if detector_research and research_label else strategy_key,
                 "feature_source": "IN_MEMORY_POINT_IN_TIME_CANDLE_RECONSTRUCTION",
                 "timeframe_stack": list(OFFICIAL_ENTRY_TIMEFRAMES),
                 "timeframe_stack_source": "IN_MEMORY_POINT_IN_TIME_FINAL_CANDLES",
                 "min_confidence": float(effective_min_confidence),
                 "cooldown_candles": int(cooldown_candles),
                 "gate_profile": gate_profile,
+                "regime_detector": regime_detector_key,
+                "transition_policy": transition_policy_key,
+                "risk_min_confidence": (
+                    65.0
+                    if risk_min_confidence is None
+                    else float(risk_min_confidence)
+                ),
+                "risk_confidence_scope": risk_confidence_scope_key,
                 "production_eligible": not is_research,
                 "decision_chain_policy": (
                     "ENFORCED"
@@ -779,17 +849,44 @@ def _build_in_memory_stack_resolver(
     candles_by_timeframe,
     derivative_history=None,
     feature_timeframe=None,
+    stateful_timelines=None,
+    stack_cache=None,
+    regime_detector=None,
+    transition_policy=None,
+    risk_min_confidence=None,
+    risk_confidence_scope=None,
 ):
-    cache = {}
+    cache = stack_cache if stack_cache is not None else {}
+    decision_timeframe = str(feature_timeframe or "1h")
+    regime_detector_key = getattr(
+        regime_detector,
+        "__name__",
+        "detect_regime",
+    )
+    transition_policy_key = getattr(
+        transition_policy,
+        "__name__",
+        "production_hysteresis",
+    )
+    risk_min_confidence_key = (
+        "production_65"
+        if risk_min_confidence is None
+        else f"research_{float(risk_min_confidence):g}"
+    )
+    risk_confidence_scope_key = str(
+        risk_confidence_scope or "PRODUCTION_ALL"
+    ).upper()
     bounded_history_resolver = _build_bounded_stack_history_resolver(
         candles_by_timeframe,
     )
-    stateful_timelines = {
+    stateful_timelines = stateful_timelines or {
         timeframe: build_stateful_intelligence_timeline(
             symbol,
             timeframe,
             candles,
             full_snapshots=timeframe == "1h",
+            regime_detector=regime_detector,
+            transition_policy=transition_policy,
         )
         for timeframe, candles in (candles_by_timeframe or {}).items()
     }
@@ -819,7 +916,14 @@ def _build_in_memory_stack_resolver(
         normalized_as_of = normalize_timestamp_to_utc(as_of_timestamp)
         if normalized_as_of is None:
             return None
-        cache_key = normalized_as_of.isoformat()
+        cache_key = (
+            decision_timeframe,
+            regime_detector_key,
+            transition_policy_key,
+            risk_min_confidence_key,
+            risk_confidence_scope_key,
+            normalized_as_of.isoformat(),
+        )
         if cache_key not in cache:
             stack = build_point_in_time_stack(
                 symbol,
@@ -835,17 +939,28 @@ def _build_in_memory_stack_resolver(
                 margin_bracket_records=(derivative_history or {}).get("margin_brackets"),
             )
             stack["derivatives"] = derivatives
+            decision_record = next(
+                (
+                    item
+                    for item in (stack.get("timeframes") or ())
+                    if item.get("timeframe") == decision_timeframe
+                ),
+                None,
+            )
             entry_intelligence = (
-                (stack.get("timeframes") or [{}])[0].get("intelligence")
-                if stack.get("timeframes")
+                decision_record.get("intelligence")
+                if decision_record is not None
                 else None
             )
             stack["decision_chain"] = build_replay_decision_chain(
                 symbol,
-                "1h",
+                decision_timeframe,
                 entry_intelligence,
                 derivatives,
+                risk_min_confidence=risk_min_confidence,
+                risk_confidence_scope=risk_confidence_scope,
             )
+            stack["decision_chain_timeframe"] = decision_timeframe
             stack["event_state_scope"] = {
                 "derivatives": derivatives["status"],
                 "contradiction": "REPLAYED",
@@ -875,6 +990,13 @@ def _build_in_memory_stack_resolver(
         }
 
     resolve.feature_resolver = feature_resolver
+    resolve.stateful_timelines = stateful_timelines
+    resolve.stack_cache = cache
+    resolve.decision_timeframe = decision_timeframe
+    resolve.regime_detector_key = regime_detector_key
+    resolve.transition_policy_key = transition_policy_key
+    resolve.risk_min_confidence_key = risk_min_confidence_key
+    resolve.risk_confidence_scope_key = risk_confidence_scope_key
     return resolve
 
 
@@ -912,6 +1034,17 @@ def _enrich_state_snapshot(symbol, timeframe, history, state_snapshot):
         confidence=smc.get("confidence"),
         structure=(smc.get("bos") or {}).get("direction"),
     )
+    current_price = _candle_numeric_value(history[-1], "close_price") if history else None
+    previous_price = (
+        _candle_numeric_value(history[-2], "close_price")
+        if len(history) > 1
+        else None
+    )
+    price_change_pct = (
+        ((current_price - previous_price) / previous_price) * 100
+        if current_price is not None and previous_price not in (None, 0)
+        else None
+    )
     return {
         **state_snapshot,
         "smc": smc,
@@ -920,6 +1053,11 @@ def _enrich_state_snapshot(symbol, timeframe, history, state_snapshot):
             regime_row,
             orderflow_row,
             smc_row,
+        ),
+        "current_price": current_price,
+        "previous_price": previous_price,
+        "price_change_pct": (
+            round(price_change_pct, 6) if price_change_pct is not None else None
         ),
         "availability": {
             **(state_snapshot.get("availability") or {}),
@@ -931,6 +1069,14 @@ def _enrich_state_snapshot(symbol, timeframe, history, state_snapshot):
         },
         "leakage_status": "PASS",
     }
+
+
+def _candle_numeric_value(candle, name):
+    value = candle.get(name) if isinstance(candle, dict) else getattr(candle, name, None)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_bounded_stack_history_resolver(candles_by_timeframe, history_limit=300):

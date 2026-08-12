@@ -47,6 +47,7 @@ class Phase0RiskJobTests(unittest.TestCase):
             id=10,
             symbol="BTCUSDT",
             timeframe="5m",
+            entry_timeframe="1h",
             side="LONG",
             entry_price=100.0,
             stop_loss=99.0,

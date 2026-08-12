@@ -167,7 +167,7 @@ function RiskDecisionPanel({ auto, autoDecision, selectedRisk, selectedDetail, s
   const executorBlockedReasons = dedupeReasonList(selectedPaperTradeCandidate?.blocked_reasons || []);
   const entryBand = selectedDetail.timing?.trigger?.confidence_window || selectedDetail.entryTrigger?.trigger?.confidence_window || selectedDetail.prediction?.setup?.confidence_window || selectedDetail.tradeSetup?.setup?.confidence_window || null;
   const stackConfidence = selectedDetail.timing?.trigger?.stack_confidence ?? selectedDetail.entryTrigger?.trigger?.stack_confidence ?? selectedDetail.multiTimeframe?.confirmation?.stack_confidence ?? null;
-  const predictionStack = selectedDetail.predictionStack?.length ? selectedDetail.predictionStack.join(" / ") : selectedDetail.predictionContext?.prediction_stack?.join(" / ") || selectedDetail.multiTimeframe?.prediction_stack?.join(" / ") || "1h / 4h / 1d";
+  const predictionStack = selectedDetail.predictionStack?.length ? selectedDetail.predictionStack.join(" / ") : selectedDetail.predictionContext?.prediction_stack?.join(" / ") || selectedDetail.multiTimeframe?.prediction_stack?.join(" / ") || "1h / 2h / 4h / 1d";
   const timingStack = selectedDetail.timingStack?.length
     ? selectedDetail.timingStack.join(" / ")
     : selectedDetail.timing?.trigger?.timing_stack?.join(" / ")

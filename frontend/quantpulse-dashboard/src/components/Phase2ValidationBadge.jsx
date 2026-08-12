@@ -385,7 +385,7 @@ function RollingValidation({ report }) {
           <div className="text-[10px] uppercase tracking-[0.14em] text-violet-300/70">
             Rolling proof-of-edge
           </div>
-          <div className="mt-0.5 text-xs text-slate-400">Official 1h / 4h / 1d paper evidence only</div>
+          <div className="mt-0.5 text-xs text-slate-400">Official 1h / 2h / 4h / 1d paper evidence only</div>
         </div>
         <Pill tone="slate">7d + 30d</Pill>
       </div>

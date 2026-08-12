@@ -5,6 +5,8 @@ from app.database.sqlserver import SessionLocal
 from app.regimes.regime_engine import build_regime_contract
 from app.regimes.regime_engine import parse_regime_audit
 from app.regimes.regime_engine import regime_catalog
+from app.regimes.rules import regime_direction
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.network_resilience import summarize_network_error
 from app.utils.freshness import with_freshness
 
@@ -113,6 +115,76 @@ def get_regime_diagnostics(
         db.close()
 
 
+@router.get("/{symbol}/timeframe-summary")
+def get_regime_timeframe_summary(
+    symbol: str,
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    """Return one independent regime per governed timeframe plus equal-share percentages."""
+    db = SessionLocal()
+    try:
+        records = []
+        for timeframe in OFFICIAL_ENTRY_TIMEFRAMES:
+            record = (
+                db.query(MarketRegime)
+                .filter(MarketRegime.Symbol == symbol.upper())
+                .filter(MarketRegime.Timeframe == timeframe)
+                .order_by(MarketRegime.CreatedAt.desc(), MarketRegime.Id.desc())
+                .first()
+            )
+            if record is None:
+                records.append(
+                    {
+                        "Symbol": symbol.upper(),
+                        "Timeframe": timeframe,
+                        "Regime": None,
+                        "Direction": "UNKNOWN",
+                        "RegimeConfidencePercent": 0.0,
+                        "status": "NO_DATA",
+                    }
+                )
+            else:
+                records.append(_regime_payload(record, stale_after_seconds))
+
+        percentages = _direction_percentages(records)
+        return {
+            "source": "v3_regime_timeframe_summary",
+            "symbol": symbol.upper(),
+            "timeframes": list(OFFICIAL_ENTRY_TIMEFRAMES),
+            "records": records,
+            "direction_percentages": percentages,
+            "calculation": {
+                "individual_regime_scope": "ONE_SYMBOL_ONE_TIMEFRAME",
+                "timeframes_mixed_during_regime_calculation": False,
+                "aggregate_weight_per_timeframe_percent": round(
+                    100 / len(OFFICIAL_ENTRY_TIMEFRAMES),
+                    2,
+                ),
+                "aggregate_formula": (
+                    "direction timeframe count / 4 canonical timeframes * 100"
+                ),
+                "regime_confidence_formula": (
+                    "confidence from the selected timeframe regime rule; not an "
+                    "average of other timeframes"
+                ),
+            },
+        }
+    except Exception as exc:
+        db.rollback()
+        return {
+            **_regime_error_payload(
+                "timeframe_summary",
+                symbol=symbol,
+                exc=exc,
+            ),
+            "timeframes": list(OFFICIAL_ENTRY_TIMEFRAMES),
+            "records": [],
+            "direction_percentages": _direction_percentages([]),
+        }
+    finally:
+        db.close()
+
+
 @router.get("/{symbol}")
 def get_regimes(
     symbol: str,
@@ -190,7 +262,31 @@ def _regime_payload(record, stale_after_seconds):
         return None
 
     item["audit"] = parse_regime_audit(getattr(record, "Reason", None))
+    item["Direction"] = regime_direction(getattr(record, "Regime", None))
+    item["RegimeConfidencePercent"] = float(
+        getattr(record, "Confidence", 0) or 0
+    )
     return item
+
+
+def _direction_percentages(records):
+    directions = [
+        str((record or {}).get("Direction") or "UNKNOWN").upper()
+        for record in records
+    ]
+    total = len(OFFICIAL_ENTRY_TIMEFRAMES)
+    counts = {
+        direction: directions.count(direction)
+        for direction in ("BULLISH", "BEARISH", "NEUTRAL", "UNKNOWN")
+    }
+    return {
+        "bullish": round(counts["BULLISH"] / total * 100, 2),
+        "bearish": round(counts["BEARISH"] / total * 100, 2),
+        "neutral": round(counts["NEUTRAL"] / total * 100, 2),
+        "unknown": round(counts["UNKNOWN"] / total * 100, 2),
+        "counts": counts,
+        "denominator": total,
+    }
 
 
 def _load_regime_records(db, symbol, timeframe, limit):
