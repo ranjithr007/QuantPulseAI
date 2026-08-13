@@ -10,6 +10,7 @@ from app.api.v1.signals_api import build_signal_payload
 from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.confidence_sizing import confidence_sizing_profile
+from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.repositories.risk_repository import RiskRepository
@@ -381,12 +382,22 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
     confidence = _effective_confidence(signal)
     stack_state = _timeframe_stack_state(multi_timeframe)
     invalidation = _signal_invalidation_reason(signal)
-    open_trades = _build_open_positions(paper_bundle.get("openTrades", {}).get("records") or [], signal.get("current_price"))
+    open_trades = paper_bundle.get("openTrades", {}).get("records") or []
     closed_trades = paper_bundle.get("closedTrades", {}).get("records") or []
-    reasons = []
+    trade_blockers = []
+    coin_blockers = []
+    account_blockers = []
     warnings = []
     effective_risk = _preferred_risk(risk, computed_risk)
     futures_context = _futures_context_payload(derivatives)
+    account_risk = paper_bundle.get("accountRisk") or build_account_daily_pnl_snapshot(
+        open_trades + closed_trades,
+        {selected_symbol: signal.get("current_price")},
+        daily_loss_limit=auto["dailyLossLimit"],
+    )
+    account_open_trade_count = int(
+        _safe_number(account_risk.get("open_trade_count"), len(open_trades))
+    )
 
     direction_allowed = (
         auto["direction"] == "BOTH"
@@ -395,45 +406,53 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
     )
 
     if not auto["enabled"]:
-        reasons.append("Automation paused")
+        account_blockers.append("Automation paused")
     if auto["locked"]:
-        reasons.append("Auto trading locked")
+        account_blockers.append("Auto trading locked")
     if auto["emergencyStop"]:
-        reasons.append("Emergency stop active")
+        account_blockers.append("Emergency stop active")
     if selected_symbol not in auto["allowedSymbols"]:
-        reasons.append("Symbol not in allowlist")
+        coin_blockers.append("Symbol not in allowlist")
     if not direction_allowed:
-        reasons.append("Direction not allowed")
+        trade_blockers.append("Direction not allowed")
     if signal_side == "WAIT":
-        reasons.append("Signal is WAIT")
+        trade_blockers.append("Signal is WAIT")
     if invalidation:
-        reasons.append(invalidation)
+        trade_blockers.append(invalidation)
     if stack_state in {"MIXED_LIGHT", "MIXED_STRONG"}:
         warnings.append("Timeframe stack is mixed")
     if confidence < auto["minConfidence"]:
-        reasons.append("Confidence below minimum")
-    if len(open_trades) >= auto["maxOpenTrades"]:
-        reasons.append("Open trade cap reached")
+        trade_blockers.append("Confidence below minimum")
+    if account_open_trade_count >= auto["maxOpenTrades"]:
+        account_blockers.append("Account-wide open trade cap reached")
+    if any(
+        str(trade.get("symbol") or "").upper() == str(selected_symbol).upper()
+        and str(trade.get("status") or "OPEN").upper() == "OPEN"
+        for trade in open_trades
+    ):
+        coin_blockers.append("Active trade already exists for this coin")
     if not futures_context["fundingAvailable"]:
         warnings.append("Futures funding rate unavailable")
     if not futures_context["openInterestAvailable"]:
         warnings.append("Futures open interest unavailable")
     if effective_risk and effective_risk.get("is_usable") is False:
-        reasons.append("Risk decision not usable")
+        trade_blockers.append("Risk decision not usable")
     trade_plan = signal.get("trade_plan") or {}
     if trade_plan and _safe_number(trade_plan.get("risk_reward"), 0) < 1:
-        reasons.append("Risk reward is weak")
+        trade_blockers.append("Risk reward is weak")
     if _timeframe_conflict_is_hard_block(multi_timeframe, signal_side):
-        reasons.append("Higher timeframe conflict is too strong")
+        trade_blockers.append("Higher timeframe conflict is too strong")
 
-    daily_loss = _sum_within_days(open_trades, 1, "unrealized_pnl_percent") + _sum_within_days(
-        closed_trades,
-        1,
-        "pnl_percent",
-    )
-    if daily_loss <= -abs(auto["dailyLossLimit"]):
-        reasons.append("Daily loss limit reached")
+    daily_loss = _safe_number(account_risk.get("daily_pnl_percent"), 0)
+    if account_risk.get("limit_reached"):
+        account_blockers.append("Account-wide daily loss limit reached")
 
+    blocker_scopes = {
+        "trade": trade_blockers,
+        "coin": coin_blockers,
+        "account": account_blockers,
+    }
+    reasons = account_blockers + coin_blockers + trade_blockers
     allowed = len(reasons) == 0
     reason = (
         "Selected futures contract passes allowlist, direction, confidence, derivatives, and risk checks."
@@ -451,7 +470,13 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
         "rawConfidence": confidence,
         "stackState": stack_state,
         "dailyLoss": round(daily_loss, 2),
+        "accountRisk": account_risk,
+        "blockerScopes": blocker_scopes,
+        "tradeBlockers": trade_blockers,
+        "coinBlockers": coin_blockers,
+        "accountBlockers": account_blockers,
         "openTrades": len(open_trades),
+        "accountOpenTrades": account_open_trade_count,
         "closedTrades": len(closed_trades),
         "riskDecisionSource": _risk_source_label(risk, computed_risk),
         "marketContext": futures_context,

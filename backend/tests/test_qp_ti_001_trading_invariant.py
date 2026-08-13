@@ -205,6 +205,56 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
     ) == 2
 
 
+def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
+    btc = _candidate(1, "1h", 80)
+    eth = {
+        **_candidate(2, "4h", 80),
+        "symbol": "ETHUSDT",
+    }
+    saved = []
+
+    class DummyDb:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeRepo:
+        def has_open_trade(self, db, symbol, side=None):
+            return symbol == "BTCUSDT"
+
+        def has_trade_for_plan(self, db, trade_plan_id):
+            return False
+
+        def save_candidate(self, db, candidate):
+            saved.append(candidate)
+            return SimpleNamespace(id=100)
+
+    monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "build_paper_trade_candidates",
+        lambda *args, **kwargs: (None, [btc, eth]),
+    )
+    monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_trade_payload",
+        lambda trade, fill_profile=None: {"id": trade.id},
+    )
+
+    result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
+
+    assert [item["symbol"] for item in saved] == ["ETHUSDT"]
+    assert result["executed_count"] == 1
+    assert any(
+        item["symbol"] == "BTCUSDT"
+        and item["action"] == "skipped_existing_open_paper_trade"
+        for item in result["skipped"]
+    )
+
+
 def test_symbol_lock_blocks_opposite_direction_and_database_duplicate():
     engine = create_engine("sqlite:///:memory:")
     PaperTrade.__table__.create(engine)

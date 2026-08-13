@@ -203,35 +203,47 @@ function hasMeaningfulComponentScore(component) {
   return !reason.startsWith("no ") && !reason.includes("no order flow score") && !reason.includes("no smc score");
 }
 
-export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, performance, openTrades, tradePlan, multiTimeframe }) {
-  const reasons = [];
+export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, performance, accountRisk, openTrades, tradePlan, multiTimeframe }) {
+  const tradeBlockers = [];
+  const coinBlockers = [];
+  const accountBlockers = [];
   const warnings = [];
   const signalSide = signalType(signal);
   const confidence = effectiveConfidence(signal);
   const stackState = timeframeStackState(multiTimeframe);
   const invalidation = signalInvalidationReason(signal);
-  const dailyLoss = sumWithinDays(openTrades, 1, "unrealized_pnl_percent") + sumWithinDays(performance?.closedTrades || [], 1);
+  const dailyLoss = safeNumber(accountRisk?.daily_pnl_percent, 0);
   const directionAllowed =
     auto.direction === "BOTH" ||
     (auto.direction === "LONG" && signalSide === "BUY") ||
     (auto.direction === "SHORT" && signalSide === "SELL");
 
-  if (!auto.enabled) reasons.push("Automation paused");
-  if (auto.locked) reasons.push("Auto trading locked");
-  if (auto.emergencyStop) reasons.push("Emergency stop active");
-  if (!auto.allowedSymbols.includes(selectedSymbol)) reasons.push("Symbol not in allowlist");
-  if (!directionAllowed) reasons.push("Direction not allowed");
-  if (signalSide === "WAIT") reasons.push("Signal is WAIT");
-  if (invalidation) reasons.push(invalidation);
+  if (!auto.enabled) accountBlockers.push("Automation paused");
+  if (auto.locked) accountBlockers.push("Auto trading locked");
+  if (auto.emergencyStop) accountBlockers.push("Emergency stop active");
+  if (!auto.allowedSymbols.includes(selectedSymbol)) coinBlockers.push("Symbol not in allowlist");
+  if (!directionAllowed) tradeBlockers.push("Direction not allowed");
+  if (signalSide === "WAIT") tradeBlockers.push("Signal is WAIT");
+  if (invalidation) tradeBlockers.push(invalidation);
   if (stackState === "MIXED_LIGHT" || stackState === "MIXED_STRONG") warnings.push("Timeframe stack is mixed");
-  if (stackState === "MIXED_STRONG") reasons.push("Timeframe stack is strongly mixed");
-  if (confidence < auto.minConfidence) reasons.push("Confidence below minimum");
-  if (openTrades.length >= auto.maxOpenTrades) reasons.push("Open trade cap reached");
-  if (safeNumber(performance?.open_trades, 0) >= auto.maxOpenTrades) reasons.push("Backend open trade cap reached");
-  if (safeNumber(performance?.total_pnl_percent, 0) <= -Math.abs(auto.dailyLossLimit)) reasons.push("Daily loss limit reached");
-  if (risk?.is_usable === false) reasons.push("Risk decision not usable");
-  if (tradePlan && safeNumber(tradePlan.risk_reward, 0) < 1) reasons.push("Risk reward is weak");
+  if (stackState === "MIXED_STRONG") tradeBlockers.push("Timeframe stack is strongly mixed");
+  if (confidence < auto.minConfidence) tradeBlockers.push("Confidence below minimum");
+  if (
+    safeNumber(accountRisk?.open_trade_count, openTrades.length) >= auto.maxOpenTrades
+    || safeNumber(performance?.open_trades, 0) >= auto.maxOpenTrades
+  ) {
+    accountBlockers.push("Account-wide open trade cap reached");
+  }
+  if (openTrades.some((trade) => String(trade?.symbol || "").toUpperCase() === String(selectedSymbol || "").toUpperCase())) {
+    coinBlockers.push("Active trade already exists for this coin");
+  }
+  if (accountRisk?.limit_reached === true) accountBlockers.push("Account-wide daily loss limit reached");
+  if (!accountRisk) warnings.push("Account daily P&L unavailable");
+  if (risk?.is_usable === false) tradeBlockers.push("Risk decision not usable");
+  if (tradePlan && safeNumber(tradePlan.risk_reward, 0) < 1) tradeBlockers.push("Risk reward is weak");
 
+  const blockerScopes = { trade: tradeBlockers, coin: coinBlockers, account: accountBlockers };
+  const reasons = [...accountBlockers, ...coinBlockers, ...tradeBlockers];
   const allowed = reasons.length === 0;
   const reason = allowed
     ? "Selected signal passes allowlist, direction, confidence, and risk checks."
@@ -247,6 +259,11 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
     rawConfidence: confidence,
     stackState,
     dailyLoss,
+    accountRisk,
+    blockerScopes,
+    tradeBlockers,
+    coinBlockers,
+    accountBlockers,
   };
 }
 

@@ -22,10 +22,15 @@ from app.paper_trading.measurement import attach_scenario_context
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.paper_trading.validation_policy import build_architecture_paper_gate
+from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.automation_settings_repository import DEFAULT_AUTOMATION_SETTINGS
+from app.repositories.automation_settings_repository import automation_settings_payload
+from app.repositories.automation_settings_repository import get_automation_settings
+from app.repositories.candle_repository import get_latest_candle
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.point_in_time_snapshot_repository import list_decision_snapshots
 from app.repositories.risk_repository import RiskRepository
@@ -60,11 +65,14 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     wins = sum(1 for item in closed_trades if (item.get("pnl_percent") or 0) > 0)
     losses = sum(1 for item in closed_trades if (item.get("pnl_percent") or 0) < 0)
     closed_count = len(closed_trades)
+    account_trades = trades if normalized_symbol is None else repo.all_trades(db)
+    account_risk = _account_risk_snapshot(db, account_trades)
 
     return {
         "source": "paper_trade_bundle",
         "symbol_filter": normalized_symbol,
         "marketContext": _market_context_payload(normalized_symbol),
+        "accountRisk": account_risk,
         "performance": {
             **paper_trade_performance(trades),
             "total_trades": len(trades),
@@ -87,6 +95,43 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
             "records": closed_trades,
         },
     }
+
+
+def _account_risk_snapshot(db, trades):
+    open_trades = [
+        trade
+        for trade in (trades or [])
+        if str(getattr(trade, "status", "") or "").upper() == "OPEN"
+    ]
+    prices = {}
+    for trade in open_trades:
+        timeframe = (
+            trade.entry_timeframe
+            if is_phase2_official_timeframe(trade.entry_timeframe)
+            else "1h"
+        )
+        try:
+            candle = get_latest_candle(db, trade.symbol, timeframe)
+        except SQLAlchemyError:
+            db.rollback()
+            candle = None
+        prices[str(trade.symbol).upper()] = (
+            float(candle.close_price)
+            if candle is not None and candle.close_price is not None
+            else float(trade.entry_price)
+        )
+
+    try:
+        auto = automation_settings_payload(get_automation_settings(db))
+    except SQLAlchemyError:
+        db.rollback()
+        auto = DEFAULT_AUTOMATION_SETTINGS
+
+    return build_account_daily_pnl_snapshot(
+        trades,
+        prices,
+        daily_loss_limit=auto.get("dailyLossLimit", 4.0),
+    )
 
 
 @router.get("/performance")
@@ -653,11 +698,18 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
         eligible_by_symbol = defaultdict(list)
         for candidate in records:
             if not candidate["eligible"]:
+                coin_blockers = (
+                    candidate.get("blocker_scopes", {}).get("coin") or []
+                )
                 skipped.append(
                     {
                         "symbol": candidate["symbol"],
                         "side": candidate["side"],
-                        "action": "skipped_not_eligible",
+                        "action": (
+                            "skipped_existing_open_paper_trade"
+                            if "Active trade already exists for this coin" in coin_blockers
+                            else "skipped_not_eligible"
+                        ),
                         "blocked_reasons": candidate["blocked_reasons"],
                     }
                 )
@@ -797,12 +849,21 @@ def build_paper_trade_candidates(
         )
         for trade_symbol in {trade.symbol for trade in trades}
     }
+    account_trades = PaperTradeRepository().all_trades(db)
+    account_risk = _account_risk_snapshot(db, account_trades)
+    open_symbols = {
+        str(item.symbol).upper()
+        for item in account_trades
+        if str(item.status or "").upper() == "OPEN"
+    }
     records = [
         _paper_trade_candidate(
             trade,
             latest_risks.get(trade.symbol),
             stale_after_seconds,
             derivative_payloads.get(trade.symbol),
+            account_risk=account_risk,
+            coin_has_active_trade=str(trade.symbol).upper() in open_symbols,
         )
         for trade in trades
     ]
@@ -1354,7 +1415,15 @@ def _summarize_paper_trades(records):
     }
 
 
-def _paper_trade_candidate(trade, risk, stale_after_seconds, derivatives=None):
+def _paper_trade_candidate(
+    trade,
+    risk,
+    stale_after_seconds,
+    derivatives=None,
+    *,
+    account_risk=None,
+    coin_has_active_trade=False,
+):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
     fill_profile = build_fill_profile(
         side=trade.side,
@@ -1364,19 +1433,37 @@ def _paper_trade_candidate(trade, risk, stale_after_seconds, derivatives=None):
         confidence=risk_payload.get("confidence", trade.confidence or 50),
         risk_reward=trade.risk_reward,
     )
-    blocked_reasons = _paper_trade_blocked_reasons(
+    trade_blockers = _paper_trade_blocked_reasons(
         trade,
         risk,
         risk_payload,
         derivatives,
         fill_profile=fill_profile,
     )
+    coin_blockers = (
+        ["Active trade already exists for this coin"]
+        if coin_has_active_trade
+        else []
+    )
+    account_blockers = (
+        ["Account-wide daily loss limit reached"]
+        if (account_risk or {}).get("limit_reached")
+        else []
+    )
+    blocker_scopes = {
+        "trade": trade_blockers,
+        "coin": coin_blockers,
+        "account": account_blockers,
+    }
+    blocked_reasons = trade_blockers + coin_blockers + account_blockers
 
     return {
         "symbol": trade.symbol,
         "side": trade.side,
         "eligible": not blocked_reasons,
         "blocked_reasons": blocked_reasons,
+        "blocker_scopes": blocker_scopes,
+        "account_risk": account_risk,
         "validation_contract_version": PHASE2_VALIDATION_CONTRACT_VERSION,
         "trade_plan": _trade_plan_payload(trade),
         "risk_decision": risk_payload,

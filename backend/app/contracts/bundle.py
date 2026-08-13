@@ -38,6 +38,7 @@ class PaperTradeBundleResponse(BaseModel):
     database_status: Optional[str] = None
     message: Optional[str] = None
     marketContext: Any = None
+    accountRisk: Any = None
     performance: Optional[Dict[str, Any]] = None
     summary: Optional[Dict[str, Any]] = None
     openTrades: Optional[Dict[str, Any]] = None

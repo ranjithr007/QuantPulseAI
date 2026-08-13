@@ -85,6 +85,22 @@ governed ranking and tie-breaking policy, the safe result is no new trade.
 There must be at most **one active trade per cryptocurrency symbol**, regardless
 of entry timeframe, direction, strategy, or signal source.
 
+Risk blockers have three explicit scopes:
+
+- **Trade-level** blockers evaluate only the proposed setup: direction, signal,
+  confidence, timeframe conflict, freshness, and net reward/risk.
+- **Coin-level** blockers apply only to the normalized symbol. An active BTCUSDT
+  trade blocks every additional BTCUSDT timeframe or direction, but it must not
+  block an otherwise eligible ETHUSDT, XRPUSDT, or other configured symbol.
+- **Account-level** blockers apply across all symbols only for account controls,
+  including the global open-trade cap, emergency/automation locks, and a genuine
+  combined daily account loss-limit breach.
+
+The daily-loss calculation must use each trade's own symbol price and convert
+its underlying price return into account return using its governed risk size and
+stop distance. Raw per-trade percentages must not be added together, and the
+selected dashboard symbol's price must never value another coin's position.
+
 The lock key is the normalized symbol (for example, `BTCUSDT`), not
 `symbol + timeframe`. Before creating a trade, the execution path must atomically
 verify that no active trade exists for that symbol. Concurrent signals must not be
