@@ -7,7 +7,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.api.v1 import paper_trade_api
+from app.api.v1 import risk_api
 from app.api.v1.signals_api import _market_direction
+from app.api.v1.signals_api import _watchlist_computed_risk_payload
+from app.api.v1.signals_api import _watchlist_row
+from app.database.models.fusion_signal import FusionSignal
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.funding_rates import FundingRate
 from app.database.models.trade_plan import TradePlan
@@ -20,6 +24,7 @@ from app.risk.confidence_sizing import confidence_sizing_profile
 from app.intelligence.multi_timeframe_engine import combine_timeframe_signals
 from app.jobs.deterministic_pipeline_job import STAGE_ORDER
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.fusion_signal_repository import FusionSignalRepository
 
 
 def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
@@ -57,6 +62,72 @@ def test_governed_score_and_position_tier_boundaries():
         "requested_risk_percent": 1.0,
     }
     assert confidence_sizing_profile(60, 1.0)["position_tier"] == "MAXIMUM"
+    assert risk_api._normalize_auto_settings({"minConfidence": 70})["minConfidence"] == 40
+
+
+def test_selected_timeframe_confidence_drives_watchlist_and_risk():
+    payload = {
+        "symbol": "XRPUSDT",
+        "timeframes_used": list(OFFICIAL_ENTRY_TIMEFRAMES),
+        "timeframes": [
+            {"timeframe": "1h", "confidence": 0, "score": 0, "bias": "NEUTRAL"},
+            {"timeframe": "2h", "confidence": 0, "score": 0, "bias": "NEUTRAL"},
+            {"timeframe": "4h", "confidence": 49, "score": -49, "bias": "SHORT"},
+            {"timeframe": "1d", "confidence": 0, "score": 0, "bias": "NEUTRAL"},
+        ],
+        "trigger": {
+            "status": "READY",
+            "side": "SHORT",
+            "reason": "4h SHORT entry trigger is ready",
+            "entry_timeframe": "4h",
+            "conditions": [],
+        },
+        "confirmation": {
+            "overall_bias": "BEARISH_ALIGNMENT",
+            "trade_permission": "SHORT_ALLOWED",
+        },
+        "trade_plan": {
+            "entry": 100,
+            "stop_loss": 101,
+            "target1": 98,
+            "target2": 97,
+            "risk_reward": 2.0,
+        },
+        "trade_plan_validation": {"is_valid": True, "errors": []},
+    }
+
+    computed_risk = _watchlist_computed_risk_payload(payload)
+    row = _watchlist_row(payload)
+
+    assert computed_risk["decision"] == "APPROVE"
+    assert computed_risk["confidence"] == 49
+    assert computed_risk["position_tier"] == "MINIMUM"
+    assert computed_risk["risk_percent"] == 0.5
+    assert row["entry_timeframe"] == "4h"
+    assert row["entry_score"] == -49
+    assert row["confidence"] == 49
+
+
+def test_legacy_fusion_repository_uses_governed_40_percent_floor():
+    engine = create_engine("sqlite:///:memory:")
+    FusionSignal.__table__.create(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        session.add_all(
+            [
+                FusionSignal(symbol="LOW", decision="LONG", confidence=39.99, timeframe="1h"),
+                FusionSignal(symbol="MIN", decision="LONG", confidence=40, timeframe="2h"),
+                FusionSignal(symbol="SHORT", decision="SHORT", confidence=49, timeframe="4h"),
+                FusionSignal(symbol="WAIT", decision="WAIT", confidence=90, timeframe="1d"),
+            ]
+        )
+        session.commit()
+
+        results = FusionSignalRepository().get_latest_tradeable_signals(session)
+
+        assert {item.symbol for item in results} == {"MIN", "SHORT"}
+    finally:
+        session.close()
 
 
 def test_four_timeframe_direction_requires_full_stack_alignment():

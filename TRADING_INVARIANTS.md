@@ -131,6 +131,16 @@ enforces the symbol lock under concurrent requests. Closing a paper trade closes
 or invalidates every queued plan for that symbol, and the deterministic pipeline
 then rebuilds the four-timeframe state before executing another candidate.
 
+The governed setup/trigger path uses one shared execution window for every
+canonical timeframe: minimum confidence `40`, full-size boundary `60`, maximum
+`100`. It evaluates each canonical timeframe as an independent candidate, does
+not use aggregate stack confidence to rescue a candidate below `40`, and does
+not require all four directions to align. The complete four-timeframe scan must
+be available; among candidates passing the direction, confidence, order-flow,
+freshness, timing, trade-plan, and risk guards, the strongest candidate's own
+timeframe, candle, score, confidence, and regime are carried into the paper-trade
+plan and risk decision.
+
 Operational readiness is separate from code compliance. Every deployed database
 must contain fresh, finalized candle coverage for all four canonical timeframes.
 Missing timeframe data must produce an incomplete/neutral decision and must never

@@ -3,6 +3,7 @@ from app.engines.orderflow_score_engine import OrderFlowScoreEngine
 from app.engines.smart_money_fusion_engine import SmartMoneyFusionEngine
 from app.repositories.smc_repository import SMCRepository
 from app.risk.risk_engine import RiskEngine
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 
 
 class MasterAIEngine:
@@ -161,13 +162,13 @@ class MasterAIEngine:
         # Final Decision
         # ==================
 
-        confidence = abs(long_score - short_score)
+        confidence = min(abs(long_score - short_score), 100)
 
-        if long_score > short_score and confidence >= 20:
+        if long_score > short_score and confidence >= MIN_ENTRY_CONFIDENCE:
 
             signal = "LONG"
 
-        elif short_score > long_score and confidence >= 20:
+        elif short_score > long_score and confidence >= MIN_ENTRY_CONFIDENCE:
 
             signal = "SHORT"
 

@@ -366,10 +366,7 @@ def _normalize_auto_settings(auto):
         "maxOpenTrades": int(_safe_number(auto.get("maxOpenTrades"), 4)),
         "maxLeverage": int(_safe_number(auto.get("maxLeverage"), 5)),
         "maxPositionSize": _safe_number(auto.get("maxPositionSize"), 25000),
-        "minConfidence": _safe_number(
-            auto.get("minConfidence"),
-            MIN_ENTRY_CONFIDENCE,
-        ),
+        "minConfidence": MIN_ENTRY_CONFIDENCE,
         "direction": direction,
     }
 

@@ -666,7 +666,7 @@ def execute_walk_forward(
                 "regime_detector": regime_detector_key,
                 "transition_policy": transition_policy_key,
                 "risk_min_confidence": (
-                    65.0
+                    MIN_ENTRY_CONFIDENCE
                     if risk_min_confidence is None
                     else float(risk_min_confidence)
                 ),

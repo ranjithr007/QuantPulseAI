@@ -163,8 +163,10 @@ def build_trade_setup_payload(
     validation = None
 
     if setup["status"] == "READY":
-        candle = _latest_candle(db, symbol, stack[0])
-        data = get_ai_inputs(db, symbol, stack[0])
+        entry_timeframe = setup.get("entry_timeframe") or stack[0]
+        selected = _timeframe_record(timeframes, entry_timeframe)
+        candle = _latest_candle(db, symbol, entry_timeframe)
+        data = get_ai_inputs(db, symbol, entry_timeframe)
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
         trade_plan = build_trade_plan(setup["side"], current_price, atr)
@@ -186,12 +188,12 @@ def build_trade_setup_payload(
             db,
             build_decision_snapshot(
                 symbol,
-                stack[0],
+                entry_timeframe,
                 decision=setup["status"],
                 source_timestamp=candle.candle_time,
                 effective_timestamp=candle.candle_time,
-                confidence=confirmation.get("confidence"),
-                regime=confirmation.get("overall_bias"),
+                confidence=_timeframe_confidence(selected, confirmation),
+                regime=_timeframe_regime(selected, confirmation),
                 signal=setup,
                 trade_plan=trade_plan,
                 context={
@@ -265,9 +267,10 @@ def build_entry_trigger_payload(
     validation = None
 
     if trigger["status"] == "READY":
-        lower_timeframe = stack[0]
-        candle = _latest_candle(db, symbol, lower_timeframe)
-        data = get_ai_inputs(db, symbol, lower_timeframe)
+        entry_timeframe = trigger.get("entry_timeframe") or stack[0]
+        selected = _timeframe_record(timeframes, entry_timeframe)
+        candle = _latest_candle(db, symbol, entry_timeframe)
+        data = get_ai_inputs(db, symbol, entry_timeframe)
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
         trade_plan = build_trade_plan(trigger["side"], current_price, atr)
@@ -289,12 +292,12 @@ def build_entry_trigger_payload(
             db,
             build_decision_snapshot(
                 symbol,
-                lower_timeframe,
+                entry_timeframe,
                 decision=trigger["status"],
                 source_timestamp=candle.candle_time,
                 effective_timestamp=candle.candle_time,
-                confidence=confirmation.get("confidence"),
-                regime=confirmation.get("overall_bias"),
+                confidence=_timeframe_confidence(selected, confirmation),
+                regime=_timeframe_regime(selected, confirmation),
                 signal=trigger,
                 trade_plan=trade_plan,
                 context={
@@ -1440,7 +1443,8 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
     side = trigger["side"]
     trade_plan = payload["trade_plan"]
     validation = payload["trade_plan_validation"]
-    lower = payload["timeframes"][0] if payload["timeframes"] else {}
+    selected = _selected_timeframe_record(payload)
+    confidence = _timeframe_confidence(selected, payload.get("confirmation"))
 
     base = {
         "symbol": symbol,
@@ -1504,7 +1508,7 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
         if _trade_plan_matches_existing_trade(
             existing_trade,
             trade_plan,
-            confidence=lower.get("confidence", 0),
+            confidence=confidence or 0,
         ):
             return {
                 **base,
@@ -1524,15 +1528,15 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
         symbol,
         side,
         trade_plan,
-        lower.get("confidence", 0),
+        confidence or 0,
         context={
             "mode": payload.get("mode"),
-            "entry_timeframe": lower.get("timeframe"),
+            "entry_timeframe": selected.get("timeframe"),
             "timeframe_stack": payload.get("timeframes_used"),
             "scenario": payload.get("scenario"),
             "contradiction": (payload.get("confirmation") or {}).get("contradiction"),
             "regime": (
-                lower.get("component_scores", {})
+                selected.get("component_scores", {})
                 .get("regime", {})
                 .get("value")
             ),
@@ -1555,9 +1559,9 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
 
 def _persist_phase2_opportunity_snapshot(db, payload):
     timeframes = payload.get("timeframes") or []
-    lower = timeframes[0] if timeframes else {}
-    source_timestamp = lower.get("candle_time")
-    timeframe = lower.get("timeframe")
+    selected = _selected_timeframe_record(payload)
+    source_timestamp = selected.get("candle_time")
+    timeframe = selected.get("timeframe")
 
     if not source_timestamp or not timeframe:
         return {
@@ -1581,11 +1585,11 @@ def _persist_phase2_opportunity_snapshot(db, payload):
         effective_timestamp=source_timestamp,
         quality_state=quality_state,
         confidence=(
-            trigger.get("stack_confidence")
-            if trigger.get("stack_confidence") is not None
-            else confirmation.get("confidence")
+            selected.get("confidence")
+            if selected.get("confidence") is not None
+            else trigger.get("stack_confidence")
         ),
-        regime=confirmation.get("overall_bias"),
+        regime=_timeframe_regime(selected, confirmation),
         signal=trigger,
         trade_plan=payload.get("trade_plan"),
         context={
@@ -1785,8 +1789,8 @@ def _watchlist_row(payload, risk=None):
         item["timeframe"]: item
         for item in payload["timeframes"]
     }
-    timeframe_stack = payload.get("timeframes_used") or []
-    entry_timeframe = timeframe_stack[0] if timeframe_stack else None
+    selected = _selected_timeframe_record(payload)
+    entry_timeframe = selected.get("timeframe")
     trade_plan = payload["trade_plan"] or {}
     trigger = payload["trigger"]
     confirmation = payload["confirmation"]
@@ -1801,7 +1805,7 @@ def _watchlist_row(payload, risk=None):
         "overall_bias": confirmation["overall_bias"],
         "trade_permission": confirmation["trade_permission"],
         "reason": trigger["reason"],
-        "confidence": confirmation.get("confidence"),
+        "confidence": _timeframe_confidence(selected, confirmation),
         "stack_confidence": trigger.get("stack_confidence"),
         "confidence_window": trigger.get("confidence_window"),
         "failed_conditions": [
@@ -1951,14 +1955,14 @@ def _watchlist_risk_payload(risk, stale_after_seconds):
 def _watchlist_computed_risk_payload(payload):
     trigger = payload.get("trigger") or {}
     trade_plan = payload.get("trade_plan") or {}
-    confirmation = payload.get("confirmation") or {}
+    selected = _selected_timeframe_record(payload)
 
     side = trigger.get("side")
     entry = trade_plan.get("entry")
     stop_loss = trade_plan.get("stop_loss")
     target1 = trade_plan.get("target1")
     target2 = trade_plan.get("target2")
-    confidence = confirmation.get("confidence")
+    confidence = _timeframe_confidence(selected, payload.get("confirmation"))
 
     if not side or entry is None or stop_loss is None or target1 is None:
         return None
@@ -1988,9 +1992,53 @@ def _watchlist_computed_risk_payload(payload):
         "position_size": result.get("position_size"),
         "confidence": result.get("confidence"),
         "risk_percent": result.get("risk_percent"),
+        "requested_risk_percent": result.get("requested_risk_percent"),
+        "position_tier": result.get("position_tier"),
         "is_usable": str(result.get("decision") or "").upper() == "APPROVE",
         "validation_errors": [] if str(result.get("decision") or "").upper() == "APPROVE" else [result.get("reason") or "Computed risk rejected"],
     }
+
+
+def _selected_timeframe_record(payload):
+    trigger = payload.get("trigger") or {}
+    setup = payload.get("setup") or {}
+    selected_timeframe = (
+        trigger.get("entry_timeframe")
+        or trigger.get("selected_timeframe")
+        or setup.get("entry_timeframe")
+        or setup.get("selected_timeframe")
+    )
+    timeframes = payload.get("timeframes") or []
+    selected = _timeframe_record(timeframes, selected_timeframe)
+    return selected or (timeframes[0] if timeframes else {})
+
+
+def _timeframe_record(timeframes, timeframe):
+    label = str(timeframe or "").lower()
+    return next(
+        (
+            item
+            for item in (timeframes or [])
+            if str(item.get("timeframe") or "").lower() == label
+        ),
+        {},
+    )
+
+
+def _timeframe_confidence(timeframe, confirmation=None):
+    confidence = (timeframe or {}).get("confidence")
+    if confidence is not None:
+        return confidence
+    return (confirmation or {}).get("confidence")
+
+
+def _timeframe_regime(timeframe, confirmation=None):
+    regime = (
+        (timeframe or {}).get("component_scores", {})
+        .get("regime", {})
+        .get("value")
+    )
+    return regime or (timeframe or {}).get("bias") or (confirmation or {}).get("overall_bias")
 
 
 def _watchlist_risk_status(freshness, validation):

@@ -383,3 +383,83 @@ def test_entry_trigger_payload_persists_ready_decision_snapshot(monkeypatch):
     assert calls["snapshot"]["trade_plan"]["entry"] == 100
     assert payload["decision_snapshot"]["id"] == 100
     assert payload["trigger"]["status"] == "READY"
+
+
+def test_entry_trigger_payload_builds_plan_from_selected_governed_timeframe(monkeypatch):
+    requested_timeframes = []
+    candle = SimpleNamespace(
+        candle_time=datetime(2026, 8, 13, 4, 0, 0), close_price=100
+    )
+    context = {
+        "prediction_stack": ["1h", "2h", "4h", "1d"],
+        "prediction_timeframes": [
+            {"timeframe": "1h", "confidence": 45},
+            {"timeframe": "2h", "confidence": 50},
+            {"timeframe": "4h", "confidence": 70},
+            {"timeframe": "1d", "confidence": 65},
+        ],
+        "entry_stack": [],
+        "confirmation": {
+            "overall_bias": "MIXED",
+            "trade_permission": "WAIT",
+        },
+    }
+
+    def latest_candle(db, symbol, timeframe):
+        requested_timeframes.append(("candle", timeframe))
+        return candle
+
+    def ai_inputs(db, symbol, timeframe):
+        requested_timeframes.append(("inputs", timeframe))
+        return {"feature": SimpleNamespace(ATR=1.0)}
+
+    monkeypatch.setattr(signals_api, "_latest_candle", latest_candle)
+    monkeypatch.setattr(signals_api, "get_ai_inputs", ai_inputs)
+    monkeypatch.setattr(
+        signals_api,
+        "build_entry_trigger_decision",
+        lambda confirmation, timeframes: {
+            "status": "READY",
+            "side": "LONG",
+            "reason": "4h is strongest",
+            "conditions": [],
+            "entry_timeframe": "4h",
+        },
+    )
+    monkeypatch.setattr(
+        signals_api,
+        "build_scenario_plan",
+        lambda *args, **kwargs: {"status": "READY"},
+    )
+    monkeypatch.setattr(
+        signals_api,
+        "build_trade_plan",
+        lambda side, current_price, atr: {
+            "entry": current_price,
+            "stop_loss": 99,
+            "target1": 102,
+            "target2": 103,
+        },
+    )
+    monkeypatch.setattr(
+        signals_api,
+        "validate_trade_plan_direction",
+        lambda *args: {"is_valid": True, "errors": []},
+    )
+    monkeypatch.setattr(
+        signals_api,
+        "persist_decision_snapshot",
+        lambda db, snapshot: SimpleNamespace(
+            id=101,
+            decision_version="decision_contract_v1",
+            effective_timestamp=candle.candle_time,
+        ),
+    )
+
+    payload = signals_api.build_entry_trigger_payload(
+        object(), "BTCUSDT", context=context
+    )
+
+    assert requested_timeframes == [("candle", "4h"), ("inputs", "4h")]
+    assert payload["trigger"]["entry_timeframe"] == "4h"
+    assert payload["trade_plan"]["entry"] == 100
