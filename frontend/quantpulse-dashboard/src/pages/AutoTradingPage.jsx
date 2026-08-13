@@ -28,6 +28,33 @@ export default function AutoTradingPage({
   const warningPills = dedupeReasonList(autoDecision.warnings || []);
   const reasonPills = dedupeReasonList(autoDecision.reasons || []);
   const executorBlockedReasons = dedupeReasonList(selectedPaperTradeCandidate?.blocked_reasons || []);
+  const scopedBlockers = [
+    {
+      key: "trade",
+      label: "Trade-level",
+      reasons: dedupeReasonList([
+        ...(autoDecision.blockerScopes?.trade || autoDecision.tradeBlockers || []),
+        ...(selectedPaperTradeCandidate?.blocker_scopes?.trade || []),
+      ]),
+    },
+    {
+      key: "coin",
+      label: "Coin-level",
+      reasons: dedupeReasonList([
+        ...(autoDecision.blockerScopes?.coin || autoDecision.coinBlockers || []),
+        ...(selectedPaperTradeCandidate?.blocker_scopes?.coin || []),
+      ]),
+    },
+    {
+      key: "account",
+      label: "Account-level",
+      reasons: dedupeReasonList([
+        ...(autoDecision.blockerScopes?.account || autoDecision.accountBlockers || []),
+        ...(selectedPaperTradeCandidate?.blocker_scopes?.account || []),
+      ]),
+    },
+  ];
+  const hasScopedBlockers = scopedBlockers.some((scope) => scope.reasons.length);
 
   return (
     <section className="border-b border-white/5">
@@ -281,7 +308,7 @@ export default function AutoTradingPage({
             </div>
 
             <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/70 p-2">
-              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Blocking reasons</div>
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Scoped risk blockers</div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {warningPills.length ? (
                   warningPills.map((warning) => (
@@ -290,12 +317,26 @@ export default function AutoTradingPage({
                     </Pill>
                   ))
                 ) : null}
-                {reasonPills.length ? (
+                {!hasScopedBlockers && reasonPills.length ? (
                   reasonPills.map((reason) => <Pill key={reason} tone="rose">{reason}</Pill>)
-                ) : (
+                ) : !hasScopedBlockers ? (
                   <Pill tone="emerald">No rule violations</Pill>
-                )}
+                ) : null}
               </div>
+              {hasScopedBlockers ? (
+                <div className="mt-2 grid gap-2 md:grid-cols-3">
+                  {scopedBlockers.map((scope) => (
+                    <div key={scope.key} className="rounded-lg border border-white/10 bg-slate-900/60 p-2">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{scope.label}</div>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {scope.reasons.length
+                          ? scope.reasons.map((reason) => <Pill key={reason} tone="rose">{reason}</Pill>)
+                          : <Pill tone="emerald">Clear</Pill>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

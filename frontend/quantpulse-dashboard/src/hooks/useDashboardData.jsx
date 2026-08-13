@@ -32,6 +32,7 @@ function createInitialDashboardData() {
     watchlist: null,
     pipeline: null,
     performance: null,
+    accountRisk: null,
     openTrades: [],
     closedTrades: [],
     selected: {
@@ -165,6 +166,7 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
     watchlist: normalizeWatchlistPayload(overviewByKey.watchlist || current.watchlist),
     pipeline: overviewByKey.pipeline || current.pipeline,
     performance: officialPerformance || current.performance,
+    accountRisk: paperTradeBundle.accountRisk || current.accountRisk,
     openTrades: hasPaperTradePayload ? officialOpenTrades : current.openTrades,
     closedTrades: hasPaperTradePayload ? officialClosedTrades : current.closedTrades,
     selected: {
@@ -585,6 +587,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const selectedPipeline = data.pipeline || null;
   const watchlist = data.watchlist;
   const performance = data.performance || {};
+  const accountRisk = data.accountRisk || null;
   const openTrades = data.openTrades || [];
   const closedTrades = data.closedTrades || [];
 
@@ -719,11 +722,12 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       signal: selectedSignal,
       risk: selectedRisk,
       performance,
+      accountRisk,
       openTrades,
       tradePlan: activeTradePlan,
       multiTimeframe: data.selected.multiTimeframe,
     });
-  }, [auto, view.symbol, selectedSignal, selectedRisk, performance, openTrades, activeTradePlan, data.selected.multiTimeframe]);
+  }, [auto, view.symbol, selectedSignal, selectedRisk, performance, accountRisk, openTrades, activeTradePlan, data.selected.multiTimeframe]);
   const autoDecision = data.selected.autoDecision || computedAutoDecision;
 
   const candleSeries = useMemo(() => normalizeCandles(selectedCandles), [selectedCandles]);
