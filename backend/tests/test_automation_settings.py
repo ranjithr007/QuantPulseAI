@@ -67,6 +67,21 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertEqual("unit_test", audit[0]["actor"])
             self.assertIn("enabled", audit[0]["changedFields"])
 
+    def test_legacy_or_requested_confidence_cannot_override_governed_40_boundary(self):
+        with self.Session() as db:
+            row = get_automation_settings(db)
+            row.min_confidence = 70
+            db.commit()
+
+            self.assertEqual(40.0, automation_settings_payload(row)["minConfidence"])
+            settings, _ = update_automation_settings(
+                db,
+                {"minConfidence": 60},
+                actor="unit_test",
+            )
+            self.assertEqual(40.0, settings["minConfidence"])
+            self.assertEqual(40.0, row.min_confidence)
+
     def test_emergency_stop_forces_disabled_and_locked(self):
         with self.Session() as db:
             get_automation_settings(db)

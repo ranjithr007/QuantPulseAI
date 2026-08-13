@@ -1,4 +1,5 @@
 from app.database.models.fusion_signal import FusionSignal
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 
 
 class FusionSignalRepository:
@@ -8,7 +9,7 @@ class FusionSignalRepository:
         query = (
             db.query(FusionSignal)
             .filter(FusionSignal.decision != "WAIT")
-            .filter(FusionSignal.confidence >= 70)
+            .filter(FusionSignal.confidence >= MIN_ENTRY_CONFIDENCE)
         )
 
         if timeframe:

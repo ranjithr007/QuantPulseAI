@@ -1,5 +1,8 @@
 from app.intelligence.multi_timeframe_engine import BEARISH_BIASES
 from app.intelligence.multi_timeframe_engine import BULLISH_BIASES
+from app.governance.evidence_policy import FULL_SIZE_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 
 LONG_PERMISSIONS = {"LONG_ALLOWED", "LONG_ONLY"}
 SHORT_PERMISSIONS = {"SHORT_ALLOWED", "SHORT_ONLY"}
@@ -11,15 +14,27 @@ CONFIDENCE_WINDOWS = {
     "1m": {"min": 52.0, "preferred": 60.0, "max": 76.0},
     "5m": {"min": 55.0, "preferred": 65.0, "max": 78.0},
     "15m": {"min": 58.0, "preferred": 68.0, "max": 80.0},
-    "1h": {"min": 60.0, "preferred": 70.0, "max": 82.0},
-    "2h": {"min": 61.0, "preferred": 71.0, "max": 83.0},
-    "4h": {"min": 62.0, "preferred": 72.0, "max": 84.0},
-    "1d": {"min": 65.0, "preferred": 75.0, "max": 86.0},
+    **{
+        timeframe: {
+            "min": MIN_ENTRY_CONFIDENCE,
+            "preferred": FULL_SIZE_ENTRY_CONFIDENCE,
+            "max": 100.0,
+        }
+        for timeframe in OFFICIAL_ENTRY_TIMEFRAMES
+    },
 }
-DEFAULT_CONFIDENCE_WINDOW = {"min": 60.0, "preferred": 70.0, "max": 82.0}
+DEFAULT_CONFIDENCE_WINDOW = {
+    "min": MIN_ENTRY_CONFIDENCE,
+    "preferred": FULL_SIZE_ENTRY_CONFIDENCE,
+    "max": 100.0,
+}
+TIMEFRAME_DURABILITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
 
 
 def build_trade_setup_decision(confirmation, timeframes):
+    if _is_governed_timeframe_stack(timeframes):
+        return _build_governed_trade_setup_decision(confirmation, timeframes)
+
     lower = _lower_timeframe(timeframes)
     confidence_window = _confidence_window(lower)
     permission = confirmation["trade_permission"]
@@ -59,6 +74,9 @@ def build_trade_setup_decision(confirmation, timeframes):
 
 
 def build_entry_trigger_decision(confirmation, timeframes):
+    if _is_governed_timeframe_stack(timeframes):
+        return _build_governed_entry_trigger_decision(confirmation, timeframes)
+
     setup = build_trade_setup_decision(confirmation, timeframes)
 
     if setup["side"] is None:
@@ -175,6 +193,238 @@ def _directional_trigger_conditions(side, permission, lower, confidence_window, 
             "actual": _timing_actual(timing_timeframes),
         },
     ]
+
+
+def _build_governed_trade_setup_decision(confirmation, timeframes):
+    permission = confirmation.get("trade_permission")
+    if permission == "BLOCKED":
+        return {
+            "status": "BLOCKED",
+            "side": None,
+            "reason": confirmation.get("reason") or "Required timeframe data is unavailable",
+            "confidence_window": dict(DEFAULT_CONFIDENCE_WINDOW),
+            "entry_timeframe": None,
+        }
+
+    directional = [item for item in timeframes if _actionable_side(item)]
+    if not directional:
+        return {
+            "status": "WAIT",
+            "side": None,
+            "reason": "No governed timeframe has a score outside the WAIT band",
+            "confidence_window": dict(DEFAULT_CONFIDENCE_WINDOW),
+            "entry_timeframe": None,
+        }
+
+    candidates = [
+        item
+        for item in directional
+        if _confidence_in_window(item, _confidence_window(item))
+    ]
+    if not candidates:
+        selected = max(directional, key=_governed_candidate_rank)
+        return {
+            "status": "WAIT",
+            "side": _actionable_side(selected),
+            "reason": (
+                f"{selected['timeframe']} confidence must be at least "
+                f"{int(MIN_ENTRY_CONFIDENCE)}%"
+            ),
+            "confidence_window": _confidence_window(selected),
+            "entry_timeframe": selected.get("timeframe"),
+            "selected_timeframe": selected.get("timeframe"),
+            "candidate_count": 0,
+        }
+
+    selected = max(candidates, key=_governed_candidate_rank)
+    side = _actionable_side(selected)
+    return {
+        "status": "READY",
+        "side": side,
+        "reason": (
+            f"{selected['timeframe']} {side} setup is the strongest governed opportunity"
+        ),
+        "confidence_window": _confidence_window(selected),
+        "entry_timeframe": selected.get("timeframe"),
+        "selected_timeframe": selected.get("timeframe"),
+        "candidate_count": len(candidates),
+    }
+
+
+def _build_governed_entry_trigger_decision(confirmation, timeframes):
+    permission = confirmation.get("trade_permission")
+    timing_timeframes = confirmation.get("entry_timeframes") or []
+    evaluations = []
+
+    for item in timeframes:
+        side = _actionable_side(item)
+        confidence_window = _confidence_window(item)
+        if side is None:
+            evaluations.append(
+                {
+                    "timeframe": item.get("timeframe"),
+                    "status": "WAIT",
+                    "side": None,
+                    "confidence": _confidence_value(item),
+                    "score": float(item.get("score") or 0),
+                    "reason": "Timeframe score is inside the WAIT band",
+                    "conditions": [],
+                    "confidence_window": confidence_window,
+                }
+            )
+            continue
+
+        conditions = _governed_trigger_conditions(
+            side=side,
+            permission=permission,
+            timeframe=item,
+            confidence_window=confidence_window,
+            timing_timeframes=timing_timeframes,
+        )
+        ready = all(condition["passed"] for condition in conditions)
+        evaluations.append(
+            {
+                "timeframe": item.get("timeframe"),
+                "status": "READY" if ready else "WAIT",
+                "side": side,
+                "confidence": _confidence_value(item),
+                "score": float(item.get("score") or 0),
+                "reason": (
+                    f"{item.get('timeframe')} {side} entry trigger is ready"
+                    if ready
+                    else _first_failed_condition_message(conditions)
+                ),
+                "conditions": conditions,
+                "confidence_window": confidence_window,
+                "candle_time": item.get("candle_time"),
+            }
+        )
+
+    directional = [item for item in evaluations if item.get("side")]
+    ready = [item for item in directional if item.get("status") == "READY"]
+    pool = ready or directional
+
+    if not pool:
+        return {
+            "status": "BLOCKED" if permission == "BLOCKED" else "WAIT",
+            "side": None,
+            "reason": confirmation.get("reason") or "No governed timeframe has an actionable direction",
+            "conditions": [],
+            "confidence_window": dict(DEFAULT_CONFIDENCE_WINDOW),
+            "selected_confidence": None,
+            "entry_timeframe": None,
+            "selected_timeframe": None,
+            "timeframe_candidates": evaluations,
+        }
+
+    selected = max(pool, key=_governed_evaluation_rank)
+    is_ready = selected.get("status") == "READY"
+    return {
+        "status": "READY" if is_ready else "BLOCKED" if permission == "BLOCKED" else "WAIT",
+        "side": selected.get("side"),
+        "reason": selected.get("reason"),
+        "conditions": selected.get("conditions") or [],
+        "confidence_window": selected.get("confidence_window"),
+        "selected_confidence": selected.get("confidence"),
+        "entry_timeframe": selected.get("timeframe"),
+        "selected_timeframe": selected.get("timeframe"),
+        "timeframe_candidates": evaluations,
+    }
+
+
+def _governed_trigger_conditions(side, permission, timeframe, confidence_window, timing_timeframes):
+    orderflow_message = (
+        f"{timeframe['timeframe']} orderflow should show "
+        f"{'buyers' if side == 'LONG' else 'sellers'} control"
+    )
+    return [
+        {
+            "name": "governed_timeframe_scan",
+            "passed": permission != "BLOCKED",
+            "message": "All governed timeframes must be scanned with available data",
+            "actual": permission,
+        },
+        {
+            "name": "timeframe_direction",
+            "passed": _actionable_side(timeframe) == side,
+            "message": f"{timeframe['timeframe']} must have an actionable {side} score",
+            "actual": timeframe.get("signal"),
+        },
+        {
+            "name": "orderflow_confirmation",
+            "passed": _orderflow_supports_side(timeframe, side),
+            "message": orderflow_message,
+            "actual": _component_value(timeframe, "orderflow"),
+        },
+        {
+            "name": "confidence_window",
+            "passed": _confidence_in_window(timeframe, confidence_window),
+            "message": (
+                f"{timeframe['timeframe']} confidence must be at least "
+                f"{int(MIN_ENTRY_CONFIDENCE)}% (full size at "
+                f"{int(FULL_SIZE_ENTRY_CONFIDENCE)}%)"
+            ),
+            "actual": _confidence_value(timeframe),
+            "window": confidence_window,
+        },
+        {
+            "name": "freshness",
+            "passed": _is_fresh(timeframe),
+            "message": f"{timeframe['timeframe']} signal and inputs should be fresh",
+        },
+        {
+            "name": "entry_timing_confirmation",
+            "passed": _timing_supports_side(timing_timeframes, side),
+            "message": _timing_message(side, timing_timeframes),
+            "actual": _timing_actual(timing_timeframes),
+        },
+    ]
+
+
+def _is_governed_timeframe_stack(timeframes):
+    labels = tuple(str(item.get("timeframe") or "").lower() for item in (timeframes or []))
+    return labels == tuple(OFFICIAL_ENTRY_TIMEFRAMES)
+
+
+def _actionable_side(timeframe):
+    if not timeframe:
+        return None
+    score = timeframe.get("score")
+    if score is not None:
+        score = float(score)
+        if score >= MIN_ENTRY_CONFIDENCE:
+            return "LONG"
+        if score <= -MIN_ENTRY_CONFIDENCE:
+            return "SHORT"
+        return None
+    signal = str(timeframe.get("signal") or "").upper()
+    if signal in {"LONG", "BUY", "STRONG_LONG"}:
+        return "LONG"
+    if signal in {"SHORT", "SELL", "STRONG_SHORT"}:
+        return "SHORT"
+    return None
+
+
+def _governed_candidate_rank(item):
+    return (
+        _confidence_value(item),
+        abs(float(item.get("score") or 0)),
+        TIMEFRAME_DURABILITY.get(str(item.get("timeframe") or "").lower(), 0),
+        _timestamp_rank(item.get("candle_time")),
+    )
+
+
+def _governed_evaluation_rank(item):
+    return (
+        float(item.get("confidence") or 0),
+        abs(float(item.get("score") or 0)),
+        TIMEFRAME_DURABILITY.get(str(item.get("timeframe") or "").lower(), 0),
+        _timestamp_rank(item.get("candle_time")),
+    )
+
+
+def _timestamp_rank(value):
+    return value.timestamp() if hasattr(value, "timestamp") else 0.0
 
 
 def _component_value(timeframe, component):

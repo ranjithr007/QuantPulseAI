@@ -125,7 +125,7 @@ export default function RiskControlsPage({
 
             <div className="mt-3 grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
               <RiskField label="Minimum confidence" value={`${auto.minConfidence}%`}>
-                <RangeInput value={auto.minConfidence} min={0} max={100} step={1} onChange={(minConfidence) => setAuto((current) => ({ ...current, minConfidence }))} />
+                <div className="text-xs text-slate-500">Governed execution boundary (full size at 60%)</div>
               </RiskField>
               <RiskField label="Max risk per trade" value={`${auto.maxRiskPerTrade}%`}>
                 <RangeInput value={auto.maxRiskPerTrade} min={0.1} max={5} step={0.1} onChange={(maxRiskPerTrade) => setAuto((current) => ({ ...current, maxRiskPerTrade }))} />

@@ -99,13 +99,7 @@ export default function AutomationSection({
                 label="Minimum confidence"
                 value={`${auto.minConfidence}%`}
                 render={() => (
-                  <RangeInput
-                    value={auto.minConfidence}
-                    min={0}
-                    max={100}
-                    step={1}
-                    onChange={(value) => setAuto((current) => ({ ...current, minConfidence: value }))}
-                  />
+                  <div className="text-xs text-slate-500">Governed execution boundary (full size at 60%)</div>
                 )}
               />
 

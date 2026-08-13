@@ -1,4 +1,7 @@
 
+from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+
+
 def _get_value(obj, *names):
     for name in names:
         value = getattr(obj, name, None)
@@ -15,7 +18,7 @@ def validate_signal(signal, confidence, trade_plan, regime, orderflow, smc):
 
     # Confidence check
 
-    if confidence >= 70:
+    if confidence >= MIN_ENTRY_CONFIDENCE:
 
         score += 20
 

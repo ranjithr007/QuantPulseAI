@@ -34,6 +34,37 @@ def ensure_automation_settings_schema(engine):
 def get_automation_settings(db):
     row = db.query(AutomationSetting).filter(AutomationSetting.id == 1).first()
     if row:
+        if float(row.min_confidence) != MIN_ENTRY_CONFIDENCE:
+            previous_confidence = float(row.min_confidence)
+            row.min_confidence = MIN_ENTRY_CONFIDENCE
+            row.version = int(row.version or 0) + 1
+            row.updated_at = datetime.utcnow()
+            db.add(
+                AutomationSettingsAudit(
+                    setting_id=row.id,
+                    action="GOVERNED_CONFIDENCE_REPAIRED",
+                    actor="system",
+                    changed_fields=json.dumps(
+                        {
+                            "minConfidence": {
+                                "from": previous_confidence,
+                                "to": MIN_ENTRY_CONFIDENCE,
+                            }
+                        },
+                        sort_keys=True,
+                    ),
+                    previous_values=json.dumps(
+                        {"minConfidence": previous_confidence},
+                        sort_keys=True,
+                    ),
+                    new_values=json.dumps(
+                        {"minConfidence": MIN_ENTRY_CONFIDENCE},
+                        sort_keys=True,
+                    ),
+                )
+            )
+            commit_or_rollback(db)
+            db.refresh(row)
         return row
 
     defaults = normalize_automation_settings(DEFAULT_AUTOMATION_SETTINGS)
@@ -133,7 +164,9 @@ def automation_settings_payload(row):
         "maxOpenTrades": int(row.max_open_trades),
         "maxLeverage": int(row.max_leverage),
         "maxPositionSize": float(row.max_position_size),
-        "minConfidence": float(row.min_confidence),
+        # The execution boundary is a governed invariant, not an operator-tuned
+        # setting. This also repairs legacy rows that still contain 60 or 70.
+        "minConfidence": MIN_ENTRY_CONFIDENCE,
         "direction": row.direction,
         "executionMode": "PAPER",
         "liveExecutionEnabled": False,
@@ -163,9 +196,7 @@ def normalize_automation_settings(value):
         "maxOpenTrades": int(value.get("maxOpenTrades", 4)),
         "maxLeverage": int(value.get("maxLeverage", 5)),
         "maxPositionSize": float(value.get("maxPositionSize", 25000)),
-        "minConfidence": float(
-            value.get("minConfidence", MIN_ENTRY_CONFIDENCE)
-        ),
+        "minConfidence": MIN_ENTRY_CONFIDENCE,
         "direction": direction,
         "executionMode": "PAPER",
         "liveExecutionEnabled": False,
