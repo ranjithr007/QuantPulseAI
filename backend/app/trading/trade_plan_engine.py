@@ -1,5 +1,16 @@
 
-def build_trade_plan(signal, current_price, atr=None):
+from app.trading.futures_cost_model import build_cost_adjusted_targets
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.trading.futures_cost_model import DEFAULT_STOP_LOSS_PERCENT
+
+
+def build_trade_plan(
+    signal,
+    current_price,
+    atr=None,
+    confidence=50,
+    fee_bps=DEFAULT_FEE_BPS,
+):
     precision = price_precision(current_price)
 
     if atr is None:
@@ -17,40 +28,43 @@ def build_trade_plan(signal, current_price, atr=None):
             "risk_reward": 0,
         }
 
+    entry = current_price
+    stop_distance = entry * (DEFAULT_STOP_LOSS_PERCENT / 100)
+
     if signal == "LONG":
 
-        entry = current_price
-
-        stop = entry - atr
-
-        target1 = entry + atr * 2
-
-        target2 = entry + atr * 3
+        stop = entry - stop_distance
 
     else:
 
-        entry = current_price
+        stop = entry + stop_distance
 
-        stop = entry + atr
-
-        target1 = entry - atr * 2
-
-        target2 = entry - atr * 3
-
-    risk = abs(entry - stop)
-
-    reward = abs(target1 - entry)
-
-    rr = round(reward / risk, 2)
+    cost_adjustment = build_cost_adjusted_targets(
+        signal,
+        entry,
+        stop,
+        confidence=confidence,
+        fee_bps=fee_bps,
+        price_precision=precision,
+    )
+    target1 = cost_adjustment["target1"]
+    target2 = cost_adjustment["target2"]
 
     return {
         "entry": round(entry, precision),
         "stop_loss": round(stop, precision),
-        "target1": round(target1, precision),
-        "target2": round(target2, precision),
+        "target1": target1,
+        "target2": target2,
+        "target3": cost_adjustment["target3"],
         "atr": round(atr, precision),
+        "stop_loss_percent": DEFAULT_STOP_LOSS_PERCENT,
         "price_precision": precision,
-        "risk_reward": rr,
+        "risk_reward": cost_adjustment["target1_net_risk_reward"],
+        "gross_risk_reward": cost_adjustment["target1_gross_risk_reward"],
+        "target2_net_risk_reward": cost_adjustment["target2_net_risk_reward"],
+        "target3_net_risk_reward": cost_adjustment["target3_net_risk_reward"],
+        "cost_model": cost_adjustment["cost_model"],
+        "estimated_costs": cost_adjustment,
     }
 
 

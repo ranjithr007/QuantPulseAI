@@ -4,6 +4,7 @@ from datetime import datetime
 from datetime import timezone
 
 from app.backtesting.performance_engine import calculate_performance
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 
 ENGINE_VERSION = "backtester_v2"
@@ -15,7 +16,7 @@ class BacktestConfig:
     position_size_percent: float = 100.0
     stop_percent: float = 1.0
     target_percent: float = 2.0
-    fee_bps: float = 4.0
+    fee_bps: float = DEFAULT_FEE_BPS
     slippage_bps: float = 2.0
 
     def __post_init__(self):
@@ -41,7 +42,7 @@ def run_backtest(
     *,
     initial_capital=10_000,
     position_size_percent=100,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
 ):
     """Run a chronological, single-position directional baseline.

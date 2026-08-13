@@ -147,7 +147,7 @@ class PaperTradeRepository:
             open_interest_change_percent=market_context.get(
                 "openInterestChangePercent"
             ),
-            fee_bps=float(fill_profile.get("fee_bps", 4.0)),
+            fee_bps=float(fill_profile.get("fee_bps", 7.5)),
             status="OPEN",
         )
 
@@ -180,7 +180,7 @@ class PaperTradeRepository:
         else:
             gross_pnl = ((trade.entry_price - exit_price) / trade.entry_price) * 100
 
-        fee_bps = float(getattr(trade, "fee_bps", 4.0) or 0)
+        fee_bps = float(getattr(trade, "fee_bps", 7.5) or 0)
         fees_percent = (fee_bps * 2) / 100
         funding_rates = self._funding_rates_during_trade(db, trade, closed_at)
         funding_direction = 1 if trade.side == "LONG" else -1

@@ -74,7 +74,12 @@ def run_master_ai_job():
                     timeframe=timeframe,
                 )
                 result["timeframe"] = timeframe
-                trade_plan = build_trade_plan(result["signal"], current_price, atr)
+                trade_plan = build_trade_plan(
+                    result["signal"],
+                    current_price,
+                    atr,
+                    confidence=result["confidence"],
+                )
                 result["entry_price"] = trade_plan["entry"]
                 result["target_price"] = trade_plan["target1"]
 

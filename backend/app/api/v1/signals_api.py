@@ -41,6 +41,7 @@ from app.risk.risk_engine import RiskEngine
 from app.features.point_in_time_feature_service import build_decision_snapshot
 from app.features.point_in_time_feature_service import persist_decision_snapshot
 from app.trading.trade_plan_engine import build_trade_plan
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.observability.performance_budget import LatencyBudget
 from app.observability.performance_budget import build_stage_latency_report
 from app.utils.freshness import candle_freshness_timestamp, freshness_status
@@ -169,7 +170,12 @@ def build_trade_setup_payload(
         data = get_ai_inputs(db, symbol, entry_timeframe)
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
-        trade_plan = build_trade_plan(setup["side"], current_price, atr)
+        trade_plan = build_trade_plan(
+            setup["side"],
+            current_price,
+            atr,
+            confidence=_timeframe_confidence(selected, confirmation) or 0,
+        )
         if len(timeframes) >= 3:
             scenario = build_scenario_plan(
                 confirmation,
@@ -273,7 +279,12 @@ def build_entry_trigger_payload(
         data = get_ai_inputs(db, symbol, entry_timeframe)
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
-        trade_plan = build_trade_plan(trigger["side"], current_price, atr)
+        trade_plan = build_trade_plan(
+            trigger["side"],
+            current_price,
+            atr,
+            confidence=_timeframe_confidence(selected, confirmation) or 0,
+        )
         if len(timeframes or []) >= 3:
             scenario = build_scenario_plan(
                 confirmation,
@@ -1100,7 +1111,12 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
 
     current_price = float(candle.close_price)
     atr = _latest_atr(data["feature"], current_price)
-    trade_plan = build_trade_plan(signal["signal"], current_price, atr)
+    trade_plan = build_trade_plan(
+        signal["signal"],
+        current_price,
+        atr,
+        confidence=signal["confidence"],
+    )
     decision_snapshot = _persist_decision_snapshot_safe(
         db,
         build_decision_snapshot(
@@ -1977,6 +1993,7 @@ def _watchlist_computed_risk_payload(payload):
             target2=target2,
             confidence=confidence or 0,
             risk_percent=1,
+            fee_bps=DEFAULT_FEE_BPS,
         )
     except Exception:
         return None

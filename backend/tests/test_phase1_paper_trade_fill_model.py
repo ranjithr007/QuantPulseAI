@@ -21,7 +21,9 @@ class Phase1PaperTradeFillModelTests(unittest.TestCase):
         self.assertEqual(profile["entry_fill_price"], 100.06)
         self.assertEqual(profile["entry_slippage_pct"], 0.06)
         self.assertEqual(profile["fill_quality"], "NORMAL")
-        self.assertEqual(profile["effective_risk_reward"], 1.83)
+        self.assertEqual(profile["effective_risk_reward"], 1.3696)
+        self.assertEqual(profile["estimated_round_trip_fee_percent"], 0.15)
+        self.assertEqual(profile["gross_risk_reward"], 2.0)
 
     def test_build_fill_profile_short_applies_adverse_entry_slippage(self):
         profile = build_fill_profile(
@@ -37,7 +39,7 @@ class Phase1PaperTradeFillModelTests(unittest.TestCase):
         self.assertEqual(profile["entry_fill_price"], 99.97)
         self.assertEqual(profile["entry_slippage_pct"], 0.035)
         self.assertEqual(profile["fill_quality"], "TIGHT")
-        self.assertEqual(profile["effective_risk_reward"], 1.91)
+        self.assertEqual(profile["effective_risk_reward"], 1.4629)
 
     def test_simulate_exit_fill_uses_adverse_slippage_on_close(self):
         trade = SimpleNamespace(
@@ -52,7 +54,7 @@ class Phase1PaperTradeFillModelTests(unittest.TestCase):
         target_fill = simulate_exit_fill(trade, 102.0, "TARGET")
         stop_fill = simulate_exit_fill(trade, 99.0, "STOP")
 
-        self.assertEqual(target_fill["exit_fill_price"], 101.96)
+        self.assertEqual(target_fill["exit_fill_price"], 101.97)
         self.assertEqual(target_fill["trigger_type"], "TARGET")
         self.assertEqual(stop_fill["exit_fill_price"], 98.9257)
         self.assertEqual(stop_fill["trigger_type"], "STOP")

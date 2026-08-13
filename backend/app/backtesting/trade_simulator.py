@@ -29,6 +29,7 @@ from app.features.point_in_time_feature_service import build_feature_snapshot
 from app.utils.freshness import normalize_timestamp_to_utc
 from app.repositories.derivative_repository import DerivativeRepository
 from app.smc.smc_engine import analyze_smc
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 COLLISION_POLICIES = (
     "STOP_FIRST",
@@ -54,7 +55,7 @@ def execute_backtest(
     position_size_percent=100,
     stop_percent=1,
     target_percent=2,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
 ):
 
@@ -105,7 +106,7 @@ def execute_filtered_backtest(
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
     risk_percent_per_trade=None,
     target_trade_volatility_percent=None,
@@ -167,7 +168,7 @@ def execute_portfolio_backtest(
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
     risk_percent_per_trade=None,
     target_trade_volatility_percent=None,
@@ -239,7 +240,7 @@ def execute_collision_sensitivity_backtest(
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
     cooldown_candles=3,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
     risk_percent_per_trade=None,
     target_trade_volatility_percent=None,
@@ -421,7 +422,7 @@ def execute_walk_forward(
     min_train_trades=3,
     initial_capital=10_000,
     position_size_percent=100,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
     strategy="SIGNAL_GATED",
     min_confidence=MIN_ENTRY_CONFIDENCE,

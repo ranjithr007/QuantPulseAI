@@ -33,6 +33,7 @@ from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 
 router = APIRouter(prefix="/backtest", tags=["Backtesting"])
@@ -55,7 +56,7 @@ def filtered_backtest_summary(
     stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
     target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
     cooldown_candles: int = Query(default=3, ge=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
     target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
@@ -115,7 +116,7 @@ def portfolio_replay_report(
     stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
     target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
     cooldown_candles: int = Query(default=3, ge=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
     target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
@@ -216,7 +217,7 @@ def collision_sensitivity_report(
     stop_atr_multiple: float = Query(default=1.5, gt=0, le=20),
     target_atr_multiple: float = Query(default=3.5, gt=0, le=50),
     cooldown_candles: int = Query(default=3, ge=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
     target_trade_volatility_percent: float | None = Query(default=None, gt=0, le=100),
@@ -292,7 +293,7 @@ def walk_forward_validation(
     target_grid: str = Query(default="1.5,2,2.5,3"),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
     risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
@@ -378,7 +379,7 @@ def submit_walk_forward_validation_job(
     target_grid: str = Query(default="1.5,2,2.5,3"),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
     risk_percent_per_trade: float | None = Query(default=None, gt=0, le=100),
@@ -496,7 +497,7 @@ def phase2_validation_report(
     target_grid: str = Query(default="1.5,2,2.5,3"),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
     as_of: datetime | None = Query(default=None),
@@ -555,7 +556,7 @@ def export_phase2_validation_report(
     target_grid: str = Query(default="1.5,2,2.5,3"),
     initial_capital: float = Query(default=10_000, gt=0),
     position_size_percent: float = Query(default=100, gt=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
     strategy: str = Query(default="SIGNAL_GATED", pattern=WALK_FORWARD_STRATEGIES),
     as_of: datetime | None = Query(default=None),
@@ -670,7 +671,7 @@ def backtest_summary(
     position_size_percent: float = Query(default=100, gt=0, le=100),
     stop_percent: float = Query(default=1, gt=0, le=50),
     target_percent: float = Query(default=2, gt=0, le=100),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
     slippage_bps: float = Query(default=2, ge=0, le=1000),
 ):
     result = execute_backtest(

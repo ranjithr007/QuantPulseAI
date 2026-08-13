@@ -16,6 +16,7 @@ from app.database.models.paper_trade import PaperTrade
 from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
+from app.trading.trade_plan_engine import build_trade_plan
 
 
 class Phase1PaperTradeLifecycleTests(unittest.TestCase):
@@ -38,16 +39,17 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
 
     def test_candidate_to_fill_to_close_to_pnl(self):
         now = datetime.utcnow().replace(microsecond=0)
+        governed = build_trade_plan("LONG", 100.0, 1.0, confidence=80)
         with self.Session() as db:
             plan = TradePlan(
                 symbol="BTCUSDT",
                 side="LONG",
                 entry_price=100.0,
-                stop_loss=99.0,
-                target1=102.0,
-                target2=103.0,
-                target3=104.0,
-                risk_reward=2.0,
+                stop_loss=governed["stop_loss"],
+                target1=governed["target1"],
+                target2=governed["target2"],
+                target3=governed["target3"],
+                risk_reward=governed["risk_reward"],
                 confidence=80.0,
                 mode="intraday",
                 entry_timeframe="1h",
@@ -64,10 +66,10 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     signal="LONG",
                     decision="APPROVE",
                     entry_price=100.0,
-                    stop_loss=99.0,
-                    target1=102.0,
-                    target2=103.0,
-                    risk_reward=2.0,
+                    stop_loss=governed["stop_loss"],
+                    target1=governed["target1"],
+                    target2=governed["target2"],
+                    risk_reward=governed["risk_reward"],
                     position_size=1.25,
                     risk_percent=1.0,
                     confidence=80.0,
@@ -97,7 +99,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     symbol="BTCUSDT",
                     timeframe="1h",
                     open_price=100.5,
-                    high_price=103.0,
+                    high_price=112.0,
                     low_price=100.0,
                     close_price=102.5,
                     volume=1000,
