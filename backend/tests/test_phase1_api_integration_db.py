@@ -25,6 +25,7 @@ from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import Base
 from app.api.v1 import paper_trade_api
 from app.main import app
+from app.trading.trade_plan_engine import build_trade_plan
 
 
 class Phase1ApiIntegrationDbTests(unittest.TestCase):
@@ -55,16 +56,17 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         with TestSessionLocal() as db:
             trade_created_at = datetime.utcnow() - timedelta(minutes=2)
             risk_created_at = datetime.utcnow() - timedelta(minutes=1)
+            governed = build_trade_plan("LONG", 100.0, 1.0, confidence=50)
 
             trade = TradePlan(
                 symbol="BTCUSDT",
                 side="LONG",
                 entry_price=100.0,
-                stop_loss=99.0,
-                target1=102.0,
-                target2=104.0,
-                target3=106.0,
-                risk_reward=2.0,
+                stop_loss=governed["stop_loss"],
+                target1=governed["target1"],
+                target2=governed["target2"],
+                target3=governed["target3"],
+                risk_reward=governed["risk_reward"],
                 confidence=50.0,
                 entry_timeframe="1h",
                 status="OPEN",
@@ -78,10 +80,10 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
                 signal="LONG",
                 decision="APPROVE",
                 entry_price=100.0,
-                stop_loss=99.0,
-                target1=102.0,
-                target2=104.0,
-                risk_reward=2.0,
+                stop_loss=governed["stop_loss"],
+                target1=governed["target1"],
+                target2=governed["target2"],
+                risk_reward=governed["risk_reward"],
                 position_size=1.0,
                 risk_percent=1.0,
                 confidence=50.0,
@@ -99,7 +101,7 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(payload["eligible_count"], 1)
         self.assertEqual(payload["blocked_count"], 0)
         self.assertTrue(payload["records"][0]["eligible"])
-        self.assertEqual(payload["records"][0]["fill_profile"]["entry_fill_price"], 100.06)
+        self.assertEqual(payload["records"][0]["fill_profile"]["entry_fill_price"], 100.14)
 
         executed = self.client.post("/paper-trade/execute-candidates?symbol=BTCUSDT")
         self.assertEqual(executed.status_code, 200)
@@ -109,8 +111,8 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(execution["executed_count"], 1)
         self.assertEqual(execution["skipped_count"], 0)
         self.assertEqual(execution["executed"][0]["status"], "OPEN")
-        self.assertEqual(execution["executed"][0]["fill_profile"]["entry_fill_price"], 100.06)
-        self.assertEqual(execution["executed"][0]["entry_price"], 100.06)
+        self.assertEqual(execution["executed"][0]["fill_profile"]["entry_fill_price"], 100.14)
+        self.assertEqual(execution["executed"][0]["entry_price"], 100.14)
 
         open_trades = self.client.get("/paper-trade/trades?status=OPEN&symbol=BTCUSDT")
         self.assertEqual(open_trades.status_code, 200)
@@ -119,7 +121,7 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(open_payload["count"], 1)
         self.assertEqual(open_payload["summary"]["open"], 1)
         self.assertEqual(open_payload["summary"]["closed"], 0)
-        self.assertEqual(open_payload["records"][0]["entry_price"], 100.06)
+        self.assertEqual(open_payload["records"][0]["entry_price"], 100.14)
 
         performance = self.client.get("/paper-trade/performance?symbol=BTCUSDT")
         self.assertEqual(performance.status_code, 200)

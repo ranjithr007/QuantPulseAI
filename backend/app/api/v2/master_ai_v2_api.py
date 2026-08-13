@@ -80,7 +80,12 @@ def build_master_ai_response(symbol: str, timeframe: str, stale_after_seconds: i
 
         current_price = float(candle.close_price)
         atr = _latest_atr(data["feature"], current_price)
-        trade = build_trade_plan(result["signal"], current_price, atr)
+        trade = build_trade_plan(
+            result["signal"],
+            current_price,
+            atr,
+            confidence=result["confidence"],
+        )
         validation = validate_trade_plan_direction(
             result["signal"], trade["entry"], trade["target1"]
         )

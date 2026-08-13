@@ -25,6 +25,7 @@ from app.intelligence.multi_timeframe_engine import combine_timeframe_signals
 from app.jobs.deterministic_pipeline_job import STAGE_ORDER
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.fusion_signal_repository import FusionSignalRepository
+from app.trading.trade_plan_engine import build_trade_plan
 
 
 def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
@@ -66,6 +67,7 @@ def test_governed_score_and_position_tier_boundaries():
 
 
 def test_selected_timeframe_confidence_drives_watchlist_and_risk():
+    governed = build_trade_plan("SHORT", 100, 1, confidence=49)
     payload = {
         "symbol": "XRPUSDT",
         "timeframes_used": list(OFFICIAL_ENTRY_TIMEFRAMES),
@@ -87,11 +89,11 @@ def test_selected_timeframe_confidence_drives_watchlist_and_risk():
             "trade_permission": "SHORT_ALLOWED",
         },
         "trade_plan": {
-            "entry": 100,
-            "stop_loss": 101,
-            "target1": 98,
-            "target2": 97,
-            "risk_reward": 2.0,
+            "entry": governed["entry"],
+            "stop_loss": governed["stop_loss"],
+            "target1": governed["target1"],
+            "target2": governed["target2"],
+            "risk_reward": governed["risk_reward"],
         },
         "trade_plan_validation": {"is_valid": True, "errors": []},
     }

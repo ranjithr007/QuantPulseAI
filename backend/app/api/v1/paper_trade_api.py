@@ -24,6 +24,7 @@ from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.paper_trading.validation_policy import build_architecture_paper_gate
 from app.risk.risk_engine import RiskEngine
 from app.risk.confidence_sizing import confidence_sizing_profile
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.point_in_time_snapshot_repository import list_decision_snapshots
@@ -609,7 +610,7 @@ def get_paper_trade_fill_model(
     target1: float | None = Query(default=None),
     confidence: float = Query(default=50, ge=0, le=100),
     risk_reward: float | None = Query(default=None),
-    fee_bps: float = Query(default=4, ge=0, le=1000),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
 ):
     return {
         "source": "paper_trade_fill_model",
@@ -1355,7 +1356,6 @@ def _summarize_paper_trades(records):
 
 def _paper_trade_candidate(trade, risk, stale_after_seconds, derivatives=None):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
-    blocked_reasons = _paper_trade_blocked_reasons(trade, risk, risk_payload, derivatives)
     fill_profile = build_fill_profile(
         side=trade.side,
         planned_entry_price=trade.entry_price,
@@ -1363,6 +1363,13 @@ def _paper_trade_candidate(trade, risk, stale_after_seconds, derivatives=None):
         target1=trade.target1,
         confidence=risk_payload.get("confidence", trade.confidence or 50),
         risk_reward=trade.risk_reward,
+    )
+    blocked_reasons = _paper_trade_blocked_reasons(
+        trade,
+        risk,
+        risk_payload,
+        derivatives,
+        fill_profile=fill_profile,
     )
 
     return {
@@ -1433,7 +1440,13 @@ def _risk_decision_payload(risk, stale_after_seconds):
     }
 
 
-def _paper_trade_blocked_reasons(trade, risk, risk_payload, derivatives=None):
+def _paper_trade_blocked_reasons(
+    trade,
+    risk,
+    risk_payload,
+    derivatives=None,
+    fill_profile=None,
+):
     reasons = []
 
     if risk is None:
@@ -1465,6 +1478,12 @@ def _paper_trade_blocked_reasons(trade, risk, risk_payload, derivatives=None):
 
     if trade.created_at and risk.created_at and risk.created_at < trade.created_at:
         reasons.append("Risk decision is older than trade plan")
+
+    effective_rr = (fill_profile or {}).get("effective_risk_reward")
+    if effective_rr is None or float(effective_rr) < risk_engine.MIN_RISK_REWARD:
+        reasons.append(
+            "Net risk reward is below 2.0 after estimated futures fees and slippage"
+        )
 
     return reasons
 
@@ -1527,6 +1546,7 @@ def _risk_reason(risk):
             target2=risk.target2,
             confidence=risk.confidence or 0,
             risk_percent=risk.risk_percent or 1,
+            fee_bps=DEFAULT_FEE_BPS,
         )
     except Exception:
         return None

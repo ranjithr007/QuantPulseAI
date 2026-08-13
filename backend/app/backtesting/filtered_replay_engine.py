@@ -20,6 +20,7 @@ from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.freshness import normalize_timestamp_to_utc
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 
 ENGINE_VERSION = "filtered_replay_v1"
@@ -174,7 +175,7 @@ class FilteredReplayConfig:
     target_atr_multiple: float = 3.5
     cooldown_candles: int = 3
     warmup_candles: int = 50
-    fee_bps: float = 4.0
+    fee_bps: float = DEFAULT_FEE_BPS
     slippage_bps: float = 2.0
     risk_percent_per_trade: float | None = None
     target_trade_volatility_percent: float | None = None
@@ -263,7 +264,7 @@ def run_filtered_replay(
     target_atr_multiple=3.5,
     cooldown_candles=3,
     warmup_candles=50,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
     gate_profile="STRICT",
     regime_detector=None,

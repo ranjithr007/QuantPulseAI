@@ -11,6 +11,7 @@ from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.risk.risk_engine import RiskEngine
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
 from app.repositories.automation_settings_repository import get_automation_settings
@@ -51,13 +52,16 @@ def _build_computed_risk(signal, max_risk_per_trade, stale_after_seconds):
         return None
 
     try:
-        result = risk_engine.analyze(
-            signal.get("symbol"),
-            signal.get("signal"),
-            price,
-            atr,
-            _effective_confidence(signal),
+        result = risk_engine.analyze_trade_plan(
+            symbol=signal.get("symbol"),
+            side=signal.get("signal"),
+            entry=trade_plan.get("entry"),
+            stop_loss=trade_plan.get("stop_loss"),
+            target1=trade_plan.get("target1"),
+            target2=trade_plan.get("target2"),
+            confidence=_effective_confidence(signal),
             risk_percent=max_risk_per_trade,
+            fee_bps=DEFAULT_FEE_BPS,
         )
     except Exception:
         return None
@@ -336,6 +340,7 @@ def _risk_reason(risk):
             target2=risk.target2,
             confidence=risk.confidence or 0,
             risk_percent=risk.risk_percent or 1,
+            fee_bps=DEFAULT_FEE_BPS,
         )
     except Exception:
         return None

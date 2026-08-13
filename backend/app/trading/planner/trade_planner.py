@@ -3,6 +3,7 @@ from .stop_engine import StopEngine
 from .target_engine import TargetEngine
 from .position_engine import PositionEngine
 from .invalidation_engine import InvalidationEngine
+from app.trading.trade_plan_engine import build_trade_plan
 
 
 class TradePlanner:
@@ -27,7 +28,18 @@ class TradePlanner:
 
         stop = self.stop.calculate(entry, atr, side)
 
-        targets = self.target.calculate(entry, stop, side)
+        governed = build_trade_plan(
+            side,
+            entry,
+            atr,
+            confidence=signal["confidence"],
+        )
+        stop = governed["stop_loss"]
+        targets = [
+            governed["target1"],
+            governed["target2"],
+            governed["target3"],
+        ]
         invalidation = self.invalidation.calculate(side, entry, stop, atr)
 
         return {
@@ -37,6 +49,8 @@ class TradePlanner:
             "stop_loss": round(stop, 2),
             "targets": targets,
             "invalidation": invalidation,
-            "rr": self.position.calculate_rr(entry, stop, targets[-1]),
+            "rr": governed["risk_reward"],
+            "gross_rr": governed["gross_risk_reward"],
+            "cost_model": governed["cost_model"],
             "confidence": signal["confidence"],
         }

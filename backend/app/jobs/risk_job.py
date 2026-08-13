@@ -21,6 +21,7 @@ from app.repositories.trade_plan_repository import TradePlanRepository
 from app.repositories._db_utils import safe_rollback
 
 from app.risk.risk_engine import RiskEngine
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
@@ -540,6 +541,7 @@ class RiskJob:
                         self._get_value(trade, "confidence")
                     ),
                     risk_percent=self._active_risk_percent,
+                    fee_bps=DEFAULT_FEE_BPS,
                 )
 
                 confidence = self._normalize_confidence(

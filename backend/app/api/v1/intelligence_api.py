@@ -133,7 +133,12 @@ def get_intelligence_snapshot(
                 stale_after_seconds,
             ),
             "signal": signal,
-            "trade_plan": build_trade_plan(signal["signal"], current_price, atr),
+            "trade_plan": build_trade_plan(
+                signal["signal"],
+                current_price,
+                atr,
+                confidence=signal["confidence"],
+            ),
             "inputs": {
                 "feature": freshness_status(
                     getattr(inputs["feature"], "CreatedAt", None),

@@ -7,6 +7,7 @@ from app.governance.evidence_policy import MINIMUM_TIER_RISK_PERCENT
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.risk.position_sizing import PositionSizer
+from app.trading.futures_cost_model import trade_cost_profile
 
 
 class RiskEngine:
@@ -47,6 +48,7 @@ class RiskEngine:
         capital=10000,
         risk_percent=1,
         min_confidence=None,
+        fee_bps=None,
     ):
         raw_signal = str(signal).strip().upper() if signal is not None else ""
 
@@ -115,6 +117,7 @@ class RiskEngine:
             risk_percent=risk_percent,
             capital=capital,
             min_confidence=min_confidence,
+            fee_bps=fee_bps,
         )
 
         if result["decision"] == "APPROVE":
@@ -134,6 +137,7 @@ class RiskEngine:
         risk_percent=1,
         capital=10000,
         min_confidence=None,
+        fee_bps=None,
     ):
         # Required values must be checked before comparisons.
         if entry is None or stop_loss is None or target1 is None:
@@ -353,9 +357,37 @@ class RiskEngine:
             reward_distance = entry - target1
 
         raw_rr = reward_distance / risk_distance
+        cost_profile = None
+        effective_rr = raw_rr
+        if fee_bps is not None:
+            try:
+                fee_bps = self._to_finite_float("fee_bps", fee_bps)
+                if fee_bps < 0:
+                    raise ValueError("fee_bps must be zero or greater")
+                cost_profile = trade_cost_profile(
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    confidence=confidence,
+                    fee_bps=fee_bps,
+                )
+                effective_rr = float(cost_profile["net_risk_reward"])
+            except (TypeError, ValueError) as exc:
+                return self._reject_trade_plan(
+                    symbol,
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    target2,
+                    confidence,
+                    risk_percent,
+                    str(exc),
+                )
 
         # Compare before rounding.
-        if raw_rr < self.MIN_RISK_REWARD:
+        if effective_rr < self.MIN_RISK_REWARD:
             return self._reject_trade_plan(
                 symbol=symbol,
                 side=canonical_side,
@@ -365,8 +397,12 @@ class RiskEngine:
                 target2=target2,
                 confidence=confidence,
                 risk_percent=risk_percent,
-                reason="Risk reward below minimum threshold",
-                risk_reward=round(raw_rr, 2),
+                reason=(
+                    "Net risk reward below minimum threshold after futures costs"
+                    if cost_profile is not None
+                    else "Risk reward below minimum threshold"
+                ),
+                risk_reward=round(effective_rr, 4),
             )
 
         try:
@@ -387,7 +423,7 @@ class RiskEngine:
                 confidence,
                 risk_percent,
                 str(exc),
-                risk_reward=round(raw_rr, 2),
+                risk_reward=round(effective_rr, 4),
             )
 
         result = {
@@ -401,7 +437,7 @@ class RiskEngine:
                 "t1": target1,
                 "t2": target2,
             },
-            "risk_reward": round(raw_rr, 2),
+            "risk_reward": round(effective_rr, 4),
             "position_size": position_size,
             "risk_percent": effective_risk_percent,
             "requested_risk_percent": sizing_profile["requested_risk_percent"],
@@ -410,6 +446,14 @@ class RiskEngine:
             "risk_amount": capital * effective_risk_percent / 100,
             "confidence": confidence,
         }
+        if cost_profile is not None:
+            result.update(
+                {
+                    "gross_risk_reward": round(raw_rr, 4),
+                    "cost_model": "paper_futures_net_rr_v1",
+                    "fee_bps_per_side": fee_bps,
+                }
+            )
         if min_confidence is not None:
             result["minimum_confidence"] = effective_min_confidence
         return result

@@ -199,7 +199,7 @@ def test_trade_setup_payload_persists_ready_decision_snapshot(monkeypatch):
     monkeypatch.setattr(
         signals_api,
         "build_trade_plan",
-        lambda side, current_price, atr: {
+        lambda side, current_price, atr, **kwargs: {
             "entry": current_price,
             "target1": current_price + 2,
             "target2": current_price + 3,
@@ -362,7 +362,7 @@ def test_entry_trigger_payload_persists_ready_decision_snapshot(monkeypatch):
     monkeypatch.setattr(
         signals_api,
         "build_trade_plan",
-        lambda side, current_price, atr: {
+        lambda side, current_price, atr, **kwargs: {
             "entry": current_price,
             "target1": current_price + 2,
             "target2": current_price + 3,
@@ -434,7 +434,7 @@ def test_entry_trigger_payload_builds_plan_from_selected_governed_timeframe(monk
     monkeypatch.setattr(
         signals_api,
         "build_trade_plan",
-        lambda side, current_price, atr: {
+        lambda side, current_price, atr, **kwargs: {
             "entry": current_price,
             "stop_loss": 99,
             "target1": 102,

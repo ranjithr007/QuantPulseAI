@@ -64,6 +64,19 @@ eligibility gates and may block a candidate. This threshold does not bypass
 direction, reward/risk, timeframe confirmation, freshness, risk, or the
 one-active-trade lock.
 
+Paper-futures targets must be cost-aware. The target engine estimates adverse
+entry, stop, and target fills plus the configured fee on both sides of the trade.
+The governed paper-futures planning baseline uses a **5% market-price stop** and
+an estimated **0.15% round-trip transaction fee** (`7.5` basis points per side),
+with slippage modeled separately. The first target is therefore farther than a
+raw 10% move when required to preserve the net reward/risk boundary.
+Target 1 must preserve at least **2:1 net reward/risk** after those estimated
+costs, Target 2 must preserve at least **3:1 net reward/risk**, and the optional
+extended target must preserve at least **4:1 net reward/risk**. A plan that only
+appears to reach 2:1 before costs must not execute. Funding is charged from the
+actual funding events when paper P&L is closed; it is reported separately because
+its future value and holding duration are not known at entry time.
+
 Selection must be deterministic. If two candidates cannot be separated by the
 governed ranking and tie-breaking policy, the safe result is no new trade.
 

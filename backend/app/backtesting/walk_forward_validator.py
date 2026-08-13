@@ -11,6 +11,7 @@ from app.backtesting.backtest_engine import chronological_candles
 from app.backtesting.backtest_engine import run_backtest
 from app.backtesting.performance_engine import calculate_performance
 from app.backtesting.replay_contract import build_replay_input_contract
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 
 WALK_FORWARD_VERSION = "walk_forward_v1"
@@ -76,7 +77,7 @@ def run_walk_forward(
     min_train_trades=3,
     initial_capital=10_000,
     position_size_percent=100,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
     slippage_bps=2,
     backtest_runner=run_backtest,
     strategy_name="DIRECTIONAL_REENTRY_BASELINE",

@@ -150,6 +150,61 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertEqual(risk["risk_percent"], 1.0)
         self.assertEqual(risk["risk_amount"], 100.0)
 
+    def test_futures_cost_gate_rejects_apparent_two_to_one_plan(self):
+        risk = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            target1=102.0,
+            confidence=50,
+            fee_bps=4,
+        )
+
+        self.assertEqual(risk["decision"], "REJECT")
+        self.assertEqual(
+            risk["reason"],
+            "Net risk reward below minimum threshold after futures costs",
+        )
+        self.assertLess(risk["risk_reward"], 2.0)
+
+    def test_cost_adjusted_long_and_short_plans_preserve_net_two_to_one(self):
+        for side in ("LONG", "SHORT"):
+            plan = build_trade_plan(side, 100.0, 1.0, confidence=50)
+            risk = RiskEngine().analyze_trade_plan(
+                symbol="BTCUSDT",
+                side=side,
+                entry=plan["entry"],
+                stop_loss=plan["stop_loss"],
+                target1=plan["target1"],
+                target2=plan["target2"],
+                confidence=50,
+                fee_bps=7.5,
+            )
+
+            self.assertEqual(risk["decision"], "APPROVE")
+            self.assertGreaterEqual(risk["risk_reward"], 2.0)
+            self.assertEqual(risk["cost_model"], "paper_futures_net_rr_v1")
+            self.assertGreater(plan["gross_risk_reward"], 2.0)
+            self.assertGreaterEqual(plan["target2_net_risk_reward"], 3.0)
+
+    def test_governed_futures_plan_uses_five_percent_stop_and_point_fifteen_percent_fees(self):
+        long_plan = build_trade_plan("LONG", 100.0, 1.0, confidence=50)
+        short_plan = build_trade_plan("SHORT", 100.0, 1.0, confidence=50)
+
+        self.assertEqual(long_plan["stop_loss"], 95.0)
+        self.assertEqual(short_plan["stop_loss"], 105.0)
+        self.assertEqual(long_plan["stop_loss_percent"], 5.0)
+        self.assertEqual(long_plan["estimated_costs"]["fee_bps_per_side"], 7.5)
+        self.assertEqual(
+            long_plan["estimated_costs"]["estimated_round_trip_fee_percent"],
+            0.15,
+        )
+        self.assertGreater(long_plan["target1"], 110.0)
+        self.assertLess(short_plan["target1"], 90.0)
+        self.assertGreaterEqual(long_plan["risk_reward"], 2.0)
+        self.assertGreaterEqual(short_plan["risk_reward"], 2.0)
+
     def test_minimum_tier_never_exceeds_configured_risk_cap(self):
         risk = RiskEngine().analyze_trade_plan(
             symbol="BTCUSDT",
@@ -184,16 +239,19 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
 
         self.assertEqual(trade["price_precision"], 5)
         self.assertEqual(trade["entry"], 1.21456)
-        self.assertEqual(trade["stop_loss"], 1.21135)
-        self.assertEqual(trade["target1"], 1.22098)
+        self.assertEqual(trade["stop_loss"], 1.15383)
+        self.assertEqual(trade["target1"], 1.35158)
+        self.assertGreaterEqual(trade["risk_reward"], 2.0)
+        self.assertEqual(trade["cost_model"], "paper_futures_net_rr_v1")
 
     def test_trade_plan_keeps_two_decimals_for_large_price_symbols(self):
         trade = build_trade_plan("LONG", 65688.0, 63.2278)
 
         self.assertEqual(trade["price_precision"], 2)
         self.assertEqual(trade["entry"], 65688.0)
-        self.assertEqual(trade["stop_loss"], 65624.77)
-        self.assertEqual(trade["target1"], 65814.46)
+        self.assertEqual(trade["stop_loss"], 62403.6)
+        self.assertEqual(trade["target1"], 73098.51)
+        self.assertGreaterEqual(trade["risk_reward"], 2.0)
 
     def test_price_precision_bands(self):
         self.assertEqual(price_precision(0.5), 6)

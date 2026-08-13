@@ -30,7 +30,7 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "CLOSE")
         self.assertEqual(result["result"], "WIN")
-        self.assertEqual(result["exit_price"], 101.94)
+        self.assertEqual(result["exit_price"], 101.95)
         self.assertIn("fill_profile", result)
         self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET")
 
@@ -74,7 +74,7 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "CLOSE")
         self.assertEqual(result["result"], "WIN")
-        self.assertEqual(result["exit_price"], 98.0595)
+        self.assertEqual(result["exit_price"], 98.0496)
         self.assertIn("fill_profile", result)
         self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET")
 

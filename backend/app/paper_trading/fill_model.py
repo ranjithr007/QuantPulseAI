@@ -1,4 +1,8 @@
 from app.trading.trade_plan_engine import price_precision
+from app.trading.futures_cost_model import estimate_entry_slippage_rate
+from app.trading.futures_cost_model import estimate_slippage_rates
+from app.trading.futures_cost_model import trade_cost_profile
+from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 
 def build_fill_profile(
@@ -8,7 +12,7 @@ def build_fill_profile(
     target1=None,
     confidence=50,
     risk_reward=None,
-    fee_bps=4,
+    fee_bps=DEFAULT_FEE_BPS,
 ):
     if planned_entry_price is None:
         return {
@@ -35,7 +39,13 @@ def build_fill_profile(
         confidence,
         risk_reward,
     )
-    exit_slippage_pct = round(max(0.00005, entry_slippage_pct * 0.5), 6)
+    slippage = estimate_slippage_rates(
+        planned_entry_price,
+        stop_loss,
+        confidence=confidence,
+        risk_reward=risk_reward or 2,
+    )
+    exit_slippage_pct = slippage["target"]
     direction = 1 if str(side).upper() == "LONG" else -1
     entry_fill_price = float(planned_entry_price) * (1 + direction * entry_slippage_pct)
     entry_fill_price = round(entry_fill_price, precision)
@@ -43,11 +53,19 @@ def build_fill_profile(
         abs(entry_fill_price - float(planned_entry_price)),
         precision,
     )
-    effective_rr = _effective_risk_reward(
-        str(side).upper(),
-        entry_fill_price,
-        stop_loss,
-        target1,
+    cost_profile = None
+    if stop_loss is not None and target1 is not None:
+        cost_profile = trade_cost_profile(
+            str(side).upper(),
+            planned_entry_price,
+            stop_loss,
+            target1,
+            confidence=confidence,
+            fee_bps=fee_bps,
+            slippage=slippage,
+        )
+    effective_rr = (
+        cost_profile["net_risk_reward"] if cost_profile is not None else None
     )
 
     if entry_slippage_pct <= 0.0004:
@@ -81,6 +99,29 @@ def build_fill_profile(
         ),
         "fill_quality": fill_quality,
         "effective_risk_reward": effective_rr,
+        "gross_risk_reward": (
+            cost_profile["gross_risk_reward"] if cost_profile is not None else None
+        ),
+        "net_reward_amount": (
+            round(cost_profile["net_reward"], precision)
+            if cost_profile is not None
+            else None
+        ),
+        "net_loss_amount": (
+            round(cost_profile["net_loss"], precision)
+            if cost_profile is not None
+            else None
+        ),
+        "estimated_stop_fill_price": (
+            round(cost_profile["stop_fill"], precision)
+            if cost_profile is not None
+            else None
+        ),
+        "estimated_target_fill_price": (
+            round(cost_profile["target_fill"], precision)
+            if cost_profile is not None
+            else None
+        ),
         "fee_bps": float(fee_bps),
         "estimated_round_trip_fee_percent": round(float(fee_bps) * 2 / 100, 4),
         "confidence": confidence,
@@ -95,14 +136,15 @@ def simulate_exit_fill(trade, trigger_price, trigger_type="TARGET"):
     stop_loss = getattr(trade, "stop_loss", None)
     target1 = getattr(trade, "target1", None)
     reference_entry = planned_entry if planned_entry is not None else trigger_price
-    base_slippage_pct = _entry_slippage_pct(
+    slippage = estimate_slippage_rates(
         reference_entry,
         stop_loss,
-        confidence,
-        getattr(trade, "risk_reward", None),
+        confidence=confidence,
+        risk_reward=getattr(trade, "risk_reward", None) or 2,
     )
-    trigger_factor = 1.25 if trigger_type == "STOP" else 0.6
-    exit_slippage_pct = round(max(0.00005, base_slippage_pct * trigger_factor), 6)
+    exit_slippage_pct = (
+        slippage["stop"] if trigger_type == "STOP" else slippage["target"]
+    )
     direction = -1 if side == "LONG" else 1
     fill_price = float(trigger_price) * (1 + direction * exit_slippage_pct)
     precision = price_precision(float(trigger_price))
@@ -126,38 +168,12 @@ def simulate_exit_fill(trade, trigger_price, trigger_type="TARGET"):
 
 
 def _entry_slippage_pct(planned_entry_price, stop_loss, confidence, risk_reward):
-    entry_price = float(planned_entry_price)
-    stop_distance_pct = 0 if stop_loss is None else abs(entry_price - float(stop_loss)) / entry_price
-    confidence_penalty = max(0.0, (75 - confidence)) * 0.00001
-    volatility_penalty = min(0.001, stop_distance_pct * 0.02)
-    rr_penalty = 0.0
-
-    if risk_reward is not None:
-        rr_penalty = max(0.0, (2.0 - float(risk_reward))) * 0.0001
-
-    slippage_pct = 0.00015 + confidence_penalty + volatility_penalty + rr_penalty
-    return round(_clamp(slippage_pct, 0.00005, 0.003), 6)
-
-
-def _effective_risk_reward(side, entry_fill_price, stop_loss, target1):
-    if stop_loss is None or target1 is None or entry_fill_price is None:
-        return None
-
-    entry_fill_price = float(entry_fill_price)
-    stop_loss = float(stop_loss)
-    target1 = float(target1)
-
-    if side == "LONG":
-        risk = abs(entry_fill_price - stop_loss)
-        reward = abs(target1 - entry_fill_price)
-    else:
-        risk = abs(stop_loss - entry_fill_price)
-        reward = abs(entry_fill_price - target1)
-
-    if risk == 0:
-        return None
-
-    return round(reward / risk, 2)
+    return estimate_entry_slippage_rate(
+        planned_entry_price,
+        stop_loss,
+        confidence=confidence,
+        risk_reward=risk_reward or 2,
+    )
 
 
 def _clamp(value, minimum, maximum):

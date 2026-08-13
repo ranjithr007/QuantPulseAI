@@ -37,7 +37,7 @@ class PaperTrade(Base):
     funding_cost_percent = Column(Float, nullable=True)
     open_interest_snapshot = Column(Float, nullable=True)
     open_interest_change_percent = Column(Float, nullable=True)
-    fee_bps = Column(Float, default=4.0)
+    fee_bps = Column(Float, default=7.5)
     fees_percent = Column(Float, nullable=True)
     gross_pnl_percent = Column(Float, nullable=True)
     status = Column(String(20), default="OPEN", index=True)
