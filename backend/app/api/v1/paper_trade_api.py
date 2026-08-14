@@ -510,7 +510,644 @@ def create_phase2_evidence_checkpoint(payload: dict = Body(default={})):
                     "reason": checkpoint["reason"],
                     "details": checkpoint,
                     "observed_at": payload.get("observed_at"),
-                    "effective_at": p…5118 tokens truncated…"status": "NO_ACTIVE_SYMBOLS",
+                    "effective_at": payload.get("observed_at"),
+                }
+            ],
+        )
+        return {
+            "source": "phase2_daily_evidence_checkpoint",
+            "status": "RECORDED",
+            "record": records[0] if records else None,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/evidence-checkpoints")
+def get_phase2_evidence_checkpoints(
+    limit: int = Query(default=30, ge=1, le=365),
+):
+    db = SessionLocal()
+
+    try:
+        records = DataQualityEventRepository().list_events(
+            db,
+            source=PHASE2_CHECKPOINT_EVENT_SOURCE,
+            category=PHASE2_CHECKPOINT_EVENT_CATEGORY,
+            limit=limit,
+        )
+        return {
+            "source": "phase2_daily_evidence_checkpoint",
+            "status": "OK",
+            "count": len(records),
+            "latest": records[0] if records else None,
+            "records": records,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/bundle", response_model=PaperTradeBundleResponse)
+def get_paper_trade_bundle(
+    symbol: str | None = Query(default=None),
+    include_all: bool = Query(default=False),
+):
+    db = SessionLocal()
+
+    try:
+        return build_paper_trade_bundle(
+            db,
+            symbol=symbol,
+            open_limit=None if include_all else 120,
+            closed_limit=None if include_all else 200,
+        )
+
+    except SQLAlchemyError:
+        return _paper_trade_unavailable_payload(
+            operation="bundle",
+            symbol_filter=symbol,
+            detail="Paper-trade bundle is unavailable because the database is not reachable.",
+        )
+
+    finally:
+        db.close()
+
+
+@router.get("/trades")
+def get_paper_trades(
+    status: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    db = SessionLocal()
+
+    try:
+        normalized_status = status.upper() if status else None
+        normalized_symbol = symbol.upper() if symbol else None
+        repo = PaperTradeRepository()
+        records = [
+            _paper_trade_payload(trade)
+            for trade in repo.list_trades(
+                db,
+                status=normalized_status,
+                symbol=normalized_symbol,
+                limit=limit,
+            )
+        ]
+
+        return {
+            "source": "paper_trades",
+            "status_filter": normalized_status,
+            "symbol_filter": normalized_symbol,
+            "count": len(records),
+            "summary": _summarize_paper_trades(records),
+            "records": records,
+        }
+
+    except SQLAlchemyError as exc:
+        return _paper_trade_unavailable_payload(
+            operation="trades",
+            symbol_filter=symbol,
+            status_filter=normalized_status,
+            detail="Paper-trade list is unavailable because the database is not reachable.",
+        )
+
+    finally:
+        db.close()
+
+
+@router.get("/candidates")
+def get_paper_trade_candidates(
+    symbol: str | None = Query(default=None),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    db = SessionLocal()
+
+    try:
+        normalized_symbol, records = build_paper_trade_candidates(
+            db,
+            symbol,
+            stale_after_seconds,
+        )
+        eligible = [
+            item
+            for item in records
+            if item["eligible"]
+        ]
+
+        return {
+            "source": "paper_trade_candidates",
+            "symbol_filter": normalized_symbol,
+            "count": len(records),
+            "eligible_count": len(eligible),
+            "blocked_count": len(records) - len(eligible),
+            "records": records,
+        }
+
+    except SQLAlchemyError as exc:
+        return _paper_trade_unavailable_payload(
+            operation="candidates",
+            symbol_filter=symbol,
+            detail="Paper-trade candidates are unavailable because the database is not reachable.",
+        )
+
+    finally:
+        db.close()
+
+
+@router.get("/fill-model")
+def get_paper_trade_fill_model(
+    side: str = Query(...),
+    planned_entry_price: float = Query(..., gt=0),
+    stop_loss: float | None = Query(default=None),
+    target1: float | None = Query(default=None),
+    confidence: float = Query(default=50, ge=0, le=100),
+    risk_reward: float | None = Query(default=None),
+    fee_bps: float = Query(default=DEFAULT_FEE_BPS, ge=0, le=1000),
+):
+    return {
+        "source": "paper_trade_fill_model",
+        "profile": build_fill_profile(
+            side=side,
+            planned_entry_price=planned_entry_price,
+            stop_loss=stop_loss,
+            target1=target1,
+            confidence=confidence,
+            risk_reward=risk_reward,
+            fee_bps=fee_bps,
+        ),
+    }
+
+
+@router.post("/execute-candidates", response_model=PaperTradeExecutionResponse)
+def execute_paper_trade_candidates(
+    symbol: str | None = Query(default=None),
+    stale_after_seconds: int = Query(default=900, ge=1),
+):
+    return execute_paper_trade_candidates_for_symbol(
+        symbol=symbol,
+        stale_after_seconds=stale_after_seconds,
+    )
+
+
+def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=900):
+    db = SessionLocal()
+
+    try:
+        normalized_symbol, records = build_paper_trade_candidates(
+            db,
+            symbol,
+            stale_after_seconds,
+        )
+        repo = PaperTradeRepository()
+        executed = []
+        skipped = []
+
+        eligible_by_symbol = defaultdict(list)
+        for candidate in records:
+            if not candidate["eligible"]:
+                coin_blockers = (
+                    candidate.get("blocker_scopes", {}).get("coin") or []
+                )
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": (
+                            "skipped_existing_open_paper_trade"
+                            if "Active trade already exists for this coin" in coin_blockers
+                            else "skipped_not_eligible"
+                        ),
+                        "blocked_reasons": candidate["blocked_reasons"],
+                    }
+                )
+                continue
+            eligible_by_symbol[str(candidate["symbol"]).upper()].append(candidate)
+
+        for candidate_symbol, candidates in sorted(eligible_by_symbol.items()):
+            if repo.has_open_trade(db, candidate_symbol):
+                skipped.extend(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_existing_open_paper_trade",
+                    }
+                    for candidate in candidates
+                )
+                continue
+
+            winner = max(candidates, key=_paper_trade_candidate_rank)
+            skipped.extend(
+                {
+                    "symbol": candidate["symbol"],
+                    "side": candidate["side"],
+                    "action": "skipped_weaker_symbol_candidate",
+                    "selected_trade_plan_id": winner["trade_plan"]["id"],
+                }
+                for candidate in candidates
+                if candidate is not winner
+            )
+
+            candidate = winner
+            trade_plan_id = candidate["trade_plan"]["id"]
+            if repo.has_trade_for_plan(db, trade_plan_id):
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_existing_paper_trade_for_plan",
+                        "trade_plan_id": trade_plan_id,
+                    }
+                )
+                continue
+
+            try:
+                paper_trade = repo.save_candidate(db, candidate)
+            except IntegrityError:
+                db.rollback()
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_concurrent_open_paper_trade",
+                    }
+                )
+                continue
+            executed.append(
+                _paper_trade_payload(
+                    paper_trade,
+                    fill_profile=candidate.get("fill_profile"),
+                )
+            )
+
+        return {
+            "source": "paper_trade_execution_simulator",
+            "symbol_filter": normalized_symbol,
+            "candidate_count": len(records),
+            "executed_count": len(executed),
+            "skipped_count": len(skipped),
+            "executed": executed,
+            "skipped": skipped,
+        }
+
+    except SQLAlchemyError as exc:
+        return _paper_trade_execution_unavailable_payload(
+            symbol_filter=symbol,
+            detail="Paper-trade execution is unavailable because the database is not reachable.",
+        )
+
+    finally:
+        db.close()
+
+
+QP_TI_001_TIMEFRAME_PRIORITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
+
+
+def _paper_trade_candidate_rank(candidate):
+    """Deterministically rank eligible candidates for one symbol.
+
+    Validated risk confidence is authoritative, followed by plan confidence,
+    reward/risk, higher-timeframe durability, recency, and plan id.
+    """
+    risk = candidate.get("risk_decision") or {}
+    plan = candidate.get("trade_plan") or {}
+    created_at = plan.get("created_at")
+    created_rank = created_at.timestamp() if hasattr(created_at, "timestamp") else 0.0
+    return (
+        float(risk.get("confidence") or 0),
+        float(plan.get("confidence") or 0),
+        float(plan.get("risk_reward") or 0),
+        QP_TI_001_TIMEFRAME_PRIORITY.get(str(plan.get("entry_timeframe") or "").lower(), 0),
+        created_rank,
+        int(plan.get("id") or 0),
+    )
+
+
+def build_paper_trade_candidates(
+    db,
+    symbol=None,
+    stale_after_seconds=900,
+    trades=None,
+):
+    trade_repo = TradePlanRepository()
+    risk_repo = RiskRepository()
+    trades = _official_timeframe_records(
+        trades if trades is not None else trade_repo.get_open_trades(db)
+    )
+
+    if symbol:
+        normalized_symbol = symbol.upper()
+        trades = [
+            trade
+            for trade in trades
+            if trade.symbol == normalized_symbol
+        ]
+    else:
+        normalized_symbol = None
+
+    latest_risks = risk_repo.latest_for_symbols(
+        db,
+        [trade.symbol for trade in trades],
+    )
+    derivative_payloads = {
+        trade_symbol: _safe_derivatives_payload(
+            db,
+            trade_symbol,
+            stale_after_seconds=stale_after_seconds,
+        )
+        for trade_symbol in {trade.symbol for trade in trades}
+    }
+    account_trades = PaperTradeRepository().all_trades(db)
+    account_risk = _account_risk_snapshot(db, account_trades)
+    open_symbols = {
+        str(item.symbol).upper()
+        for item in account_trades
+        if str(item.status or "").upper() == "OPEN"
+    }
+    records = [
+        _paper_trade_candidate(
+            trade,
+            latest_risks.get(trade.symbol),
+            stale_after_seconds,
+            derivative_payloads.get(trade.symbol),
+            account_risk=account_risk,
+            coin_has_active_trade=str(trade.symbol).upper() in open_symbols,
+        )
+        for trade in trades
+    ]
+
+    return normalized_symbol, records
+
+
+def _official_timeframe_records(records):
+    return [
+        record
+        for record in (records or [])
+        if is_phase2_official_timeframe(getattr(record, "entry_timeframe", None))
+    ]
+
+
+def _phase2_evidence_scope():
+    return {
+        "market": "FUTURES",
+        "mode": "intraday",
+        "entry_timeframes": sorted(PHASE2_OFFICIAL_TIMEFRAMES),
+        "excluded_legacy_timeframes": ["5m", "15m"],
+    }
+
+
+def _phase2_lifecycle_state(
+    opportunity,
+    plans,
+    approved_candidates,
+    eligible_candidates,
+    open_trades,
+):
+    coverage = opportunity.get("coverage") or {}
+    if coverage.get("status") == "GAPS_DETECTED":
+        return "COVERAGE_GAP", "Recover missing scheduled opportunity evaluations."
+    if open_trades:
+        return "MONITORING", "Monitor open paper trades through deterministic exit handling."
+    if eligible_candidates:
+        return "EXECUTOR_READY", "Run the paper executor; candidate passed all current gates."
+    if approved_candidates:
+        return "EXECUTOR_BLOCKED", "Resolve the candidate-level executor blockers."
+    if plans:
+        return "RISK_PENDING", "Wait for or repair the matching risk decision."
+    if opportunity.get("actionable_ready_count", 0) > 0:
+        return "QUEUE_PENDING", "Persist the live READY setup as an official trade plan."
+    return (
+        "WAITING_FOR_READY",
+        "Continue scheduled 1h/2h/4h/1d evaluation until a setup is READY.",
+    )
+
+
+def _build_phase2_rolling_window(db, symbol, days):
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    opportunity_records = list_decision_snapshots(
+        db,
+        decision_version=PHASE2_OPPORTUNITY_DECISION_VERSION,
+        symbol=symbol,
+        created_after=cutoff,
+        limit=100000,
+    )
+    expected_symbols = (
+        [symbol]
+        if symbol
+        else [item.symbol for item in SymbolRepository().get_active_symbols(db)]
+    )
+    opportunity = _phase2_opportunity_report(
+        opportunity_records,
+        symbol,
+        days * 24,
+        100000,
+        expected_symbols,
+        15,
+    )
+
+    plan_query = db.query(TradePlan).filter(TradePlan.created_at >= cutoff)
+    risk_query = db.query(RiskDecision).filter(RiskDecision.created_at >= cutoff)
+    trade_query = db.query(PaperTrade).filter(PaperTrade.created_at >= cutoff)
+    if symbol:
+        plan_query = plan_query.filter(TradePlan.symbol == symbol)
+        risk_query = risk_query.filter(RiskDecision.symbol == symbol)
+        trade_query = trade_query.filter(PaperTrade.symbol == symbol)
+
+    plans = _official_timeframe_records(plan_query.all())
+    risks = risk_query.all()
+    trades = _official_timeframe_records(trade_query.all())
+    approved_plan_count = sum(
+        1
+        for plan in plans
+        if any(_risk_approves_plan(risk, plan) for risk in risks)
+    )
+    attach_scenario_context(db, trades)
+    attach_regime_outcome_context(db, trades)
+    measurement = build_measurement_report(trades)
+    overall = measurement["overall"]
+    evaluated = opportunity.get("total_evaluations", 0)
+    ready = opportunity.get("ready_count", 0)
+    queued = len(plans)
+    executed = len(trades)
+    closed = overall.get("closed_trades", 0)
+
+    return {
+        "days": days,
+        "start_at": cutoff,
+        "status": measurement.get("status"),
+        "coverage": _rolling_coverage_summary(opportunity.get("coverage")),
+        "stages": {
+            "evaluated": evaluated,
+            "ready": ready,
+            "queued": queued,
+            "risk_approved": approved_plan_count,
+            "executed": executed,
+            "closed": closed,
+        },
+        "conversion": {
+            "ready_rate_percent": _conversion_percent(ready, evaluated),
+            "ready_to_queue_percent": _conversion_percent(queued, ready),
+            "queue_to_risk_approval_percent": _conversion_percent(
+                approved_plan_count,
+                queued,
+            ),
+            "risk_approval_to_execution_percent": _conversion_percent(
+                executed,
+                approved_plan_count,
+            ),
+            "execution_to_close_percent": _conversion_percent(closed, executed),
+        },
+        "performance": overall,
+        "cohorts": measurement.get("cohorts"),
+    }
+
+
+def _risk_approves_plan(risk, plan):
+    return (
+        risk.decision == "APPROVE"
+        and risk.signal == plan.side
+        and risk.symbol == plan.symbol
+        and (risk.created_at is None or plan.created_at is None or risk.created_at >= plan.created_at)
+        and _same_price(risk.entry_price, plan.entry_price)
+        and _same_price(risk.stop_loss, plan.stop_loss)
+        and _same_price(risk.target1, plan.target1)
+    )
+
+
+def _conversion_percent(numerator, denominator):
+    return round((numerator / denominator) * 100, 2) if denominator else None
+
+
+def _rolling_coverage_summary(coverage):
+    if not coverage:
+        return None
+    return {
+        key: coverage.get(key)
+        for key in (
+            "status",
+            "coverage_percent",
+            "expected_evaluations",
+            "recorded_evaluations",
+            "missing_evaluations",
+            "first_expected_candle",
+            "latest_expected_candle",
+        )
+    }
+
+
+def _phase2_opportunity_report(
+    records,
+    symbol_filter,
+    since_hours,
+    limit,
+    expected_symbols,
+    scheduler_grace_minutes,
+):
+    decisions = Counter()
+    block_reasons = Counter()
+    symbols = Counter()
+    timeframes = Counter()
+    latest = []
+
+    for record in records:
+        try:
+            snapshot = json.loads(record.snapshot_json or "{}")
+        except (TypeError, ValueError):
+            snapshot = {}
+
+        decision = (record.decision or "UNKNOWN").upper()
+        decisions[decision] += 1
+        symbols[record.symbol] += 1
+        timeframes[record.timeframe] += 1
+        context = snapshot.get("context") or {}
+        failed_conditions = context.get("failed_conditions") or []
+        trigger = snapshot.get("signal") or {}
+        accounting_reasons = [
+            reason
+            for reason in failed_conditions
+            if reason
+        ]
+        if decision != "READY" and not accounting_reasons:
+            trigger_reason = context.get("trigger_reason") or trigger.get("reason")
+            if trigger_reason:
+                accounting_reasons.append(trigger_reason)
+        block_reasons.update(accounting_reasons)
+        latest.append(
+            {
+                "id": record.id,
+                "symbol": record.symbol,
+                "timeframe": record.timeframe,
+                "decision": decision,
+                "confidence": record.confidence,
+                "regime": record.regime,
+                "quality_state": record.quality_state,
+                "trigger_reason": context.get("trigger_reason") or trigger.get("reason"),
+                "failed_conditions": failed_conditions,
+                "effective_timestamp": record.effective_timestamp,
+                "recorded_at": record.created_at,
+            }
+        )
+
+    total = len(records)
+    ready_count = decisions.get("READY", 0)
+    coverage = _phase2_opportunity_coverage(
+        records,
+        expected_symbols,
+        scheduler_grace_minutes,
+    )
+    latest_expected_slot = coverage.get("latest_expected_candle")
+    actionable_ready_count = sum(
+        1
+        for record in records
+        if (record.decision or "").upper() == "READY"
+        and record.effective_timestamp == latest_expected_slot
+    )
+    return {
+        "source": "phase2_opportunity_accounting",
+        "status": "OK",
+        "decision_version": PHASE2_OPPORTUNITY_DECISION_VERSION,
+        "evidence_scope": _phase2_evidence_scope(),
+        "symbol_filter": symbol_filter,
+        "window_hours": since_hours,
+        "limit": limit,
+        "coverage": coverage,
+        "total_evaluations": total,
+        "ready_count": ready_count,
+        "actionable_ready_count": actionable_ready_count,
+        "blocked_count": total - ready_count,
+        "ready_rate_percent": round((ready_count / total) * 100, 2) if total else 0,
+        "by_decision": dict(decisions),
+        "by_block_reason": dict(block_reasons.most_common()),
+        "by_symbol": dict(symbols),
+        "by_entry_timeframe": dict(timeframes),
+        "latest": latest[:100],
+    }
+
+
+def _phase2_opportunity_coverage(
+    records,
+    expected_symbols,
+    scheduler_grace_minutes,
+):
+    expected_symbols = sorted(set(expected_symbols or []))
+    eligible_records = [
+        record
+        for record in records
+        if record.timeframe == "1h"
+        and record.effective_timestamp is not None
+        and record.symbol in expected_symbols
+    ]
+
+    base = {
+        "scope": "ACTIVE_FUTURES_SYMBOLS_X_CLOSED_1H_CANDLES",
+        "scheduler_grace_minutes": scheduler_grace_minutes,
+        "expected_symbols": expected_symbols,
+        "expected_symbol_count": len(expected_symbols),
+    }
+    if not expected_symbols:
+        return {
+            **base,
+            "status": "NO_ACTIVE_SYMBOLS",
             "coverage_percent": 0,
             "expected_evaluations": 0,
             "recorded_evaluations": 0,
