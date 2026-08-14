@@ -548,11 +548,19 @@ def get_phase2_evidence_checkpoints(
 
 
 @router.get("/bundle", response_model=PaperTradeBundleResponse)
-def get_paper_trade_bundle(symbol: str | None = Query(default=None)):
+def get_paper_trade_bundle(
+    symbol: str | None = Query(default=None),
+    include_all: bool = Query(default=False),
+):
     db = SessionLocal()
 
     try:
-        return build_paper_trade_bundle(db, symbol=symbol)
+        return build_paper_trade_bundle(
+            db,
+            symbol=symbol,
+            open_limit=None if include_all else 120,
+            closed_limit=None if include_all else 200,
+        )
 
     except SQLAlchemyError:
         return _paper_trade_unavailable_payload(

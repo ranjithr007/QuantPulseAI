@@ -32,7 +32,6 @@ const SYMBOL_SCOPED_PAPER_PAGES = new Set([
   "trading-details",
   "risk-controls",
   "auto-trading",
-  "pnl",
   "backtest",
 ]);
 
@@ -411,6 +410,7 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
         "/paper-trade/bundle",
         {
           symbol: paperSymbol,
+          include_all: activePage === "pnl" ? true : null,
         },
         signal
       ),
