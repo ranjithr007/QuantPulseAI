@@ -144,6 +144,32 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
 
         self.assertEqual(["DOGEUSDT", "ETHUSDT"], [item.symbol for item in filtered])
 
+    def test_account_wide_bundle_can_return_the_complete_trade_ledger(self):
+        now = datetime.utcnow().replace(microsecond=0)
+        with self.Session() as db:
+            db.add_all(
+                [
+                    PaperTrade(
+                        symbol=f"COIN{index}USDT",
+                        side="LONG",
+                        entry_price=100.0,
+                        status="CLOSED",
+                        entry_timeframe="1h",
+                        pnl_percent=float(index),
+                        closed_at=now + timedelta(seconds=index),
+                        created_at=now + timedelta(seconds=index),
+                    )
+                    for index in range(15)
+                ]
+            )
+            db.commit()
+
+            capped = build_paper_trade_bundle(db, closed_limit=12)
+            complete = build_paper_trade_bundle(db, closed_limit=None)
+
+        self.assertEqual(12, capped["closedTrades"]["count"])
+        self.assertEqual(15, complete["closedTrades"]["count"])
+
     def test_lifecycle_funnel_waits_without_manufacturing_a_trade(self):
         status, next_action = _phase2_lifecycle_state(
             {

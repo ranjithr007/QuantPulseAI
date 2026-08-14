@@ -66,11 +66,11 @@ class PaperTradeRepository:
         if symbol:
             query = query.filter(PaperTrade.symbol == symbol)
 
-        return (
-            query.order_by(PaperTrade.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        query = query.order_by(PaperTrade.created_at.desc())
+        if limit is not None:
+            query = query.limit(limit)
+
+        return query.all()
 
     def all_trades(self, db, symbol=None):
         self.ensure_table(db)

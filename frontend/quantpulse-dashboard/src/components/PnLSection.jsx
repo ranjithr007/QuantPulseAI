@@ -489,7 +489,7 @@ function OpenPositionsTable({ openPositions }) {
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-white">Open positions</div>
-          <div className="text-xs text-slate-500">Current open futures paper trades</div>
+          <div className="text-xs text-slate-500">All current open futures paper trades across the account</div>
         </div>
         <Pill tone="cyan">{openPositions.length} open</Pill>
       </div>
@@ -505,7 +505,7 @@ function OpenPositionsTable({ openPositions }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {openPositions.slice(0, 8).map((trade) => (
+            {openPositions.map((trade) => (
               <tr key={trade.id} className="bg-slate-950/40">
                 <td className="px-3 py-2.5 text-white">{trade.symbol}</td>
                 <td className="px-3 py-2.5">
@@ -538,7 +538,7 @@ function TradeHistoryTable({ tradeHistory }) {
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-white">Trade history</div>
-          <div className="text-xs text-slate-500">Closed futures paper trades</div>
+          <div className="text-xs text-slate-500">All closed futures paper trades across the account</div>
         </div>
         <Pill tone="slate">{tradeHistory.length} closed</Pill>
       </div>
@@ -556,7 +556,7 @@ function TradeHistoryTable({ tradeHistory }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {tradeHistory.slice(0, 12).map((trade) => (
+            {tradeHistory.map((trade) => (
               <tr key={trade.id} className="bg-slate-950/35">
                 <td className="px-3 py-2.5 text-white">{trade.symbol}</td>
                 <td className="px-3 py-2.5">

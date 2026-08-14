@@ -54,6 +54,25 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("overflow-x-auto", signal_table)
         self.assertIn("<table", signal_table)
 
+    def test_pnl_page_shows_the_account_wide_trade_ledger_without_row_caps(self):
+        dashboard_api = (FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js").read_text(
+            encoding="utf-8"
+        )
+        pnl_section = (
+            FRONTEND_ROOT / "src" / "components" / "PnLSection.jsx"
+        ).read_text(encoding="utf-8")
+
+        scoped_pages = dashboard_api.split(
+            "const SYMBOL_SCOPED_PAPER_PAGES = new Set([", 1
+        )[1].split("]);", 1)[0]
+
+        self.assertNotIn('"pnl"', scoped_pages)
+        self.assertIn('include_all: activePage === "pnl" ? true : null', dashboard_api)
+        self.assertIn("openPositions.map((trade)", pnl_section)
+        self.assertIn("tradeHistory.map((trade)", pnl_section)
+        self.assertNotIn("openPositions.slice(", pnl_section)
+        self.assertNotIn("tradeHistory.slice(", pnl_section)
+
 
 if __name__ == "__main__":
     unittest.main()
