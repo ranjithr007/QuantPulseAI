@@ -205,7 +205,7 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertGreaterEqual(long_plan["risk_reward"], 2.0)
         self.assertGreaterEqual(short_plan["risk_reward"], 2.0)
 
-    def test_btc_one_hour_plan_uses_staged_paper_exit_policy(self):
+    def test_official_paper_plan_uses_staged_exit_policy(self):
         plan = build_trade_plan(
             "SHORT",
             63048.90,
@@ -215,7 +215,7 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
             timeframe="1h",
         )
 
-        self.assertEqual(plan["exit_policy"], "BTC_1H_STAGED_V1")
+        self.assertEqual(plan["exit_policy"], "PAPER_STAGED_EXIT_V1")
         self.assertEqual(plan["stop_loss"], 63521.77)
         self.assertEqual(plan["target1"], 62103.17)
         self.assertEqual(plan["target2"], 61598.78)
@@ -249,14 +249,40 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertEqual(risk["minimum_reward_target"], plan["target2"])
         self.assertGreaterEqual(risk["risk_reward"], 2.0)
 
-    def test_btc_other_timeframes_keep_default_exit_policy(self):
+    def test_staged_exit_policy_covers_every_coin_and_official_timeframe(self):
+        cases = (
+            ("XRPUSDT", "1h"),
+            ("ETHUSDT", "2h"),
+            ("SOLUSDT", "4h"),
+            ("BNBUSDT", "1d"),
+        )
+
+        for symbol, timeframe in cases:
+            with self.subTest(symbol=symbol, timeframe=timeframe):
+                plan = build_trade_plan(
+                    "LONG",
+                    100.0,
+                    1.0,
+                    confidence=50,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                )
+
+                self.assertEqual(plan["exit_policy"], "PAPER_STAGED_EXIT_V1")
+                self.assertEqual(plan["stop_loss"], 99.25)
+                self.assertEqual(plan["target1"], 101.5)
+                self.assertEqual(plan["target2"], 102.3)
+                self.assertEqual(plan["target1_fraction"], 0.5)
+                self.assertEqual(plan["max_hold_hours"], 48)
+
+    def test_non_entry_timeframe_keeps_default_exit_policy(self):
         plan = build_trade_plan(
             "LONG",
             100.0,
             1.0,
             confidence=50,
             symbol="BTCUSDT",
-            timeframe="4h",
+            timeframe="15m",
         )
 
         self.assertNotIn("exit_policy", plan)

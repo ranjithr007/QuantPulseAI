@@ -7,6 +7,7 @@ from app.utils.freshness import normalize_timestamp_to_utc
 
 
 PORTFOLIO_REPLAY_VERSION = "portfolio_replay_v1"
+TIMEFRAME_DURABILITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,8 @@ def build_portfolio_replay(
                 {
                     "symbol": candidate["symbol"],
                     "side": candidate["side"],
+                    "entry_timeframe": candidate.get("entry_timeframe"),
+                    "confidence": _priority_confidence(candidate),
                     "entry_time": candidate["entry_time"],
                     "reason": gate["reason"],
                     "portfolio_state": gate["projected_state"],
@@ -134,7 +137,15 @@ def build_portfolio_replay(
                 if clusters
                 else "SYMBOL_ISOLATED_NO_INFERRED_CORRELATION"
             ),
-            "same_timestamp_priority": "CONFIDENCE_DESC_SYMBOL_ASC_SIDE_ASC",
+            "same_timestamp_priority": (
+                "VALIDATED_CONFIDENCE_DESC_SYMBOL_ASC_REWARD_RISK_DESC_"
+                "TIMEFRAME_DURABILITY_DESC_SIDE_ASC"
+            ),
+            "candidate_priority": (
+                "VALIDATED_CONFIDENCE_DESC_REWARD_RISK_DESC_"
+                "TIMEFRAME_DURABILITY_DESC"
+            ),
+            "one_active_position_per_symbol": True,
             "exposure_denominator": "INITIAL_CAPITAL",
         },
         **performance,
@@ -168,8 +179,17 @@ def _candidate_trades(symbol_results, clusters):
         candidates,
         key=lambda trade: (
             trade["_entry_timestamp"],
-            -float(trade.get("confidence") or 0),
+            -_priority_confidence(trade),
             trade["symbol"],
+            -float(
+                trade.get("candidate_risk_reward")
+                or trade.get("risk_reward")
+                or 0
+            ),
+            -TIMEFRAME_DURABILITY.get(
+                str(trade.get("entry_timeframe") or "").lower(),
+                0,
+            ),
             trade["side"],
         ),
     )
@@ -222,6 +242,12 @@ def _portfolio_candidate_gate(active, candidate, config):
             4,
         ),
     }
+    if any(position["symbol"] == candidate["symbol"] for position in active):
+        return {
+            "allowed": False,
+            "reason": "SYMBOL_ACTIVE_POSITION",
+            "projected_state": state,
+        }
     if len(projected) > config.max_open_positions:
         return {
             "allowed": False,
@@ -245,6 +271,15 @@ def _portfolio_candidate_gate(active, candidate, config):
         "reason": None,
         "projected_state": state,
     }
+
+
+def _priority_confidence(trade):
+    validated = trade.get("selection_confidence")
+    return float(
+        validated
+        if validated is not None
+        else trade.get("confidence") or 0
+    )
 
 
 def _timestamp(value):

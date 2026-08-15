@@ -33,9 +33,16 @@ from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.repositories.candle_repository import get_candles_as_of
 from app.repositories.derivative_repository import DerivativeRepository
+from app.trading.futures_cost_model import DEFAULT_STOP_LOSS_PERCENT
+from app.trading.futures_cost_model import TARGET1_NET_RISK_REWARD
 
 
-RUN_VERSION = "complete_walk_forward_validation_v1"
+RUN_VERSION = "complete_walk_forward_validation_v3_governed_confidence_sizing"
+PRODUCTION_MAX_RISK_PERCENT = 1.0
+PRODUCTION_STOP_PERCENT = DEFAULT_STOP_LOSS_PERCENT
+PRODUCTION_TARGET_PERCENT = (
+    DEFAULT_STOP_LOSS_PERCENT * TARGET1_NET_RISK_REWARD
+)
 DEFAULT_SYMBOLS = (
     "BTCUSDT",
     "ETHUSDT",
@@ -235,12 +242,16 @@ def _run_symbol(arguments):
                 symbol,
                 timeframe,
                 signal,
+                stop_grid=(PRODUCTION_STOP_PERCENT,),
+                target_grid=(PRODUCTION_TARGET_PERCENT,),
+                exit_distance_model="PAPER_POLICY",
                 limit=config["limit"],
                 train_size=config["train_size"],
                 test_size=config["test_size"],
                 step_size=config["step_size"],
                 mode="EXPANDING",
                 strategy="SIGNAL_GATED",
+                risk_percent_per_trade=PRODUCTION_MAX_RISK_PERCENT,
                 as_of_timestamp=as_of,
                 replay_context=replay_context,
             )
@@ -418,8 +429,12 @@ def _consolidated_payload(results, *, symbols, timeframes, signals, as_of, start
             "strategy": "SIGNAL_GATED",
             "mode": "EXPANDING",
             "grid": {
-                "stop_atr_multiples": [0.75, 1.0, 1.25, 1.5],
-                "target_atr_multiples": [1.5, 2.0, 2.5, 3.0],
+                "exit_distance_model": "PAPER_POLICY",
+                "stop_loss_percent": PRODUCTION_STOP_PERCENT,
+                "target1_net_risk_reward": TARGET1_NET_RISK_REWARD,
+                "target1_base_distance_percent": PRODUCTION_TARGET_PERCENT,
+                "target_adjustment": "FEES_AND_SLIPPAGE",
+                "configured_max_risk_percent": PRODUCTION_MAX_RISK_PERCENT,
             },
         },
         "summary": {
@@ -448,6 +463,8 @@ def _markdown_report(payload):
         f"- Symbols: {', '.join(scope['symbols'])}",
         f"- Timeframes: {', '.join(scope['timeframes'])}",
         f"- Directions tested: {', '.join(scope['signals'])}",
+        "- Exit policy: 5% stop with cost-adjusted net 2R first target",
+        "- Position risk: confidence-tiered up to 1% of account equity",
         f"- Completed side runs: {summary['completed_side_runs']} / {scope['side_run_count']}",
         f"- Contract passes: {summary['contract_passes']} / {scope['side_run_count']}",
         f"- Architecture gate passes: {summary['architecture_gate_passes']} / {scope['side_run_count']}",

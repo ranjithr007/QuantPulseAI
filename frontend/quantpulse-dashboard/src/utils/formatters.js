@@ -57,6 +57,17 @@ export function formatCurrency(value, digits = 2, fallback = "N/A") {
   return formatNumber(value, digits, fallback);
 }
 
+export function formatInr(value, digits = 0, fallback = "N/A") {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return number.toLocaleString("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
 export function formatTargets(targets, fallback = "N/A") {
   if (!targets) return fallback;
   if (Array.isArray(targets)) {

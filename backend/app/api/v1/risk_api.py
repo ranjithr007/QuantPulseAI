@@ -13,6 +13,7 @@ from app.risk.confidence_sizing import confidence_sizing_profile
 from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.paper_trading.inr_sizing import PAPER_MAX_POSITION_INR
 from app.paper_trading.exit_policy import approval_target_for_policy
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
@@ -205,7 +206,7 @@ def get_risk_bundle(
     daily_loss_limit: float = Query(default=4.0, ge=0),
     max_open_trades: int = Query(default=4, ge=1),
     max_leverage: int = Query(default=5, ge=1),
-    max_position_size: float = Query(default=25000, ge=0),
+    max_position_size: float = Query(default=PAPER_MAX_POSITION_INR, ge=0),
     min_confidence: float = Query(
         default=MIN_ENTRY_CONFIDENCE,
         ge=0,
@@ -377,7 +378,7 @@ def _normalize_auto_settings(auto):
         "dailyLossLimit": _safe_number(auto.get("dailyLossLimit"), 4.0),
         "maxOpenTrades": int(_safe_number(auto.get("maxOpenTrades"), 4)),
         "maxLeverage": int(_safe_number(auto.get("maxLeverage"), 5)),
-        "maxPositionSize": _safe_number(auto.get("maxPositionSize"), 25000),
+        "maxPositionSize": PAPER_MAX_POSITION_INR,
         "minConfidence": MIN_ENTRY_CONFIDENCE,
         "direction": direction,
     }
@@ -497,6 +498,8 @@ def _futures_context_payload(derivatives):
         "marketType": "FUTURES",
         "instrumentType": "PERPETUAL",
         "venue": "BINANCE_FUTURES",
+        "paperExecutionVenue": "COINDCX_INR_M_PAPER",
+        "marginCurrency": "INR",
         "fundingAvailable": funding_available,
         "openInterestAvailable": open_interest_available,
         "isReady": funding_available and open_interest_available,

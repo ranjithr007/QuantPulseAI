@@ -415,6 +415,7 @@ def execute_walk_forward(
     limit=1000,
     stop_grid=(0.75, 1.0, 1.25, 1.5),
     target_grid=(1.5, 2.0, 2.5, 3.0),
+    exit_distance_model="ATR_MULTIPLE",
     train_size=200,
     test_size=50,
     step_size=50,
@@ -535,6 +536,9 @@ def execute_walk_forward(
             risk_confidence_scope_key = str(
                 risk_confidence_scope or "PRODUCTION_ALL"
             ).upper()
+            exit_distance_model_key = str(
+                exit_distance_model or "ATR_MULTIPLE"
+            ).upper()
             context_key = (
                 *_frozen_replay_context_key(
                     symbol,
@@ -621,6 +625,7 @@ def execute_walk_forward(
                     min_confidence=effective_min_confidence,
                     stop_atr_multiple=options["stop_percent"],
                     target_atr_multiple=options["target_percent"],
+                    exit_distance_model=exit_distance_model_key,
                     cooldown_candles=cooldown_candles,
                     fee_bps=options["fee_bps"],
                     slippage_bps=options["slippage_bps"],
@@ -678,8 +683,12 @@ def execute_walk_forward(
                     if not is_research
                     else "BYPASSED_FOR_HISTORICAL_COVERAGE_ONLY"
                 ),
-                "stop_parameter_model": "ATR_MULTIPLE",
-                "target_parameter_model": "ATR_MULTIPLE",
+                "stop_parameter_model": exit_distance_model_key,
+                "target_parameter_model": (
+                    "COST_ADJUSTED_NET_2R"
+                    if exit_distance_model_key == "PAPER_POLICY"
+                    else exit_distance_model_key
+                ),
                 "sizing_mode": (
                     "FIXED_RISK_CAPPED"
                     if risk_percent_per_trade is not None

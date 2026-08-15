@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 from app.api.v1 import backtest_api
@@ -70,6 +71,41 @@ def test_persist_phase2_validation_artifact_writes_json_and_markdown(tmp_path, m
     assert payload["scope"]["symbol"] == "DOGEUSDT"
     assert payload["report"]["overall_status"] == "PARTIAL"
     assert "QuantPulseAI Phase 2 Validation Artifact" in markdown_path.read_text(encoding="utf-8")
+
+
+def test_persist_phase2_validation_artifact_serializes_trade_datetimes(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.backtesting.phase2_validation_artifacts._outputs_root",
+        lambda: Path(tmp_path),
+    )
+    walk_forward = {
+        **_walk_forward(),
+        "folds": [
+            {
+                "out_of_sample": {
+                    "trades": [
+                        {
+                            "entry_time": datetime(2026, 8, 11, 8, 0, 0),
+                            "exit_time": datetime(2026, 8, 11, 9, 0, 0),
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    artifact = persist_phase2_validation_artifact(
+        _report(),
+        walk_forward,
+        symbol="XRPUSDT",
+        timeframe="1h",
+        signal="SHORT",
+    )
+
+    payload = json.loads(Path(artifact["json_path"]).read_text(encoding="utf-8"))
+    trade = payload["walk_forward_result"]["folds"][0]["out_of_sample"]["trades"][0]
+    assert trade["entry_time"] == "2026-08-11T08:00:00"
+    assert trade["exit_time"] == "2026-08-11T09:00:00"
 
 
 def test_phase2_export_route_returns_artifact_payload(monkeypatch):

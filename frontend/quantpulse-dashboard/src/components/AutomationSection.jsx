@@ -3,7 +3,7 @@ import { BarChart3, PauseCircle, ShieldCheck, TrendingUp, Wallet } from "lucide-
 import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
-import { formatCurrency, formatPercent, safeNumber } from "../utils/formatters";
+import { formatInr, formatPercent, safeNumber } from "../utils/formatters";
 import { dedupeReasonList } from "../utils/reasonDisplay";
 import { humanizeMachineStatus } from "../utils/text";
 
@@ -160,16 +160,12 @@ export default function AutomationSection({
               />
 
               <RiskField
-                label="Max position size"
-                value={formatCurrency(auto.maxPositionSize, 0)}
+                label="INR-M paper capital"
+                value={formatInr(auto.paperCapitalInr || 100000)}
                 render={() => (
-                  <NumberInput
-                    value={auto.maxPositionSize}
-                    min={100}
-                    max={1000000}
-                    step={100}
-                    onChange={(value) => setAuto((current) => ({ ...current, maxPositionSize: value }))}
-                  />
+                  <div className="text-xs text-slate-500">
+                    Positions use {auto.minimumAllocationPercent || 75}% / {auto.maximumAllocationPercent || 85}% notional ({formatInr(auto.maxPositionSize || 85000)} maximum)
+                  </div>
                 )}
               />
             </div>

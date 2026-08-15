@@ -64,18 +64,16 @@ eligibility gates and may block a candidate. This threshold does not bypass
 direction, reward/risk, timeframe confirmation, freshness, risk, or the
 one-active-trade lock.
 
-Paper-futures targets must be cost-aware. The target engine estimates adverse
-entry, stop, and target fills plus the configured fee on both sides of the trade.
-The governed paper-futures planning baseline uses a **5% market-price stop** and
-an estimated **0.15% round-trip transaction fee** (`7.5` basis points per side),
-with slippage modeled separately. The first target is therefore farther than a
-raw 10% move when required to preserve the net reward/risk boundary.
-Target 1 must preserve at least **2:1 net reward/risk** after those estimated
-costs, Target 2 must preserve at least **3:1 net reward/risk**, and the optional
-extended target must preserve at least **4:1 net reward/risk**. A plan that only
-appears to reach 2:1 before costs must not execute. Funding is charged from the
-actual funding events when paper P&L is closed; it is reported separately because
-its future value and holding duration are not known at entry time.
+Every configured cryptocurrency on each official paper-entry timeframe uses one
+staged exit policy measured from the actual paper entry price: **0.75% stop-loss**,
+**1.5% Target 1**, and **2.3% Target 2**. Target 1 closes 50% of the position and
+moves the remaining stop to the entry price. Target 2 closes the remaining 50%.
+Any remainder still open after **48 hours** must close using the governed paper
+fill model. The target engine must continue estimating adverse entry/exit
+slippage and the configured **0.15% round-trip transaction fee** (`7.5` basis
+points per side). Target 2 is the reward level used by the minimum 2:1 net
+reward/risk approval guard. Funding is charged from actual funding events when
+paper P&L is closed and reported separately.
 
 Selection must be deterministic. If two candidates cannot be separated by the
 governed ranking and tie-breaking policy, the safe result is no new trade.
@@ -180,3 +178,18 @@ each timeframe contributes 25 percentage points. Bullish, Bearish, Neutral, and
 Unknown percentages are calculated as `direction count / 4 * 100`. This aggregate
 percentage does not change any timeframe's regime or confidence. Regime confidence
 is calculated independently by the selected rule for that single timeframe.
+# INR-M paper-wallet sizing
+
+- Paper trading uses a governed starting wallet of **INR 100,000**. This is
+  simulation capital only and never authorizes a live exchange order.
+- Confidence from **40 to below 60** uses **75% position notional**:
+  **INR 75,000 notional**, or **INR 15,000 initial margin at 5x**.
+- Confidence of **60 or above** uses **85% position notional**:
+  **INR 85,000 notional**, or **INR 17,000 initial margin at 5x**.
+- The account-wide paper margin ceiling is **85% of the INR 100,000 wallet**.
+  Margin already committed to every open coin is included before a new entry.
+- With the four-open-trade boundary and 5x leverage, four maximum-tier trades
+  commit INR 68,000 margin and preserve INR 32,000 uncommitted capital.
+- Contract prices may remain USDT-quoted market references, but INR capital is
+  never divided directly by a USDT price. INR notional, margin and P&L remain
+  separate from quote-price data until an exchange conversion rate is present.

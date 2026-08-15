@@ -177,6 +177,7 @@ function DashboardApp({ username, onLogout }) {
     activeTradePlan,
     autoDecision,
     openTrades,
+    paperWallet,
     selectedPipeline,
     candleSeries,
     volumeSeries,
@@ -597,6 +598,7 @@ function DashboardLayout({
                   winRate={winRate}
                   tradeHistory={tradeHistory}
                   openPositions={openPositions}
+                  paperWallet={paperWallet}
                   pnlBySymbol={pnlBySymbol}
                   pnlBySide={pnlBySide}
                   equitySeries={equitySeries}
@@ -652,6 +654,7 @@ function DashboardLayout({
                   winRate={winRate}
                   tradeHistory={tradeHistory}
                   openPositions={openPositions}
+                  paperWallet={paperWallet}
                   pnlBySymbol={pnlBySymbol}
                   pnlBySide={pnlBySide}
                   equitySeries={equitySeries}
@@ -756,7 +759,10 @@ function normalizeAutoSettings(value) {
     dailyLossLimit: 4.0,
     maxOpenTrades: 4,
     maxLeverage: 5,
-    maxPositionSize: 25000,
+    maxPositionSize: 85000,
+    paperCapitalInr: 100000,
+    minimumAllocationPercent: 75,
+    maximumAllocationPercent: 85,
     minConfidence: 40,
     direction: "BOTH",
     executionMode: "PAPER",

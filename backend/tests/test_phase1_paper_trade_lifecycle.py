@@ -112,12 +112,42 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             db.commit()
 
         with patch("app.jobs.paper_trade_monitor_job.SessionLocal", self.Session):
-            monitor = run_paper_trade_monitor_job()
+            first_monitor = run_paper_trade_monitor_job()
 
-        self.assertEqual(1, monitor["processed"])
-        self.assertEqual(1, monitor["closed"])
-        self.assertEqual(1, monitor["wins"])
-        self.assertEqual("TARGET", monitor["records"][0]["fill_profile"]["trigger_type"])
+        self.assertEqual(1, first_monitor["processed"])
+        self.assertEqual(1, first_monitor["policy_updates"])
+        self.assertEqual(1, first_monitor["partial_closes"])
+        self.assertEqual(0, first_monitor["closed"])
+
+        with self.Session() as db:
+            trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
+            self.assertEqual("PAPER_STAGED_EXIT_V1", trade.exit_policy)
+            self.assertEqual(0.5, trade.remaining_position_fraction)
+            self.assertEqual(trade.entry_price, trade.stop_loss)
+            db.add(
+                MarketCandle(
+                    id=2,
+                    symbol="BTCUSDT",
+                    timeframe="1h",
+                    open_price=101.8,
+                    high_price=103.0,
+                    low_price=100.2,
+                    close_price=102.5,
+                    volume=1000,
+                    candle_time=now - timedelta(minutes=1),
+                    open_time=now - timedelta(minutes=1),
+                    close_time=now - timedelta(milliseconds=1),
+                    is_final=True,
+                )
+            )
+            db.commit()
+
+        with patch("app.jobs.paper_trade_monitor_job.SessionLocal", self.Session):
+            second_monitor = run_paper_trade_monitor_job()
+
+        self.assertEqual(1, second_monitor["closed"])
+        self.assertEqual(1, second_monitor["wins"])
+        self.assertEqual("TARGET2", second_monitor["records"][0]["fill_profile"]["trigger_type"])
 
         with self.Session() as db:
             bundle = build_paper_trade_bundle(db, symbol="BTCUSDT")
@@ -188,7 +218,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
 
         self.assertEqual(1, execution["executed_count"])
         self.assertEqual(
-            "BTC_1H_STAGED_V1",
+            "PAPER_STAGED_EXIT_V1",
             execution["executed"][0]["exit_policy"],
         )
 
@@ -203,7 +233,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     low_price=100.2,
                     close_price=101.2,
                     volume=1000,
-                    candle_time=now,
+                    candle_time=now - timedelta(minutes=1),
                     open_time=now - timedelta(hours=1),
                     close_time=now - timedelta(milliseconds=1),
                     is_final=True,
@@ -251,6 +281,71 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             trade = db.query(PaperTrade).filter(PaperTrade.status == "CLOSED").one()
             self.assertGreater(trade.gross_pnl_percent, 1.5)
             self.assertGreater(trade.pnl_percent, 1.0)
+
+    def test_existing_altcoin_trade_is_backfilled_to_staged_policy(self):
+        now = datetime.utcnow().replace(microsecond=0)
+        with self.Session() as db:
+            plan = TradePlan(
+                symbol="SOLUSDT",
+                side="LONG",
+                entry_price=76.2808,
+                stop_loss=72.3615,
+                target1=84.7876,
+                target2=88.9559,
+                risk_reward=2.0,
+                confidence=50.0,
+                entry_timeframe="4h",
+                status="OPEN",
+                created_at=now - timedelta(hours=2),
+            )
+            db.add(plan)
+            db.flush()
+            db.add(
+                PaperTrade(
+                    trade_plan_id=plan.id,
+                    symbol="SOLUSDT",
+                    side="LONG",
+                    entry_price=76.2808,
+                    stop_loss=72.3615,
+                    target1=84.7876,
+                    target2=88.9559,
+                    confidence=50.0,
+                    entry_timeframe="4h",
+                    status="OPEN",
+                    opened_at=now - timedelta(hours=2),
+                )
+            )
+            db.add(
+                MarketCandle(
+                    id=20,
+                    symbol="SOLUSDT",
+                    timeframe="4h",
+                    open_price=76.2,
+                    high_price=76.5,
+                    low_price=76.0,
+                    close_price=76.3,
+                    volume=1000,
+                    candle_time=now,
+                    open_time=now - timedelta(hours=4),
+                    close_time=now - timedelta(milliseconds=1),
+                    is_final=True,
+                )
+            )
+            db.commit()
+
+        with patch("app.jobs.paper_trade_monitor_job.SessionLocal", self.Session):
+            monitor = run_paper_trade_monitor_job()
+
+        self.assertEqual(1, monitor["policy_updates"])
+        self.assertEqual(1, monitor["still_open"])
+        with self.Session() as db:
+            trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
+            self.assertEqual("PAPER_STAGED_EXIT_V1", trade.exit_policy)
+            self.assertEqual(75.7087, trade.stop_loss)
+            self.assertEqual(77.425, trade.target1)
+            self.assertEqual(78.0353, trade.target2)
+            self.assertEqual(1.0, trade.remaining_position_fraction)
+            self.assertEqual(48, trade.max_hold_hours)
 
     def test_execution_scope_excludes_legacy_entry_timeframes(self):
         records = [

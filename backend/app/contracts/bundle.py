@@ -39,6 +39,7 @@ class PaperTradeBundleResponse(BaseModel):
     message: Optional[str] = None
     marketContext: Any = None
     accountRisk: Any = None
+    paperWallet: Any = None
     performance: Optional[Dict[str, Any]] = None
     summary: Optional[Dict[str, Any]] = None
     openTrades: Optional[Dict[str, Any]] = None

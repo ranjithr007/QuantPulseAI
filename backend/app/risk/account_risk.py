@@ -2,6 +2,8 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from app.paper_trading.inr_sizing import build_inr_paper_sizing
+
 
 DEFAULT_DAILY_LOSS_LIMIT_PERCENT = 4.0
 DEFAULT_DAILY_WINDOW_HOURS = 24
@@ -134,6 +136,10 @@ def _open_net_pnl_percent(trade, entry, current):
 
 
 def _account_exposure_factor(trade):
+    confidence = _safe_number(_value(trade, "confidence"))
+    if confidence is not None:
+        return build_inr_paper_sizing(confidence)["allocation_percent"] / 100
+
     entry = _safe_number(_value(trade, "entry_price"))
     stop_loss = _safe_number(_value(trade, "stop_loss"))
     risk_percent = _safe_number(_value(trade, "risk_percent"))

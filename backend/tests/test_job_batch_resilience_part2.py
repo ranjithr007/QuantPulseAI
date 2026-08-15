@@ -60,6 +60,9 @@ def test_run_paper_trade_monitor_job_continues_after_trade_error():
         def get_open_trades(self, db):
             return trades
 
+        def ensure_staged_exit_policy(self, db, trade):
+            return False
+
         def close_trade(self, *args, **kwargs):
             return SimpleNamespace(id=1, pnl_percent=1.0)
 

@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
 
 from app.database.sqlserver import Base
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+from app.paper_trading.inr_sizing import PAPER_MAX_POSITION_INR
 
 
 class AutomationSetting(Base):
@@ -18,7 +19,7 @@ class AutomationSetting(Base):
     daily_loss_limit = Column(Float, nullable=False, default=4.0)
     max_open_trades = Column(Integer, nullable=False, default=4)
     max_leverage = Column(Integer, nullable=False, default=5)
-    max_position_size = Column(Float, nullable=False, default=25000)
+    max_position_size = Column(Float, nullable=False, default=PAPER_MAX_POSITION_INR)
     min_confidence = Column(
         Float,
         nullable=False,

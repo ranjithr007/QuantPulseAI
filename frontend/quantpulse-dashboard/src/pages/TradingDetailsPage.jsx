@@ -26,6 +26,7 @@ export default function TradingDetailsPage({
   winRate,
   tradeHistory,
   openPositions,
+  paperWallet,
   pnlBySymbol,
   pnlBySide,
   equitySeries,
@@ -56,6 +57,7 @@ export default function TradingDetailsPage({
         winRate={winRate}
         tradeHistory={tradeHistory}
         openPositions={openPositions}
+        paperWallet={paperWallet}
         pnlBySymbol={pnlBySymbol}
         pnlBySide={pnlBySide}
         equitySeries={equitySeries}

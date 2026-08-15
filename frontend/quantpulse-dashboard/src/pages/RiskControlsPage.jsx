@@ -3,7 +3,7 @@ import { AlertTriangle, Gauge, PauseCircle, ShieldAlert, ShieldCheck, SlidersHor
 import MetricCard from "../components/ui/MetricCard";
 import Pill from "../components/ui/Pill";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
-import { formatCurrency, formatDate, formatNumber, formatPercent, safeNumber } from "../utils/formatters";
+import { formatDate, formatInr, formatNumber, formatPercent, safeNumber } from "../utils/formatters";
 import { buildRiskBlockPills, dedupeReasonList } from "../utils/reasonDisplay";
 import { humanizeMachineStatus } from "../utils/text";
 
@@ -139,8 +139,8 @@ export default function RiskControlsPage({
               <RiskField label="Max leverage" value={`${auto.maxLeverage}x`}>
                 <NumberInput value={auto.maxLeverage} min={1} max={25} step={1} onChange={(maxLeverage) => setAuto((current) => ({ ...current, maxLeverage }))} />
               </RiskField>
-              <RiskField label="Max position size" value={formatCurrency(auto.maxPositionSize, 0)}>
-                <NumberInput value={auto.maxPositionSize} min={100} max={1000000} step={100} onChange={(maxPositionSize) => setAuto((current) => ({ ...current, maxPositionSize }))} />
+              <RiskField label="INR-M paper capital" value={formatInr(auto.paperCapitalInr || 100000)}>
+                <div className="text-xs text-slate-500">75% minimum tier / 85% maximum tier; {formatInr(auto.maxPositionSize || 85000)} maximum notional</div>
               </RiskField>
             </div>
           </div>

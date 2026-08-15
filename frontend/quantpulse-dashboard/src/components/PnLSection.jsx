@@ -27,9 +27,10 @@ import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
 import Phase2ValidationBadge from "./Phase2ValidationBadge";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
-import { formatDate, formatPercent, formatPrice, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
+import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
+const STAGED_EXIT_POLICIES = new Set(["PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
 
 export default function PnLSection({
   realizedPnl,
@@ -43,6 +44,7 @@ export default function PnLSection({
   winRate,
   tradeHistory,
   openPositions,
+  paperWallet,
   pnlBySymbol,
   pnlBySide,
   equitySeries,
@@ -88,6 +90,8 @@ export default function PnLSection({
             <div className="mt-1 text-xs text-slate-500">Futures paper evidence · official entry stack 1h / 2h / 4h / 1d</div>
           </div>
         </div>
+
+        <PaperWalletStrip wallet={paperWallet} openPositions={openPositions} />
 
         {selectedDetail ? (
           <div
@@ -485,6 +489,38 @@ function formatAgeShort(seconds) {
   return `${Math.round(total / 86400)}d`;
 }
 
+function PaperWalletStrip({ wallet, openPositions }) {
+  const capital = safeNumber(wallet?.paper_capital_inr, 100000);
+  const committed = safeNumber(
+    wallet?.committed_margin_inr,
+    (openPositions || []).reduce(
+      (sum, trade) => sum + safeNumber(trade?.paper_sizing?.remaining_margin_inr ?? trade?.margin_used_inr, 0),
+      0
+    )
+  );
+  const available = safeNumber(wallet?.available_margin_inr, Math.max(0, capital - committed));
+  const utilization = capital > 0 ? (committed / capital) * 100 : 0;
+
+  return (
+    <div className="mt-3 grid gap-2 rounded-lg border border-cyan-400/20 bg-cyan-500/5 p-3 sm:grid-cols-4">
+      <WalletDatum label="INR-M paper wallet" value={formatInr(capital)} note="Paper trading only" />
+      <WalletDatum label="Committed margin" value={formatInr(committed)} note={`${formatPercent(utilization, 1)} utilised`} />
+      <WalletDatum label="Available balance" value={formatInr(available)} note="Uncommitted paper capital" />
+      <WalletDatum label="Position sizing" value="75% / 85%" note={`${formatInr(75000)} minimum / ${formatInr(85000)} maximum notional`} />
+    </div>
+  );
+}
+
+function WalletDatum({ label, value, note }) {
+  return (
+    <div className="rounded-md border border-white/5 bg-slate-950/35 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-white">{value}</div>
+      <div className="mt-0.5 text-[10px] text-slate-500">{note}</div>
+    </div>
+  );
+}
+
 function OpenPositionsTable({ openPositions }) {
   return (
     <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
@@ -502,6 +538,7 @@ function OpenPositionsTable({ openPositions }) {
               <th className="px-3 py-2.5 text-left">Symbol</th>
               <th className="px-3 py-2.5 text-left">Timeframe</th>
               <th className="px-3 py-2.5 text-left">Side</th>
+              <th className="px-3 py-2.5 text-left">INR position</th>
               <th className="px-3 py-2.5 text-left">Entry</th>
               <th className="px-3 py-2.5 text-left">Stop-loss</th>
               <th className="px-3 py-2.5 text-left">Target 1</th>
@@ -520,6 +557,12 @@ function OpenPositionsTable({ openPositions }) {
                 <td className="px-3 py-2.5 text-slate-300">{trade.entry_timeframe || "-"}</td>
                 <td className="px-3 py-2.5">
                   <Pill tone={trade.side === "LONG" ? "emerald" : "rose"}>{trade.side}</Pill>
+                </td>
+                <td className="px-3 py-2.5 text-slate-200">
+                  <div>{formatInr(trade?.paper_sizing?.position_notional_inr ?? trade?.position_notional_inr)}</div>
+                  <div className="mt-0.5 text-[10px] text-slate-500">
+                    Margin {formatInr(trade?.paper_sizing?.remaining_margin_inr ?? trade?.margin_used_inr)} / {safeNumber(trade?.paper_sizing?.leverage ?? trade?.leverage, 5)}x
+                  </div>
                 </td>
                 <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.entry_price)}</td>
                 <td className="px-3 py-2.5 text-rose-200">
@@ -548,7 +591,7 @@ function OpenPositionsTable({ openPositions }) {
             ))}
             {!openPositions.length ? (
               <tr>
-                <td className="px-3 py-3.5 text-slate-400" colSpan={12}>
+                <td className="px-3 py-3.5 text-slate-400" colSpan={13}>
                   No open paper positions.
                 </td>
               </tr>
@@ -569,12 +612,14 @@ function isBreakEvenProtected(trade) {
 }
 
 function remainingPositionLabel(trade) {
-  const remaining = Number(trade?.remaining_position_fraction);
+  const rawRemaining = trade?.remaining_position_fraction;
+  if (rawRemaining === null || rawRemaining === undefined || rawRemaining === "") return "100%";
+  const remaining = Number(rawRemaining);
   return Number.isFinite(remaining) ? `${Math.round(remaining * 100)}%` : "100%";
 }
 
 function exitState(trade) {
-  if (trade?.exit_policy === "BTC_1H_STAGED_V1") {
+  if (isStagedExitPolicy(trade)) {
     if (trade.target1_hit_at) {
       return { label: "Awaiting T2", tone: "cyan" };
     }
@@ -584,8 +629,12 @@ function exitState(trade) {
 }
 
 function exitPolicyLabel(trade) {
-  if (trade?.exit_policy === "BTC_1H_STAGED_V1") return "BTC 1h staged v1";
+  if (isStagedExitPolicy(trade)) return "0.75% SL / 1.5% T1 / 2.3% T2";
   return "Original trade policy";
+}
+
+function isStagedExitPolicy(trade) {
+  return STAGED_EXIT_POLICIES.has(String(trade?.exit_policy || "").toUpperCase());
 }
 
 function exitDeadline(trade) {

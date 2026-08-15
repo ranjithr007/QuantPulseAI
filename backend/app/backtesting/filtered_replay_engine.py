@@ -20,7 +20,9 @@ from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.freshness import normalize_timestamp_to_utc
+from app.trading.futures_cost_model import build_cost_adjusted_targets
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.trading.futures_cost_model import DEFAULT_STOP_LOSS_PERCENT
 
 
 ENGINE_VERSION = "filtered_replay_v1"
@@ -173,6 +175,7 @@ class FilteredReplayConfig:
     min_confidence: float = MIN_ENTRY_CONFIDENCE
     stop_atr_multiple: float = 1.5
     target_atr_multiple: float = 3.5
+    exit_distance_model: str = "ATR_MULTIPLE"
     cooldown_candles: int = 3
     warmup_candles: int = 50
     fee_bps: float = DEFAULT_FEE_BPS
@@ -200,6 +203,12 @@ class FilteredReplayConfig:
             raise ValueError("min_confidence must be between 0 and 100")
         if self.stop_atr_multiple <= 0 or self.target_atr_multiple <= 0:
             raise ValueError("ATR multiples must be greater than zero")
+        exit_distance_model = str(self.exit_distance_model or "").upper()
+        if exit_distance_model not in {"ATR_MULTIPLE", "PAPER_POLICY"}:
+            raise ValueError(
+                "exit_distance_model must be ATR_MULTIPLE or PAPER_POLICY"
+            )
+        object.__setattr__(self, "exit_distance_model", exit_distance_model)
         if self.cooldown_candles < 0:
             raise ValueError("cooldown_candles cannot be negative")
         if self.warmup_candles < 50:
@@ -262,6 +271,7 @@ def run_filtered_replay(
     min_confidence=MIN_ENTRY_CONFIDENCE,
     stop_atr_multiple=1.5,
     target_atr_multiple=3.5,
+    exit_distance_model="ATR_MULTIPLE",
     cooldown_candles=3,
     warmup_candles=50,
     fee_bps=DEFAULT_FEE_BPS,
@@ -294,6 +304,7 @@ def run_filtered_replay(
         min_confidence=float(min_confidence),
         stop_atr_multiple=float(stop_atr_multiple),
         target_atr_multiple=float(target_atr_multiple),
+        exit_distance_model=exit_distance_model,
         cooldown_candles=int(cooldown_candles),
         warmup_candles=int(warmup_candles),
         fee_bps=float(fee_bps),
@@ -469,16 +480,16 @@ def run_filtered_replay(
 
         entry_fill = _adverse_fill(raw_entry, requested_side, config.slippage_bps, entering=True)
         atr = float(decision["features"]["atr"])
-        stop_distance = atr * config.stop_atr_multiple
-        target_distance = atr * config.target_atr_multiple
-        if requested_side == "LONG":
-            stop = entry_fill - stop_distance
-            target = entry_fill + target_distance
-        else:
-            stop = entry_fill + stop_distance
-            target = entry_fill - target_distance
+        execution_confidence = _execution_confidence(decision)
+        stop, target, stop_distance, target_distance = _entry_exit_levels(
+            requested_side,
+            entry_fill,
+            atr,
+            execution_confidence,
+            config,
+        )
         if min(stop, target) <= 0:
-            rejection_counts["INVALID_ATR_LEVELS"] += 1
+            rejection_counts["INVALID_EXIT_LEVELS"] += 1
             decision_index += 1
             continue
 
@@ -487,7 +498,7 @@ def run_filtered_replay(
         position_tier = None
         if effective_risk_percent is not None:
             sizing_profile = confidence_sizing_profile(
-                decision["confidence"],
+                execution_confidence,
                 effective_risk_percent,
             )
             effective_risk_percent = sizing_profile["risk_percent"]
@@ -727,7 +738,8 @@ def run_filtered_replay(
                 "portfolio_state_at_entry": portfolio_gate["projected_state"],
                 "liquidation": liquidation,
                 "regime": decision["regime"],
-                "confidence": decision["confidence"],
+                "confidence": execution_confidence,
+                "composite_confidence": decision["confidence"],
                 "trend_score": decision["features"]["trend_score"],
                 "momentum_score": decision["features"]["momentum_score"],
                 "feature_score": decision["features"]["final_score"],
@@ -875,8 +887,12 @@ def run_filtered_replay(
             ),
             "position_policy": "ONE_AT_A_TIME",
             "signal_reentry": "REQUIRES_GATE_RESET",
-            "stop_model": "ATR_MULTIPLE",
-            "target_model": "ATR_MULTIPLE",
+            "stop_model": config.exit_distance_model,
+            "target_model": (
+                "COST_ADJUSTED_NET_2R"
+                if config.exit_distance_model == "PAPER_POLICY"
+                else config.exit_distance_model
+            ),
             "timeframe_stack_policy": (
                 "CONFLICTS_BLOCK_WITHOUT_CONFIDENCE_PENALTY"
                 if stack_resolver is not None
@@ -886,6 +902,59 @@ def run_filtered_replay(
         },
         **performance,
     }
+
+
+def _entry_exit_levels(side, entry, atr, confidence, config):
+    """Return replay levels using either research ATR exits or paper policy."""
+
+    if config.exit_distance_model == "PAPER_POLICY":
+        stop_distance = entry * (DEFAULT_STOP_LOSS_PERCENT / 100)
+        stop = entry - stop_distance if side == "LONG" else entry + stop_distance
+        targets = build_cost_adjusted_targets(
+            side,
+            entry,
+            stop,
+            confidence=confidence,
+            fee_bps=config.fee_bps,
+            price_precision=8,
+        )
+        target = float(targets["target1"])
+        return stop, target, stop_distance, abs(target - entry)
+
+    stop_distance = atr * config.stop_atr_multiple
+    target_distance = atr * config.target_atr_multiple
+    if side == "LONG":
+        return (
+            entry - stop_distance,
+            entry + target_distance,
+            stop_distance,
+            target_distance,
+        )
+    return (
+        entry + stop_distance,
+        entry - target_distance,
+        stop_distance,
+        target_distance,
+    )
+
+
+def _execution_confidence(decision):
+    """Use the governed entry confidence that production risk sizing receives."""
+
+    decision = dict(decision or {})
+    decision_chain = dict(
+        dict(decision.get("timeframe_stack") or {}).get("decision_chain") or {}
+    )
+    risk = dict(decision_chain.get("risk") or {})
+    signal = dict(decision_chain.get("signal") or {})
+    for value in (
+        risk.get("confidence"),
+        signal.get("confidence"),
+        decision.get("confidence"),
+    ):
+        if value is not None:
+            return float(value)
+    return 0.0
 
 
 def _excursion_metrics(
