@@ -13,6 +13,7 @@ from app.risk.confidence_sizing import confidence_sizing_profile
 from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.paper_trading.exit_policy import approval_target_for_policy
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
 from app.repositories.automation_settings_repository import get_automation_settings
@@ -63,6 +64,11 @@ def _build_computed_risk(signal, max_risk_per_trade, stale_after_seconds):
             confidence=_effective_confidence(signal),
             risk_percent=max_risk_per_trade,
             fee_bps=DEFAULT_FEE_BPS,
+            minimum_reward_target=approval_target_for_policy(
+                trade_plan.get("exit_policy"),
+                trade_plan.get("target1"),
+                trade_plan.get("target2"),
+            ),
         )
     except Exception:
         return None

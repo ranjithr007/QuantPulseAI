@@ -138,6 +138,7 @@ class RiskEngine:
         capital=10000,
         min_confidence=None,
         fee_bps=None,
+        minimum_reward_target=None,
     ):
         # Required values must be checked before comparisons.
         if entry is None or stop_loss is None or target1 is None:
@@ -180,6 +181,11 @@ class RiskEngine:
 
             if target2 is not None:
                 target2 = self._to_finite_float("target2", target2)
+            if minimum_reward_target is not None:
+                minimum_reward_target = self._to_finite_float(
+                    "minimum_reward_target",
+                    minimum_reward_target,
+                )
 
         except ValueError as exc:
             return self._reject_trade_plan(
@@ -218,6 +224,22 @@ class RiskEngine:
                 confidence,
                 risk_percent,
                 "Target 2 must be positive",
+            )
+
+        approval_target = (
+            target1 if minimum_reward_target is None else minimum_reward_target
+        )
+        if approval_target <= 0:
+            return self._reject_trade_plan(
+                symbol,
+                canonical_side,
+                entry,
+                stop_loss,
+                target1,
+                target2,
+                confidence,
+                risk_percent,
+                "Minimum reward target must be positive",
             )
 
         if not 0 <= confidence <= 100:
@@ -323,8 +345,21 @@ class RiskEngine:
                     "LONG target2 must be greater than target1",
                 )
 
+            if approval_target <= entry:
+                return self._reject_trade_plan(
+                    symbol,
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    target2,
+                    confidence,
+                    risk_percent,
+                    "LONG minimum reward target must be above entry",
+                )
+
             risk_distance = entry - stop_loss
-            reward_distance = target1 - entry
+            reward_distance = approval_target - entry
 
         else:
             if not stop_loss > entry > target1:
@@ -353,8 +388,21 @@ class RiskEngine:
                     "SHORT target2 must be less than target1",
                 )
 
+            if approval_target >= entry:
+                return self._reject_trade_plan(
+                    symbol,
+                    canonical_side,
+                    entry,
+                    stop_loss,
+                    target1,
+                    target2,
+                    confidence,
+                    risk_percent,
+                    "SHORT minimum reward target must be below entry",
+                )
+
             risk_distance = stop_loss - entry
-            reward_distance = entry - target1
+            reward_distance = entry - approval_target
 
         raw_rr = reward_distance / risk_distance
         cost_profile = None
@@ -368,7 +416,7 @@ class RiskEngine:
                     canonical_side,
                     entry,
                     stop_loss,
-                    target1,
+                    approval_target,
                     confidence=confidence,
                     fee_bps=fee_bps,
                 )
@@ -446,6 +494,8 @@ class RiskEngine:
             "risk_amount": capital * effective_risk_percent / 100,
             "confidence": confidence,
         }
+        if minimum_reward_target is not None:
+            result["minimum_reward_target"] = approval_target
         if cost_profile is not None:
             result.update(
                 {

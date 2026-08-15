@@ -104,6 +104,9 @@ class TradePlanRepository:
             timeframe_stack=_timeframe_stack_value(plan.get("timeframe_stack")),
             regime=plan.get("regime"),
             data_generation_id=plan.get("data_generation_id"),
+            exit_policy=plan.get("exit_policy"),
+            target1_fraction=plan.get("target1_fraction"),
+            max_hold_hours=plan.get("max_hold_hours"),
             status="OPEN",
         )
 
@@ -139,6 +142,9 @@ class TradePlanRepository:
             timeframe_stack=_timeframe_stack_value(context.get("timeframe_stack")),
             regime=context.get("regime"),
             data_generation_id=context.get("data_generation_id"),
+            exit_policy=plan.get("exit_policy"),
+            target1_fraction=plan.get("target1_fraction"),
+            max_hold_hours=plan.get("max_hold_hours"),
             status="OPEN",
         )
 

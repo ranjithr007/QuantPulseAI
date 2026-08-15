@@ -138,6 +138,8 @@ def get_intelligence_snapshot(
                 current_price,
                 atr,
                 confidence=signal["confidence"],
+                symbol=symbol,
+                timeframe=timeframe,
             ),
             "inputs": {
                 "feature": freshness_status(

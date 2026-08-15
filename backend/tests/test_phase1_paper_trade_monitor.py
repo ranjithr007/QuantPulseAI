@@ -1,4 +1,6 @@
 import unittest
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +14,26 @@ APP_ROOT = PROJECT_ROOT / "backend" / "app"
 
 
 class Phase1PaperTradeMonitorTests(unittest.TestCase):
+    def _staged_trade(self, **overrides):
+        values = {
+            "id": 1,
+            "symbol": "BTCUSDT",
+            "side": "SHORT",
+            "entry_price": 100.0,
+            "stop_loss": 100.75,
+            "target1": 98.5,
+            "target2": 97.7,
+            "confidence": 50,
+            "risk_reward": 2.0,
+            "exit_policy": "BTC_1H_STAGED_V1",
+            "target1_fraction": 0.5,
+            "target1_hit_at": None,
+            "max_hold_hours": 48,
+            "opened_at": datetime(2026, 8, 10, 0, 0),
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
     def test_long_trade_closes_win_when_target_hit(self):
         trade = SimpleNamespace(
             id=1,
@@ -96,6 +118,95 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "HOLD")
         self.assertEqual(result["result"], "OPEN")
+
+    def test_staged_trade_partially_closes_at_target1_and_moves_stop(self):
+        trade = self._staged_trade()
+        candle = SimpleNamespace(
+            high_price=100.2,
+            low_price=98.4,
+            close_price=98.8,
+            candle_time=datetime(2026, 8, 10, 4, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "PARTIAL_CLOSE")
+        self.assertEqual(result["result"], "OPEN")
+        self.assertEqual(result["remaining_position_fraction"], 0.5)
+        self.assertEqual(result["new_stop_loss"], 100.0)
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET1")
+
+    def test_staged_trade_closes_remainder_at_target2(self):
+        trade = self._staged_trade(
+            stop_loss=100.0,
+            target1_hit_at=datetime(2026, 8, 10, 4, 0),
+        )
+        candle = SimpleNamespace(
+            high_price=99.0,
+            low_price=97.6,
+            close_price=97.8,
+            candle_time=datetime(2026, 8, 10, 5, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["result"], "WIN")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET2")
+
+    def test_staged_trade_closes_at_break_even_after_target1(self):
+        trade = self._staged_trade(
+            stop_loss=100.0,
+            target1_hit_at=datetime(2026, 8, 10, 4, 0),
+        )
+        candle = SimpleNamespace(
+            high_price=100.1,
+            low_price=98.0,
+            close_price=99.5,
+            candle_time=datetime(2026, 8, 10, 5, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["result"], "WIN")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "STOP")
+
+    def test_staged_trade_time_exits_after_48_hours(self):
+        trade = self._staged_trade()
+        candle = SimpleNamespace(
+            high_price=100.5,
+            low_price=99.0,
+            close_price=99.4,
+            candle_time=trade.opened_at + timedelta(hours=48),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["result"], "TIME_EXIT")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TIME_EXIT")
+
+    def test_existing_btc_trade_without_policy_keeps_legacy_target1_close(self):
+        trade = SimpleNamespace(
+            id=35,
+            symbol="BTCUSDT",
+            side="SHORT",
+            stop_loss=105.0,
+            target1=90.0,
+            target2=85.0,
+            exit_policy=None,
+        )
+        candle = SimpleNamespace(
+            high_price=100.0,
+            low_price=89.0,
+            candle_time=None,
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET")
 
     def test_paper_trade_monitor_job_is_registered(self):
         job = get_job_definition("paper-trade-monitor")

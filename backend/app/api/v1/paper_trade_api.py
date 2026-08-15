@@ -26,6 +26,7 @@ from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.paper_trading.exit_policy import approval_target_for_policy
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.automation_settings_repository import DEFAULT_AUTOMATION_SETTINGS
 from app.repositories.automation_settings_repository import automation_settings_payload
@@ -1351,6 +1352,17 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "timeframe_stack": paper_trade.timeframe_stack,
         "regime": paper_trade.regime,
         "data_generation_id": getattr(paper_trade, "data_generation_id", None),
+        "exit_policy": getattr(paper_trade, "exit_policy", None),
+        "initial_stop_loss": getattr(paper_trade, "initial_stop_loss", None),
+        "target1_fraction": getattr(paper_trade, "target1_fraction", None),
+        "remaining_position_fraction": getattr(
+            paper_trade,
+            "remaining_position_fraction",
+            None,
+        ),
+        "max_hold_hours": getattr(paper_trade, "max_hold_hours", None),
+        "target1_hit_at": getattr(paper_trade, "target1_hit_at", None),
+        "target1_exit_price": getattr(paper_trade, "target1_exit_price", None),
         "validation_contract_version": getattr(
             paper_trade,
             "validation_contract_version",
@@ -1437,7 +1449,11 @@ def _paper_trade_candidate(
         side=trade.side,
         planned_entry_price=trade.entry_price,
         stop_loss=trade.stop_loss,
-        target1=trade.target1,
+        target1=approval_target_for_policy(
+            getattr(trade, "exit_policy", None),
+            trade.target1,
+            trade.target2,
+        ),
         confidence=risk_payload.get("confidence", trade.confidence or 50),
         risk_reward=trade.risk_reward,
     )
@@ -1497,6 +1513,9 @@ def _trade_plan_payload(trade):
         "timeframe_stack": getattr(trade, "timeframe_stack", None),
         "regime": getattr(trade, "regime", None),
         "data_generation_id": getattr(trade, "data_generation_id", None),
+        "exit_policy": getattr(trade, "exit_policy", None),
+        "target1_fraction": getattr(trade, "target1_fraction", None),
+        "max_hold_hours": getattr(trade, "max_hold_hours", None),
         "created_at": trade.created_at,
     }
 
