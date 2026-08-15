@@ -33,6 +33,8 @@ class TradePlanner:
             entry,
             atr,
             confidence=signal["confidence"],
+            symbol=signal.get("symbol"),
+            timeframe=signal.get("timeframe"),
         )
         stop = governed["stop_loss"]
         targets = [
@@ -52,5 +54,8 @@ class TradePlanner:
             "rr": governed["risk_reward"],
             "gross_rr": governed["gross_risk_reward"],
             "cost_model": governed["cost_model"],
+            "exit_policy": governed.get("exit_policy"),
+            "target1_fraction": governed.get("target1_fraction"),
+            "max_hold_hours": governed.get("max_hold_hours"),
             "confidence": signal["confidence"],
         }

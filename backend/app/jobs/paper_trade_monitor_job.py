@@ -16,6 +16,7 @@ def run_paper_trade_monitor_job():
         summary = {
             "processed": 0,
             "closed": 0,
+            "partial_closes": 0,
             "wins": 0,
             "losses": 0,
             "still_open": 0,
@@ -44,6 +45,25 @@ def run_paper_trade_monitor_job():
                     summary["records"].append(decision)
                     continue
 
+                if decision["action"] == "PARTIAL_CLOSE":
+                    updated_trade = repo.apply_target1(
+                        db,
+                        trade,
+                        decision["exit_price"],
+                        candle_time=decision.get("candle_time"),
+                    )
+                    summary["partial_closes"] += 1
+                    summary["still_open"] += 1
+                    summary["records"].append(
+                        {
+                            **decision,
+                            "paper_trade_id": updated_trade.id,
+                            "stop_loss": updated_trade.stop_loss,
+                            "target1_hit_at": updated_trade.target1_hit_at,
+                        }
+                    )
+                    continue
+
                 closed_trade = repo.close_trade(
                     db,
                     trade,
@@ -53,7 +73,7 @@ def run_paper_trade_monitor_job():
                 )
                 summary["closed"] += 1
 
-                if decision["result"] == "WIN":
+                if closed_trade.result == "WIN":
                     summary["wins"] += 1
                 else:
                     summary["losses"] += 1
@@ -62,6 +82,7 @@ def run_paper_trade_monitor_job():
                     {
                         **decision,
                         "paper_trade_id": closed_trade.id,
+                        "result": closed_trade.result,
                         "pnl_percent": closed_trade.pnl_percent,
                     }
                 )

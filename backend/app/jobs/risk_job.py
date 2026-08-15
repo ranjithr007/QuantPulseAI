@@ -22,6 +22,7 @@ from app.repositories._db_utils import safe_rollback
 
 from app.risk.risk_engine import RiskEngine
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.paper_trading.exit_policy import approval_target_for_policy
 
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
@@ -542,6 +543,11 @@ class RiskJob:
                     ),
                     risk_percent=self._active_risk_percent,
                     fee_bps=DEFAULT_FEE_BPS,
+                    minimum_reward_target=approval_target_for_policy(
+                        self._get_value(trade, "exit_policy"),
+                        self._get_value(trade, "target1"),
+                        self._get_value(trade, "target2"),
+                    ),
                 )
 
                 confidence = self._normalize_confidence(

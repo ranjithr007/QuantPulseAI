@@ -42,6 +42,7 @@ from app.features.point_in_time_feature_service import build_decision_snapshot
 from app.features.point_in_time_feature_service import persist_decision_snapshot
 from app.trading.trade_plan_engine import build_trade_plan
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.paper_trading.exit_policy import approval_target_for_policy
 from app.observability.performance_budget import LatencyBudget
 from app.observability.performance_budget import build_stage_latency_report
 from app.utils.freshness import candle_freshness_timestamp, freshness_status
@@ -175,6 +176,8 @@ def build_trade_setup_payload(
             current_price,
             atr,
             confidence=_timeframe_confidence(selected, confirmation) or 0,
+            symbol=symbol,
+            timeframe=entry_timeframe,
         )
         if len(timeframes) >= 3:
             scenario = build_scenario_plan(
@@ -284,6 +287,8 @@ def build_entry_trigger_payload(
             current_price,
             atr,
             confidence=_timeframe_confidence(selected, confirmation) or 0,
+            symbol=symbol,
+            timeframe=entry_timeframe,
         )
         if len(timeframes or []) >= 3:
             scenario = build_scenario_plan(
@@ -1116,6 +1121,8 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
         current_price,
         atr,
         confidence=signal["confidence"],
+        symbol=symbol,
+        timeframe=timeframe,
     )
     decision_snapshot = _persist_decision_snapshot_safe(
         db,
@@ -1994,6 +2001,11 @@ def _watchlist_computed_risk_payload(payload):
             confidence=confidence or 0,
             risk_percent=1,
             fee_bps=DEFAULT_FEE_BPS,
+            minimum_reward_target=approval_target_for_policy(
+                trade_plan.get("exit_policy"),
+                target1,
+                target2,
+            ),
         )
     except Exception:
         return None

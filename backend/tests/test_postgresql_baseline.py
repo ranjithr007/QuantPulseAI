@@ -63,6 +63,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260812_confidence_40.py",
         "pg_20260812_confidence_60.py",
         "pg_20260812_walk_forward_jobs.py",
+        "pg_20260815_btc_1h_staged_exit.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -85,3 +86,8 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     assert 'down_revision = "pg_20260812_confidence_60"' in confidence_40
     assert ".where(settings.c.id == 1)" in confidence_40
     assert ".values(min_confidence=40.0)" in confidence_40
+
+    staged_exit = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260815_btc_1h_staged_exit.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260812_confidence_40"' in staged_exit
+    assert '"target1_hit_at"' in staged_exit
+    assert '"remaining_position_fraction"' in staged_exit

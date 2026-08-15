@@ -85,6 +85,8 @@ def build_master_ai_response(symbol: str, timeframe: str, stale_after_seconds: i
             current_price,
             atr,
             confidence=result["confidence"],
+            symbol=symbol,
+            timeframe=timeframe,
         )
         validation = validate_trade_plan_direction(
             result["signal"], trade["entry"], trade["target1"]

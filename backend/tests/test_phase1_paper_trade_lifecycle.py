@@ -133,6 +133,125 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             bundle["closedTrades"]["records"][0]["pnl_percent"],
         )
 
+    def test_btc_one_hour_trade_scales_out_then_closes_remainder(self):
+        now = datetime.utcnow().replace(microsecond=0)
+        governed = build_trade_plan(
+            "LONG",
+            100.0,
+            0.3,
+            confidence=50,
+            symbol="BTCUSDT",
+            timeframe="1h",
+        )
+        with self.Session() as db:
+            plan = TradePlan(
+                symbol="BTCUSDT",
+                side="LONG",
+                entry_price=governed["entry"],
+                stop_loss=governed["stop_loss"],
+                target1=governed["target1"],
+                target2=governed["target2"],
+                risk_reward=governed["risk_reward"],
+                confidence=50.0,
+                entry_timeframe="1h",
+                exit_policy=governed["exit_policy"],
+                target1_fraction=governed["target1_fraction"],
+                max_hold_hours=governed["max_hold_hours"],
+                status="OPEN",
+                created_at=now - timedelta(minutes=2),
+            )
+            db.add(plan)
+            db.flush()
+            db.add(
+                RiskDecision(
+                    symbol="BTCUSDT",
+                    signal="LONG",
+                    decision="APPROVE",
+                    entry_price=governed["entry"],
+                    stop_loss=governed["stop_loss"],
+                    target1=governed["target1"],
+                    target2=governed["target2"],
+                    risk_reward=governed["risk_reward"],
+                    position_size=1.0,
+                    risk_percent=0.5,
+                    confidence=50.0,
+                    created_at=now - timedelta(minutes=1),
+                )
+            )
+            db.commit()
+
+        with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session):
+            execution = execute_paper_trade_candidates_for_symbol(
+                "BTCUSDT",
+                stale_after_seconds=900,
+            )
+
+        self.assertEqual(1, execution["executed_count"])
+        self.assertEqual(
+            "BTC_1H_STAGED_V1",
+            execution["executed"][0]["exit_policy"],
+        )
+
+        with self.Session() as db:
+            db.add(
+                MarketCandle(
+                    id=10,
+                    symbol="BTCUSDT",
+                    timeframe="1h",
+                    open_price=100.5,
+                    high_price=101.6,
+                    low_price=100.2,
+                    close_price=101.2,
+                    volume=1000,
+                    candle_time=now,
+                    open_time=now - timedelta(hours=1),
+                    close_time=now - timedelta(milliseconds=1),
+                    is_final=True,
+                )
+            )
+            db.commit()
+
+        with patch("app.jobs.paper_trade_monitor_job.SessionLocal", self.Session):
+            first_monitor = run_paper_trade_monitor_job()
+
+        self.assertEqual(1, first_monitor["partial_closes"])
+        self.assertEqual(0, first_monitor["closed"])
+        with self.Session() as db:
+            trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
+            self.assertIsNotNone(trade.target1_hit_at)
+            self.assertIsNotNone(trade.target1_exit_price)
+            self.assertEqual(0.5, trade.remaining_position_fraction)
+            self.assertEqual(trade.entry_price, trade.stop_loss)
+
+            db.add(
+                MarketCandle(
+                    id=11,
+                    symbol="BTCUSDT",
+                    timeframe="1h",
+                    open_price=101.2,
+                    high_price=102.5,
+                    low_price=100.2,
+                    close_price=102.4,
+                    volume=1000,
+                    candle_time=now,
+                    open_time=now - timedelta(minutes=1),
+                    close_time=now - timedelta(milliseconds=1),
+                    is_final=True,
+                )
+            )
+            db.commit()
+
+        with patch("app.jobs.paper_trade_monitor_job.SessionLocal", self.Session):
+            second_monitor = run_paper_trade_monitor_job()
+
+        self.assertEqual(1, second_monitor["closed"])
+        self.assertEqual(1, second_monitor["wins"])
+        self.assertEqual("TARGET2", second_monitor["records"][0]["fill_profile"]["trigger_type"])
+        with self.Session() as db:
+            trade = db.query(PaperTrade).filter(PaperTrade.status == "CLOSED").one()
+            self.assertGreater(trade.gross_pnl_percent, 1.5)
+            self.assertGreater(trade.pnl_percent, 1.0)
+
     def test_execution_scope_excludes_legacy_entry_timeframes(self):
         records = [
             TradePlan(symbol="BTCUSDT", side="LONG", entry_timeframe="5m"),

@@ -2,6 +2,7 @@
 from app.trading.futures_cost_model import build_cost_adjusted_targets
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.trading.futures_cost_model import DEFAULT_STOP_LOSS_PERCENT
+from app.paper_trading.exit_policy import build_policy_trade_levels
 
 
 def build_trade_plan(
@@ -10,6 +11,9 @@ def build_trade_plan(
     atr=None,
     confidence=50,
     fee_bps=DEFAULT_FEE_BPS,
+    *,
+    symbol=None,
+    timeframe=None,
 ):
     precision = price_precision(current_price)
 
@@ -29,6 +33,38 @@ def build_trade_plan(
         }
 
     entry = current_price
+    policy_levels = build_policy_trade_levels(
+        signal,
+        entry,
+        symbol=symbol,
+        timeframe=timeframe,
+        confidence=confidence,
+        fee_bps=fee_bps,
+        price_precision=precision,
+    )
+    if policy_levels is not None:
+        return {
+            "entry": round(entry, precision),
+            "stop_loss": policy_levels["stop_loss"],
+            "target1": policy_levels["target1"],
+            "target2": policy_levels["target2"],
+            "target3": None,
+            "atr": round(atr, precision),
+            "stop_loss_percent": policy_levels["stop_loss_percent"],
+            "price_precision": precision,
+            # Target 2 is the final reward target used by the 2R approval guard.
+            "risk_reward": policy_levels["target2_net_risk_reward"],
+            "gross_risk_reward": policy_levels["target2_gross_risk_reward"],
+            "target1_net_risk_reward": policy_levels["target1_net_risk_reward"],
+            "target2_net_risk_reward": policy_levels["target2_net_risk_reward"],
+            "target3_net_risk_reward": None,
+            "cost_model": policy_levels["cost_model"],
+            "estimated_costs": policy_levels,
+            "exit_policy": policy_levels["name"],
+            "target1_fraction": policy_levels["target1_fraction"],
+            "max_hold_hours": policy_levels["max_hold_hours"],
+        }
+
     stop_distance = entry * (DEFAULT_STOP_LOSS_PERCENT / 100)
 
     if signal == "LONG":

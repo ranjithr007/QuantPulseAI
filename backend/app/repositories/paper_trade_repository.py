@@ -34,6 +34,13 @@ class PaperTradeRepository:
             "funding_cost_percent": "FLOAT",
             "open_interest_snapshot": "FLOAT",
             "open_interest_change_percent": "FLOAT",
+            "exit_policy": "VARCHAR(50)",
+            "initial_stop_loss": "FLOAT",
+            "target1_fraction": "FLOAT",
+            "remaining_position_fraction": "FLOAT",
+            "max_hold_hours": "INTEGER",
+            "target1_hit_at": "DATETIME",
+            "target1_exit_price": "FLOAT",
         }
         for column, definition in evidence_columns.items():
             if column not in existing:
@@ -135,6 +142,11 @@ class PaperTradeRepository:
             timeframe_stack=trade_plan.get("timeframe_stack"),
             regime=trade_plan.get("regime"),
             data_generation_id=trade_plan.get("data_generation_id"),
+            exit_policy=trade_plan.get("exit_policy"),
+            initial_stop_loss=trade_plan["stop_loss"],
+            target1_fraction=trade_plan.get("target1_fraction"),
+            remaining_position_fraction=1.0,
+            max_hold_hours=trade_plan.get("max_hold_hours"),
             validation_contract_version=candidate.get("validation_contract_version"),
             fill_model_version=fill_profile.get("model"),
             planned_entry_price=fill_profile.get(
@@ -167,6 +179,18 @@ class PaperTradeRepository:
 
         return paper_trade
 
+    def apply_target1(self, db, trade, exit_price, candle_time=None):
+        """Record a partial paper exit and protect the remainder at entry."""
+        fraction = float(getattr(trade, "target1_fraction", None) or 0.5)
+        trade.target1_fraction = fraction
+        trade.remaining_position_fraction = max(0.0, 1.0 - fraction)
+        trade.target1_hit_at = candle_time or datetime.utcnow()
+        trade.target1_exit_price = float(exit_price)
+        trade.stop_loss = float(trade.entry_price)
+        commit_or_rollback(db)
+        db.refresh(trade)
+        return trade
+
     def close_trade(self, db, trade, exit_price, result, fill_profile=None):
         closed_at = datetime.utcnow()
         trade.status = "CLOSED"
@@ -175,17 +199,22 @@ class PaperTradeRepository:
         if fill_profile:
             trade.exit_slippage_percent = fill_profile.get("exit_slippage_pct")
 
-        if trade.side == "LONG":
-            gross_pnl = ((exit_price - trade.entry_price) / trade.entry_price) * 100
-        else:
-            gross_pnl = ((trade.entry_price - exit_price) / trade.entry_price) * 100
+        gross_pnl = self._gross_pnl_percent(trade, exit_price)
 
         fee_bps = float(getattr(trade, "fee_bps", 7.5) or 0)
         fees_percent = (fee_bps * 2) / 100
         funding_rates = self._funding_rates_during_trade(db, trade, closed_at)
         funding_direction = 1 if trade.side == "LONG" else -1
-        funding_cost_percent = (
-            sum(funding_rates) * 100 * funding_direction
+        target1_hit_at = getattr(trade, "target1_hit_at", None)
+        remaining_fraction = float(
+            getattr(trade, "remaining_position_fraction", None) or 1.0
+        )
+        funding_cost_percent = sum(
+            rate
+            * 100
+            * funding_direction
+            * (remaining_fraction if target1_hit_at and event_time > target1_hit_at else 1.0)
+            for event_time, rate in funding_rates
         )
         trade.gross_pnl_percent = round(gross_pnl, 4)
         trade.fees_percent = round(fees_percent, 4)
@@ -195,14 +224,16 @@ class PaperTradeRepository:
             gross_pnl - fees_percent - funding_cost_percent,
             4,
         )
+        if result == "TIME_EXIT":
+            trade.result = "WIN" if trade.pnl_percent > 0 else "LOSS"
         trade.closed_at = closed_at
 
         if getattr(trade, "thesis_id", None):
             TradeThesisRepository().set_lifecycle_state(
                 db,
                 trade.thesis_id,
-                "COMPLETED" if result == "WIN" else "INVALIDATED",
-                reason=f"Paper trade closed with result {result}",
+                "COMPLETED" if trade.result == "WIN" else "INVALIDATED",
+                reason=f"Paper trade closed with result {trade.result}",
                 commit=False,
             )
 
@@ -219,7 +250,7 @@ class PaperTradeRepository:
             plan.status = "CLOSED"
             plan.closed_at = closed_at
             if plan.id == trade.trade_plan_id:
-                plan.result = result
+                plan.result = trade.result
                 plan.exit_price = exit_price
             else:
                 plan.result = "STALE_AFTER_CLOSE"
@@ -237,6 +268,30 @@ class PaperTradeRepository:
         db.refresh(trade)
 
         return trade
+
+    @staticmethod
+    def _gross_pnl_percent(trade, exit_price):
+        def leg_pnl(price):
+            if trade.side == "LONG":
+                return ((price - trade.entry_price) / trade.entry_price) * 100
+            return ((trade.entry_price - price) / trade.entry_price) * 100
+
+        target1_exit = getattr(trade, "target1_exit_price", None)
+        if target1_exit is None:
+            return leg_pnl(exit_price)
+
+        target1_fraction = float(
+            getattr(trade, "target1_fraction", None) or 0.5
+        )
+        remaining_fraction = float(
+            getattr(trade, "remaining_position_fraction", None)
+            if getattr(trade, "remaining_position_fraction", None) is not None
+            else 1.0 - target1_fraction
+        )
+        return (
+            leg_pnl(float(target1_exit)) * target1_fraction
+            + leg_pnl(exit_price) * remaining_fraction
+        )
 
     @staticmethod
     def _funding_rates_during_trade(db, trade, closed_at):
@@ -258,4 +313,4 @@ class PaperTradeRepository:
         for row in rows:
             if row.funding_time is not None and row.rate is not None:
                 rates_by_event[row.funding_time] = float(row.rate)
-        return list(rates_by_event.values())
+        return list(rates_by_event.items())
