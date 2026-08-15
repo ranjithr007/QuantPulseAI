@@ -9,6 +9,21 @@ from app.utils.freshness import normalize_timestamp_to_utc
 
 
 class DerivativeRepository:
+    def latest_mark_price(self, db, symbol, timeframe="5m"):
+        return (
+            db.query(FuturesMarkPrice)
+            .filter(
+                FuturesMarkPrice.symbol == str(symbol).upper(),
+                FuturesMarkPrice.timeframe == timeframe,
+                FuturesMarkPrice.is_final == true(),
+            )
+            .order_by(
+                FuturesMarkPrice.close_time.desc(),
+                FuturesMarkPrice.id.desc(),
+            )
+            .first()
+        )
+
     def save_funding(self, db, item):
         db.add(
             FundingRate(

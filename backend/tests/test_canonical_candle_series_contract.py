@@ -4,6 +4,7 @@ from datetime import timezone
 from types import SimpleNamespace
 
 from app.repositories.candle_repository import get_candles_as_of
+from app.repositories.candle_repository import get_final_candles_after
 from app.repositories.candle_repository import get_final_candle_series
 from app.repositories.candle_repository import get_latest_candle
 
@@ -85,6 +86,26 @@ def test_as_of_series_excludes_candle_until_its_close_boundary():
     )
 
     assert [candle.id for candle in candles] == [1]
+
+
+def test_checkpoint_series_returns_earliest_missed_candles_first():
+    now = datetime.now(timezone.utc)
+    rows = [
+        _candle(4, now - timedelta(hours=2), "BINANCE", "VERIFIED", 0.074),
+        _candle(2, now - timedelta(hours=4), "BINANCE", "VERIFIED", 0.072),
+        _candle(3, now - timedelta(hours=3), "BINANCE", "VERIFIED", 0.073),
+        _candle(1, now - timedelta(hours=5), "BINANCE", "VERIFIED", 0.071),
+    ]
+
+    candles = get_final_candles_after(
+        FakeSession(rows),
+        "DOGEUSDT",
+        "1h",
+        now - timedelta(hours=6),
+        limit=2,
+    )
+
+    assert [candle.id for candle in candles] == [1, 2]
 
 
 def _candle(

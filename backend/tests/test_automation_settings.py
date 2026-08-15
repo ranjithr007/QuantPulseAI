@@ -8,6 +8,7 @@ from app.database.models.automation_settings import AutomationSettingsAudit
 from app.repositories.automation_settings_repository import automation_settings_payload
 from app.repositories.automation_settings_repository import get_automation_settings
 from app.repositories.automation_settings_repository import list_automation_audit
+from app.repositories.automation_settings_repository import normalize_automation_settings
 from app.repositories.automation_settings_repository import set_emergency_stop
 from app.repositories.automation_settings_repository import update_automation_settings
 
@@ -30,6 +31,8 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertFalse(settings["governance"]["promotion_enabled"])
             self.assertFalse(settings["governance"]["ml_authority_enabled"])
             self.assertEqual(40.0, settings["minConfidence"])
+            self.assertEqual(4.0, settings["dailyLossLimit"])
+            self.assertEqual(4, settings["maxOpenTrades"])
             self.assertEqual(
                 40.0,
                 settings["governance"]["min_entry_confidence"],
@@ -94,6 +97,32 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertFalse(settings["enabled"])
             self.assertTrue(settings["locked"])
             self.assertEqual("EMERGENCY_STOP_ACTIVATED", list_automation_audit(db)[0]["action"])
+
+    def test_legacy_unsafe_account_limits_are_repaired_and_audited(self):
+        with self.Session() as db:
+            row = get_automation_settings(db)
+            row.daily_loss_limit = 15
+            row.max_open_trades = 20
+            db.commit()
+
+            repaired = automation_settings_payload(get_automation_settings(db))
+
+            self.assertEqual(4.0, repaired["dailyLossLimit"])
+            self.assertEqual(4, repaired["maxOpenTrades"])
+            self.assertEqual(4.0, row.daily_loss_limit)
+            self.assertEqual(4, row.max_open_trades)
+            audit = list_automation_audit(db)[0]
+            self.assertEqual("GOVERNED_PAPER_SETTINGS_REPAIRED", audit["action"])
+            self.assertIn("dailyLossLimit", audit["changedFields"])
+            self.assertIn("maxOpenTrades", audit["changedFields"])
+
+    def test_requested_account_limits_are_clamped_to_safe_ceiling(self):
+        normalized = normalize_automation_settings(
+            {"dailyLossLimit": 15, "maxOpenTrades": 20}
+        )
+
+        self.assertEqual(4.0, normalized["dailyLossLimit"])
+        self.assertEqual(4, normalized["maxOpenTrades"])
 
 
 if __name__ == "__main__":

@@ -153,6 +153,39 @@ def get_latest_candle(db, symbol, timeframe):
     return candles[-1] if candles else None
 
 
+def get_final_candles_after(db, symbol, timeframe, after_timestamp, limit=1000):
+    """Return the earliest canonical final candles after a durable checkpoint."""
+
+    after = normalize_timestamp_to_utc(after_timestamp)
+    if after is None:
+        return get_final_candle_series(db, symbol, timeframe, limit=limit)
+    if after.tzinfo is not None:
+        after = after.astimezone(timezone.utc).replace(tzinfo=None)
+
+    requested_limit = max(1, int(limit))
+    candidate_limit = max(requested_limit * 4, 500)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    candidates = (
+        db.query(MarketCandle)
+        .filter(MarketCandle.symbol == symbol)
+        .filter(MarketCandle.timeframe == timeframe)
+        .filter(MarketCandle.is_final == true())
+        .filter(MarketCandle.open_time > after)
+        .filter(MarketCandle.close_time <= now)
+        .order_by(MarketCandle.open_time.asc(), MarketCandle.id.asc())
+        .limit(candidate_limit)
+        .all()
+    )
+    cutoff = now.replace(tzinfo=timezone.utc)
+    usable = [
+        candle
+        for candle in candidates
+        if _is_final_and_closed(candle, cutoff)
+    ]
+    ordered = _deduplicate_and_order(usable, candidate_limit)
+    return ordered[:requested_limit]
+
+
 def get_candles_as_of(db, symbol, timeframe, as_of_timestamp, limit=200):
     as_of = normalize_timestamp_to_utc(as_of_timestamp)
     if as_of is None:

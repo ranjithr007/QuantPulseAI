@@ -790,8 +790,14 @@ function normalizeAutoSettings(value) {
     locked: Boolean(value.locked),
     emergencyStop: Boolean(value.emergencyStop),
     maxRiskPerTrade: Number(value.maxRiskPerTrade) || defaults.maxRiskPerTrade,
-    dailyLossLimit: Number(value.dailyLossLimit) || defaults.dailyLossLimit,
-    maxOpenTrades: Number(value.maxOpenTrades) || defaults.maxOpenTrades,
+    dailyLossLimit: Math.max(
+      0.5,
+      Math.min(4, Number(value.dailyLossLimit) || defaults.dailyLossLimit),
+    ),
+    maxOpenTrades: Math.max(
+      1,
+      Math.min(4, Number(value.maxOpenTrades) || defaults.maxOpenTrades),
+    ),
     maxLeverage: Number(value.maxLeverage) || defaults.maxLeverage,
     maxPositionSize: Number(value.maxPositionSize) || defaults.maxPositionSize,
     minConfidence: Number(value.minConfidence) || defaults.minConfidence,

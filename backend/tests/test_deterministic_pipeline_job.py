@@ -42,6 +42,35 @@ def test_deterministic_cycle_blocks_downstream_after_failure():
     assert result["results"]["feature"]["status"] == "BLOCKED"
 
 
+def test_exit_monitor_runs_after_market_failure_but_new_entries_stay_blocked():
+    calls = []
+
+    def market():
+        calls.append("market")
+        return {"status": "FAILED", "error": "collector unavailable"}
+
+    def monitor():
+        calls.append("paper_trade_monitor")
+        return {"status": "COMPLETED", "closed": 1}
+
+    def feature():
+        calls.append("feature")
+        return {"status": "COMPLETED"}
+
+    stages = [
+        ("market", market),
+        ("paper_trade_monitor", monitor),
+        ("feature", feature),
+    ]
+    with patch("app.jobs.deterministic_pipeline_job.STAGE_ORDER", stages):
+        result = run_deterministic_pipeline_job()
+
+    assert result["status"] == "FAILED"
+    assert calls == ["market", "paper_trade_monitor"]
+    assert result["results"]["paper_trade_monitor"]["status"] == "COMPLETED"
+    assert result["results"]["feature"]["status"] == "BLOCKED"
+
+
 def test_execution_gate_requires_all_upstream_stages_without_errors():
     required = {
         name: {"status": "COMPLETED"}

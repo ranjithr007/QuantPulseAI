@@ -5,6 +5,8 @@ from app.database.sqlserver import SessionLocal
 from app.repositories.automation_settings_repository import automation_settings_payload
 from app.repositories.automation_settings_repository import get_automation_settings
 from app.repositories.automation_settings_repository import list_automation_audit
+from app.repositories.automation_settings_repository import PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT
+from app.repositories.automation_settings_repository import PAPER_MAX_OPEN_TRADES
 from app.repositories.automation_settings_repository import set_emergency_stop
 from app.repositories.automation_settings_repository import update_automation_settings
 from app.utils.network_resilience import summarize_network_error
@@ -20,8 +22,11 @@ class AutomationSettingsUpdate(BaseModel):
     emergencyStop: bool
     allowedSymbols: list[str]
     maxRiskPerTrade: float = Field(ge=0.1, le=5)
-    dailyLossLimit: float = Field(ge=0.5, le=15)
-    maxOpenTrades: int = Field(ge=1, le=20)
+    dailyLossLimit: float = Field(
+        ge=0.5,
+        le=PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+    )
+    maxOpenTrades: int = Field(ge=1, le=PAPER_MAX_OPEN_TRADES)
     maxLeverage: int = Field(ge=1, le=25)
     maxPositionSize: float = Field(ge=100, le=1_000_000)
     minConfidence: float = Field(ge=0, le=100)

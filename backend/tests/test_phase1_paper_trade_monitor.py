@@ -3,7 +3,9 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
+from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
 from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
 from app.scheduler.registry import get_job_definition
 from app.scheduler.registry import resolve_job_ids
@@ -192,7 +194,8 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
             high_price=100.5,
             low_price=99.0,
             close_price=99.4,
-            candle_time=trade.opened_at + timedelta(hours=48),
+            candle_time=trade.opened_at + timedelta(hours=47, minutes=55),
+            close_time=trade.opened_at + timedelta(hours=48),
         )
 
         result = evaluate_paper_trade_exit(trade, candle)
@@ -200,6 +203,78 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         self.assertEqual(result["action"], "CLOSE")
         self.assertEqual(result["result"], "TIME_EXIT")
         self.assertEqual(result["fill_profile"]["trigger_type"], "TIME_EXIT")
+
+    def test_monitor_replays_missed_five_minute_candles_in_order(self):
+        base = datetime(2026, 8, 10, 0, 0)
+        trade = self._staged_trade(
+            entry_timeframe="4h",
+            exit_monitor_timeframe="5m",
+            last_exit_evaluated_at=base,
+        )
+        candles = [
+            SimpleNamespace(
+                high_price=100.2,
+                low_price=99.0,
+                close_price=99.5,
+                candle_time=base + timedelta(minutes=5),
+                open_time=base + timedelta(minutes=5),
+                close_time=base + timedelta(minutes=10),
+            ),
+            SimpleNamespace(
+                high_price=100.2,
+                low_price=98.4,
+                close_price=98.8,
+                candle_time=base + timedelta(minutes=10),
+                open_time=base + timedelta(minutes=10),
+                close_time=base + timedelta(minutes=15),
+            ),
+            SimpleNamespace(
+                high_price=99.0,
+                low_price=97.6,
+                close_price=97.8,
+                candle_time=base + timedelta(minutes=15),
+                open_time=base + timedelta(minutes=15),
+                close_time=base + timedelta(minutes=20),
+            ),
+        ]
+        fake_db = SimpleNamespace(close=Mock())
+
+        class FakeRepo:
+            def get_open_trades(self, db):
+                return [trade]
+
+            def ensure_staged_exit_policy(self, db, item):
+                return False
+
+            def apply_target1(self, db, item, exit_price, **kwargs):
+                item.target1_hit_at = kwargs["candle_time"]
+                item.target1_exit_price = exit_price
+                item.remaining_position_fraction = 0.5
+                item.stop_loss = item.entry_price
+                item.last_exit_evaluated_at = kwargs["evaluated_at"]
+                return item
+
+            def close_trade(self, db, item, exit_price, result, **kwargs):
+                return SimpleNamespace(id=item.id, result="WIN", pnl_percent=2.0)
+
+        with patch(
+            "app.jobs.paper_trade_monitor_job.SessionLocal",
+            return_value=fake_db,
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
+            return_value=FakeRepo(),
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_final_candles_after",
+            return_value=candles,
+        ):
+            summary = run_paper_trade_monitor_job()
+
+        self.assertEqual(summary["candles_evaluated"], 3)
+        self.assertEqual(summary["partial_closes"], 1)
+        self.assertEqual(summary["closed"], 1)
+        self.assertEqual(summary["wins"], 1)
+        self.assertEqual(summary["entry_timeframe_fallbacks"], 0)
+        self.assertEqual(summary["records"][-1]["monitor_timeframe"], "5m")
 
     def test_existing_btc_trade_without_policy_keeps_legacy_target1_close(self):
         trade = SimpleNamespace(

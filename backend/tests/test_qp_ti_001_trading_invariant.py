@@ -41,8 +41,104 @@ def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
             "risk_reward": risk_reward,
             "created_at": datetime(2026, 8, 11, plan_id, tzinfo=timezone.utc),
         },
-        "risk_decision": {"confidence": confidence},
+        "risk_decision": {"confidence": confidence, "risk_percent": 1.0},
+        "paper_sizing": {
+            "leverage": 5.0,
+            "position_notional_inr": 85_000.0,
+            "margin_used_inr": 17_000.0,
+        },
     }
+
+
+def _enabled_automation_settings():
+    return {
+        "enabled": True,
+        "locked": False,
+        "emergencyStop": False,
+        "allowedSymbols": ["BTCUSDT", "ETHUSDT"],
+        "maxRiskPerTrade": 1.0,
+        "dailyLossLimit": 4.0,
+        "maxOpenTrades": 4,
+        "maxLeverage": 5,
+        "maxPositionSize": 85_000.0,
+        "minConfidence": 40.0,
+        "direction": "BOTH",
+        "executionMode": "PAPER",
+        "liveExecutionEnabled": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("setting_overrides", "expected_reason"),
+    [
+        ({"enabled": False}, "Paper-trade automation is disabled"),
+        ({"locked": True}, "Paper-trade automation is locked"),
+        ({"emergencyStop": True}, "Automation emergency stop is active"),
+        ({"allowedSymbols": ["ETHUSDT"]}, "BTCUSDT is not in the automation allowlist"),
+        ({"direction": "SHORT"}, "LONG entries are disabled"),
+        ({"maxRiskPerTrade": 0.5}, "risk percentage exceeds"),
+        ({"maxLeverage": 3}, "leverage exceeds"),
+        ({"maxPositionSize": 70_000}, "position size exceeds"),
+        ({"minConfidence": 80}, "confidence is below"),
+        ({"executionMode": "LIVE"}, "execution mode is not PAPER"),
+        ({"liveExecutionEnabled": True}, "Live execution must remain disabled"),
+    ],
+)
+def test_final_paper_execution_boundary_enforces_automation_controls(
+    setting_overrides,
+    expected_reason,
+):
+    settings = {**_enabled_automation_settings(), **setting_overrides}
+
+    reasons = paper_trade_api._automation_execution_blockers(
+        settings,
+        _candidate(1, "1h", 72),
+    )
+
+    assert any(expected_reason in reason for reason in reasons)
+
+
+def test_executor_fails_closed_when_automation_settings_are_unavailable(monkeypatch):
+    candidate = _candidate(1, "1h", 72)
+
+    class DummyDb:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeRepo:
+        def save_candidate(self, db, item):
+            raise AssertionError("A locked executor must not persist a paper trade")
+
+    monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "build_paper_trade_candidates",
+        lambda *args, **kwargs: (None, [candidate]),
+    )
+    monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_wallet_snapshot",
+        lambda db, trades: {
+            "open_position_count": 0,
+            "remaining_margin_capacity_inr": 85_000,
+        },
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "get_automation_settings",
+        lambda db: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
+    )
+
+    result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
+
+    assert result["executed_count"] == 0
+    assert result["skipped"][0]["action"] == "skipped_automation_control"
+    assert "Paper-trade automation is disabled" in result["skipped"][0]["blocked_reasons"]
+    assert "Paper-trade automation is locked" in result["skipped"][0]["blocked_reasons"]
 
 
 def test_governed_stack_contains_all_four_required_timeframes():
@@ -64,6 +160,11 @@ def test_governed_score_and_position_tier_boundaries():
     }
     assert confidence_sizing_profile(60, 1.0)["position_tier"] == "MAXIMUM"
     assert risk_api._normalize_auto_settings({"minConfidence": 70})["minConfidence"] == 40
+    governed_limits = risk_api._normalize_auto_settings(
+        {"dailyLossLimit": 15, "maxOpenTrades": 20}
+    )
+    assert governed_limits["dailyLossLimit"] == 4
+    assert governed_limits["maxOpenTrades"] == 4
 
 
 def test_selected_timeframe_confidence_drives_watchlist_and_risk():
@@ -163,6 +264,7 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
         _candidate(3, "1d", 81, risk_reward=2.5),
     ]
     saved = []
+    lock_calls = []
 
     class DummyDb:
         def rollback(self):
@@ -172,7 +274,14 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
             pass
 
     class FakeRepo:
+        def acquire_account_execution_lock(self, db):
+            lock_calls.append("lock")
+
+        def all_trades(self, db):
+            return []
+
         def has_open_trade(self, db, symbol, side=None):
+            lock_calls.append("open-check")
             return False
 
         def has_trade_for_plan(self, db, trade_plan_id):
@@ -191,6 +300,20 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
     monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
     monkeypatch.setattr(
         paper_trade_api,
+        "_paper_wallet_snapshot",
+        lambda db, trades, account_risk=None: {
+            "open_position_count": 0,
+            "remaining_margin_capacity_inr": 85_000,
+        },
+    )
+    monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
+    monkeypatch.setattr(
+        paper_trade_api,
+        "automation_settings_payload",
+        lambda row: _enabled_automation_settings(),
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
         "_paper_trade_payload",
         lambda trade, fill_profile=None: {"id": trade.id},
     )
@@ -198,6 +321,7 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
     result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
 
     assert [item["trade_plan"]["id"] for item in saved] == [3]
+    assert lock_calls[:2] == ["lock", "open-check"]
     assert result["executed_count"] == 1
     assert sum(
         item["action"] == "skipped_weaker_symbol_candidate"
@@ -221,6 +345,12 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
             pass
 
     class FakeRepo:
+        def acquire_account_execution_lock(self, db):
+            pass
+
+        def all_trades(self, db):
+            return []
+
         def has_open_trade(self, db, symbol, side=None):
             return symbol == "BTCUSDT"
 
@@ -240,6 +370,20 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
     monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
     monkeypatch.setattr(
         paper_trade_api,
+        "_paper_wallet_snapshot",
+        lambda db, trades, account_risk=None: {
+            "open_position_count": 0,
+            "remaining_margin_capacity_inr": 85_000,
+        },
+    )
+    monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
+    monkeypatch.setattr(
+        paper_trade_api,
+        "automation_settings_payload",
+        lambda row: _enabled_automation_settings(),
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
         "_paper_trade_payload",
         lambda trade, fill_profile=None: {"id": trade.id},
     )
@@ -252,6 +396,107 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
         item["symbol"] == "BTCUSDT"
         and item["action"] == "skipped_existing_open_paper_trade"
         for item in result["skipped"]
+    )
+
+
+def test_executor_rechecks_account_capacity_under_lock_for_each_symbol(monkeypatch):
+    btc = _candidate(1, "1h", 80)
+    eth = {**_candidate(2, "4h", 80), "symbol": "ETHUSDT"}
+    open_trades = []
+    lock_count = 0
+
+    class DummyDb:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeRepo:
+        def acquire_account_execution_lock(self, db):
+            nonlocal lock_count
+            lock_count += 1
+
+        def all_trades(self, db):
+            return list(open_trades)
+
+        def has_open_trade(self, db, symbol, side=None):
+            return any(item.symbol == symbol for item in open_trades)
+
+        def has_trade_for_plan(self, db, trade_plan_id):
+            return False
+
+        def save_candidate(self, db, candidate):
+            trade = SimpleNamespace(
+                id=len(open_trades) + 1,
+                symbol=candidate["symbol"],
+                status="OPEN",
+            )
+            open_trades.append(trade)
+            return trade
+
+    settings = {**_enabled_automation_settings(), "maxOpenTrades": 1}
+    monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "build_paper_trade_candidates",
+        lambda *args, **kwargs: (None, [btc, eth]),
+    )
+    monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_account_risk_snapshot",
+        lambda db, trades: {
+            "risk_available": True,
+            "limit_reached": False,
+            "current_prices": {},
+        },
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_wallet_snapshot",
+        lambda db, trades, account_risk=None: {
+            "open_position_count": len(trades),
+            "remaining_margin_capacity_inr": 85_000,
+        },
+    )
+    monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
+    monkeypatch.setattr(
+        paper_trade_api,
+        "automation_settings_payload",
+        lambda row: settings,
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_trade_payload",
+        lambda trade, fill_profile=None: {"id": trade.id},
+    )
+
+    result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
+
+    assert lock_count == 2
+    assert result["executed_count"] == 1
+    assert result["executed"][0]["id"] == 1
+    assert any(
+        item["action"] == "skipped_account_open_trade_cap"
+        for item in result["skipped"]
+    )
+
+
+def test_postgresql_account_execution_lock_is_transaction_scoped():
+    statements = []
+
+    class FakeDb:
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        def execute(self, statement, params):
+            statements.append((str(statement), params))
+
+    assert PaperTradeRepository().acquire_account_execution_lock(FakeDb())
+    assert "pg_advisory_xact_lock" in statements[0][0]
+    assert statements[0][1]["lock_key"] == (
+        PaperTradeRepository.ACCOUNT_EXECUTION_LOCK_KEY
     )
 
 

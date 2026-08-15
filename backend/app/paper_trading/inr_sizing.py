@@ -90,37 +90,101 @@ def build_inr_paper_sizing(
     }
 
 
-def build_inr_paper_wallet(trades, *, leverage=DEFAULT_PAPER_LEVERAGE):
+def build_inr_paper_wallet(
+    trades,
+    *,
+    ledger_entries=None,
+    current_prices=None,
+    require_open_prices=False,
+    leverage=DEFAULT_PAPER_LEVERAGE,
+):
     positions = []
+    missing_price_symbols = []
+    current_prices = {
+        str(symbol).upper(): _finite_or_none(price)
+        for symbol, price in (current_prices or {}).items()
+    }
     for trade in trades or []:
         if str(_value(trade, "status") or "").upper() != "OPEN":
             continue
-        sizing = build_inr_paper_sizing(
-            _value(trade, "confidence") or 0,
-            leverage=leverage,
-            fee_bps=_value(trade, "fee_bps") or 7.5,
-            remaining_fraction=(
-                1.0
-                if _value(trade, "remaining_position_fraction") is None
-                else _value(trade, "remaining_position_fraction")
-            ),
+        remaining_fraction = (
+            1.0
+            if _value(trade, "remaining_position_fraction") is None
+            else float(_value(trade, "remaining_position_fraction"))
         )
+        sizing = _persisted_or_legacy_sizing(
+            trade,
+            leverage=leverage,
+            remaining_fraction=remaining_fraction,
+        )
+        symbol = str(_value(trade, "symbol") or "").upper()
+        current_price = current_prices.get(symbol)
+        unrealized_pnl = _open_unrealized_pnl_inr(
+            trade,
+            current_price,
+            sizing["remaining_notional_inr"],
+        )
+        if unrealized_pnl is None and require_open_prices:
+            missing_price_symbols.append(symbol)
         positions.append(
             {
                 "trade_id": _value(trade, "id"),
-                "symbol": _value(trade, "symbol"),
+                "symbol": symbol,
                 "margin_inr": sizing["remaining_margin_inr"],
                 "notional_inr": sizing["remaining_notional_inr"],
+                "current_price": current_price,
+                "unrealized_pnl_inr": unrealized_pnl,
             }
         )
 
     committed_margin = round(sum(item["margin_inr"] for item in positions), 2)
     committed_notional = round(sum(item["notional_inr"] for item in positions), 2)
-    maximum_margin = PAPER_CAPITAL_INR * MAX_ACCOUNT_MARGIN_UTILIZATION_PERCENT / 100
+    if ledger_entries is not None:
+        realized_pnl = round(
+            sum(float(_value(entry, "delta_inr") or 0) for entry in ledger_entries),
+            2,
+        )
+        accounting_source = "PERSISTED_LEDGER"
+        ledger_payload = [
+            {
+                "id": _value(entry, "id"),
+                "event_key": _value(entry, "event_key"),
+                "paper_trade_id": _value(entry, "paper_trade_id"),
+                "symbol": _value(entry, "symbol"),
+                "event_type": _value(entry, "event_type"),
+                "delta_inr": float(_value(entry, "delta_inr") or 0),
+                "position_fraction": _value(entry, "position_fraction"),
+                "created_at": _value(entry, "created_at"),
+            }
+            for entry in list(ledger_entries)[-100:]
+        ]
+    else:
+        realized_pnl = round(_realized_pnl_from_trades(trades), 2)
+        accounting_source = "PERSISTED_TRADE_SNAPSHOTS"
+        ledger_payload = []
+    wallet_balance = round(PAPER_CAPITAL_INR + realized_pnl, 2)
+    unrealized_pnl = round(
+        sum(float(item["unrealized_pnl_inr"] or 0) for item in positions),
+        2,
+    )
+    equity = round(wallet_balance + unrealized_pnl, 2)
+    valuation_complete = not missing_price_symbols
+    margin_capital = max(0.0, min(PAPER_CAPITAL_INR, equity))
+    maximum_margin = margin_capital * MAX_ACCOUNT_MARGIN_UTILIZATION_PERCENT / 100
     return {
         "currency": "INR",
         "margin_type": "INR-M",
         "paper_capital_inr": PAPER_CAPITAL_INR,
+        "initial_capital_inr": PAPER_CAPITAL_INR,
+        "realized_pnl_inr": realized_pnl,
+        "unrealized_pnl_inr": unrealized_pnl,
+        "wallet_balance_inr": wallet_balance,
+        "equity_inr": equity,
+        "valuation_complete": valuation_complete,
+        "missing_price_symbols": sorted(set(missing_price_symbols)),
+        "accounting_source": accounting_source,
+        "ledger_entry_count": len(ledger_entries or []),
+        "ledger": ledger_payload,
         "leverage": float(leverage),
         "minimum_position_allocation_percent": MINIMUM_TIER_ALLOCATION_PERCENT,
         "maximum_position_allocation_percent": MAXIMUM_TIER_ALLOCATION_PERCENT,
@@ -128,19 +192,71 @@ def build_inr_paper_wallet(trades, *, leverage=DEFAULT_PAPER_LEVERAGE):
         "maximum_margin_utilization_percent": MAX_ACCOUNT_MARGIN_UTILIZATION_PERCENT,
         "maximum_committed_margin_inr": round(maximum_margin, 2),
         "committed_margin_inr": committed_margin,
-        "available_margin_inr": round(max(0.0, PAPER_CAPITAL_INR - committed_margin), 2),
+        "available_margin_inr": round(max(0.0, equity - committed_margin), 2),
         "remaining_margin_capacity_inr": round(
             max(0.0, maximum_margin - committed_margin),
             2,
         ),
         "margin_utilization_percent": round(
-            committed_margin / PAPER_CAPITAL_INR * 100,
+            committed_margin / equity * 100 if equity > 0 else 0,
             2,
         ),
         "committed_notional_inr": committed_notional,
         "open_position_count": len(positions),
         "positions": positions,
     }
+
+
+def _open_unrealized_pnl_inr(trade, current_price, remaining_notional_inr):
+    entry_price = _finite_or_none(_value(trade, "entry_price"))
+    current_price = _finite_or_none(current_price)
+    if (
+        entry_price is None
+        or entry_price <= 0
+        or current_price is None
+        or current_price <= 0
+    ):
+        return None
+
+    if str(_value(trade, "side") or "").upper() == "SHORT":
+        gross_percent = (entry_price - current_price) / entry_price * 100
+    else:
+        gross_percent = (current_price - entry_price) / entry_price * 100
+    fee_bps = max(0.0, _finite_or_none(_value(trade, "fee_bps")) or 0.0)
+    net_percent = gross_percent - fee_bps * 2 / 100
+    return round(float(remaining_notional_inr) * net_percent / 100, 2)
+
+
+def _persisted_or_legacy_sizing(trade, *, leverage, remaining_fraction):
+    notional = _value(trade, "position_notional_inr")
+    margin = _value(trade, "margin_used_inr")
+    persisted_leverage = _value(trade, "leverage")
+    allocation = _value(trade, "allocation_percent")
+    if notional is None or margin is None:
+        return build_inr_paper_sizing(
+            _value(trade, "confidence") or 0,
+            leverage=leverage,
+            fee_bps=_value(trade, "fee_bps") or 7.5,
+            remaining_fraction=remaining_fraction,
+        )
+
+    return {
+        "remaining_notional_inr": round(float(notional) * remaining_fraction, 2),
+        "remaining_margin_inr": round(float(margin) * remaining_fraction, 2),
+        "leverage": float(persisted_leverage or leverage),
+        "allocation_percent": float(allocation or 0),
+    }
+
+
+def _realized_pnl_from_trades(trades):
+    total = 0.0
+    for trade in trades or []:
+        status = str(_value(trade, "status") or "").upper()
+        if status == "CLOSED":
+            total += float(_value(trade, "realized_pnl_inr") or 0)
+        elif status == "OPEN":
+            total += float(_value(trade, "partial_realized_pnl_inr") or 0)
+    return total
 
 
 def _finite_number(name, value):
@@ -151,6 +267,14 @@ def _finite_number(name, value):
     if not isfinite(number):
         raise ValueError(f"{name} must be a finite number")
     return number
+
+
+def _finite_or_none(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if isfinite(number) else None
 
 
 def _value(record, name):
