@@ -72,6 +72,12 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("tradeHistory.map((trade)", pnl_section)
         self.assertNotIn("openPositions.slice(", pnl_section)
         self.assertNotIn("tradeHistory.slice(", pnl_section)
+        self.assertIn("Stop-loss", pnl_section)
+        self.assertIn("Target 1", pnl_section)
+        self.assertIn("Target 2", pnl_section)
+        self.assertIn("remainingPositionLabel(trade)", pnl_section)
+        self.assertIn("exitDeadlineLabel(trade)", pnl_section)
+        self.assertIn('trade?.exit_policy === "BTC_1H_STAGED_V1"', pnl_section)
 
 
 if __name__ == "__main__":
