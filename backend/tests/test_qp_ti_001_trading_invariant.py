@@ -539,7 +539,9 @@ def test_monitoring_precedes_recalculation_and_execution():
         "orderflow",
         "smc",
         "fusion",
+        "market_participation_trend",
         "watchlist_persist",
+        "opportunity_coverage_recovery",
         "risk",
         "paper_trade_execute",
     ]

@@ -18,6 +18,7 @@ const PAGE_DATA_NEEDS = {
   dashboard: { watchlist: true, paper: true, risk: true, signals: true },
   "market-scan": { watchlist: true, paper: true, risk: true, signals: true },
   signals: { watchlist: true, paper: true, signals: true },
+  "market-trend": {},
   "coin-details": {},
   "trading-details": { pipeline: true, paper: true, risk: true },
   "risk-controls": { paper: true, risk: true },
@@ -63,6 +64,11 @@ export async function loadLiveMarketSnapshot({ symbols = [], signal }) {
 export async function loadLiveMarketStatus({ signal } = {}) {
   const response = await requestJson("/live/status", {}, signal);
   return response || null;
+}
+
+export async function loadMarketParticipationTrends({ signal } = {}) {
+  const response = await requestJson("/market-participation/trends", {}, signal, 20000);
+  return response || { source: "market_participation_trends", count: 0, records: [] };
 }
 
 export async function startLiveMarketListener({ symbols = [], signal }) {

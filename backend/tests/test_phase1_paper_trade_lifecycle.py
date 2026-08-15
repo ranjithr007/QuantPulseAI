@@ -13,10 +13,12 @@ from app.api.v1.paper_trade_api import _phase2_lifecycle_state
 from app.database.models.funding_rates import FundingRate
 from app.database.models.market_candles import MarketCandle
 from app.database.models.paper_trade import PaperTrade
+from app.database.models.point_in_time_snapshots import DecisionSnapshot, FeatureSnapshot
 from app.database.models.paper_wallet_ledger import PaperWalletLedgerEntry
 from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
+from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.trading.trade_plan_engine import build_trade_plan
 
 
@@ -51,10 +53,33 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             PaperTrade.__table__,
             MarketCandle.__table__,
             FundingRate.__table__,
+            DecisionSnapshot.__table__,
+            FeatureSnapshot.__table__,
         ):
             table.create(self.engine)
         self.Session = sessionmaker(bind=self.engine, autocommit=False, autoflush=False)
         self.addCleanup(self.engine.dispose)
+
+    def _seed_bullish_market_participation(self, db, now):
+        MarketParticipationRepository().save(
+            db,
+            {
+                "source": "market_participation_trend_v1",
+                "symbol": "BTCUSDT",
+                "status": "READY",
+                "quality_state": "OK",
+                "direction": "BULLISH",
+                "execution_side": "LONG",
+                "score": 62.0,
+                "confidence": 62.0,
+                "spot": {
+                    "status": "READY",
+                    "timeframes": [
+                        {"timeframe": "1h", "source_timestamp": now},
+                    ],
+                },
+            },
+        )
 
     def test_candidate_to_fill_to_close_to_pnl(self):
         now = datetime.utcnow().replace(microsecond=0)
@@ -95,6 +120,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     created_at=now - timedelta(minutes=1),
                 )
             )
+            self._seed_bullish_market_participation(db, now)
             db.commit()
 
         with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(
@@ -262,6 +288,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     created_at=now - timedelta(minutes=1),
                 )
             )
+            self._seed_bullish_market_participation(db, now)
             db.commit()
 
         with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(

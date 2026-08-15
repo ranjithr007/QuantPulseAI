@@ -26,6 +26,7 @@ const PAGE_ITEMS = [
   { id: "dashboard", label: "Dashboard", shortLabel: "Home", icon: BarChart3 },
   { id: "market-scan", label: "Market Scan", shortLabel: "Market", icon: Activity },
   { id: "signals", label: "Signals", shortLabel: "Signals", icon: TrendingUp },
+  { id: "market-trend", label: "Market Trend", shortLabel: "Trend", icon: RadioTower },
   { id: "trading-details", label: "Trading Details", shortLabel: "Trading", icon: ShieldCheck },
   { id: "coin-details", label: "Futures Details", shortLabel: "Futures", icon: Activity },
   { id: "risk-controls", label: "Risk Controls", shortLabel: "Risk", icon: ShieldCheck },
