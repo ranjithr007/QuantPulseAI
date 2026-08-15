@@ -275,7 +275,7 @@ export default function PnLSection({
           </div>
         </div>
 
-        <div className="mt-3.5 grid items-start gap-3.5 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="mt-3.5">
           <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
@@ -299,7 +299,9 @@ export default function PnLSection({
               </ResponsiveContainer>
             </div>
           </div>
+        </div>
 
+        <div className="mt-3.5">
           <OpenPositionsTable openPositions={openPositions} />
         </div>
 
@@ -493,13 +495,20 @@ function OpenPositionsTable({ openPositions }) {
         </div>
         <Pill tone="cyan">{openPositions.length} open</Pill>
       </div>
-      <div className="overflow-hidden rounded-lg border border-white/10">
-        <table className="min-w-full divide-y divide-white/5 text-sm">
+      <div className="overflow-x-auto rounded-lg border border-white/10">
+        <table className="min-w-[1320px] w-full divide-y divide-white/5 text-sm">
           <thead className="bg-slate-950/60 text-[11px] uppercase tracking-[0.16em] text-slate-500">
             <tr>
               <th className="px-3 py-2.5 text-left">Symbol</th>
+              <th className="px-3 py-2.5 text-left">Timeframe</th>
               <th className="px-3 py-2.5 text-left">Side</th>
               <th className="px-3 py-2.5 text-left">Entry</th>
+              <th className="px-3 py-2.5 text-left">Stop-loss</th>
+              <th className="px-3 py-2.5 text-left">Target 1</th>
+              <th className="px-3 py-2.5 text-left">Target 2</th>
+              <th className="px-3 py-2.5 text-left">Remaining</th>
+              <th className="px-3 py-2.5 text-left">Exit state</th>
+              <th className="px-3 py-2.5 text-left">Deadline</th>
               <th className="px-3 py-2.5 text-left">Current</th>
               <th className="px-3 py-2.5 text-left">PnL</th>
             </tr>
@@ -508,10 +517,29 @@ function OpenPositionsTable({ openPositions }) {
             {openPositions.map((trade) => (
               <tr key={trade.id} className="bg-slate-950/40">
                 <td className="px-3 py-2.5 text-white">{trade.symbol}</td>
+                <td className="px-3 py-2.5 text-slate-300">{trade.entry_timeframe || "-"}</td>
                 <td className="px-3 py-2.5">
                   <Pill tone={trade.side === "LONG" ? "emerald" : "rose"}>{trade.side}</Pill>
                 </td>
                 <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.entry_price)}</td>
+                <td className="px-3 py-2.5 text-rose-200">
+                  <div>{formatPrice(trade.stop_loss)}</div>
+                  {isBreakEvenProtected(trade) ? <div className="mt-0.5 text-[10px] uppercase tracking-wide text-emerald-300">Break-even</div> : null}
+                </td>
+                <td className={clsx("px-3 py-2.5", trade.target1_hit_at ? "text-emerald-300" : "text-slate-300")}>
+                  <div>{formatPrice(trade.target1)}</div>
+                  {trade.target1_hit_at ? <div className="mt-0.5 text-[10px] uppercase tracking-wide">Completed</div> : null}
+                </td>
+                <td className="px-3 py-2.5 text-emerald-200">{formatPrice(trade.target2)}</td>
+                <td className="px-3 py-2.5 text-slate-300">{remainingPositionLabel(trade)}</td>
+                <td className="px-3 py-2.5">
+                  <Pill tone={exitState(trade).tone}>{exitState(trade).label}</Pill>
+                  <div className="mt-1 text-[10px] text-slate-500">{exitPolicyLabel(trade)}</div>
+                </td>
+                <td className="px-3 py-2.5 text-slate-400">
+                  <div>{exitDeadlineLabel(trade)}</div>
+                  <div className="mt-0.5 text-[10px] text-slate-500">{exitTimeRemainingLabel(trade)}</div>
+                </td>
                 <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.current_price)}</td>
                 <td className={clsx("px-3 py-2.5 font-medium", trade.unrealized_pnl_percent >= 0 ? "text-emerald-300" : "text-rose-300")}>
                   {formatSigned(trade.unrealized_pnl_percent)}
@@ -520,7 +548,7 @@ function OpenPositionsTable({ openPositions }) {
             ))}
             {!openPositions.length ? (
               <tr>
-                <td className="px-3 py-3.5 text-slate-400" colSpan={5}>
+                <td className="px-3 py-3.5 text-slate-400" colSpan={12}>
                   No open paper positions.
                 </td>
               </tr>
@@ -530,6 +558,55 @@ function OpenPositionsTable({ openPositions }) {
       </div>
     </div>
   );
+}
+
+function isBreakEvenProtected(trade) {
+  if (!trade?.target1_hit_at) return false;
+  const entry = Number(trade.entry_price);
+  const stop = Number(trade.stop_loss);
+  if (!Number.isFinite(entry) || !Number.isFinite(stop)) return false;
+  return Math.abs(entry - stop) <= Math.max(1e-8, Math.abs(entry) * 1e-8);
+}
+
+function remainingPositionLabel(trade) {
+  const remaining = Number(trade?.remaining_position_fraction);
+  return Number.isFinite(remaining) ? `${Math.round(remaining * 100)}%` : "100%";
+}
+
+function exitState(trade) {
+  if (trade?.exit_policy === "BTC_1H_STAGED_V1") {
+    if (trade.target1_hit_at) {
+      return { label: "Awaiting T2", tone: "cyan" };
+    }
+    return { label: "Awaiting T1", tone: "amber" };
+  }
+  return { label: "Standard exit", tone: "slate" };
+}
+
+function exitPolicyLabel(trade) {
+  if (trade?.exit_policy === "BTC_1H_STAGED_V1") return "BTC 1h staged v1";
+  return "Original trade policy";
+}
+
+function exitDeadline(trade) {
+  const openedAt = Date.parse(trade?.opened_at || trade?.created_at || "");
+  const maxHoldHours = Number(trade?.max_hold_hours);
+  if (!Number.isFinite(openedAt) || !Number.isFinite(maxHoldHours) || maxHoldHours <= 0) return null;
+  return openedAt + maxHoldHours * 60 * 60 * 1000;
+}
+
+function exitDeadlineLabel(trade) {
+  const deadline = exitDeadline(trade);
+  return deadline === null ? "No fixed deadline" : formatDate(new Date(deadline).toISOString());
+}
+
+function exitTimeRemainingLabel(trade) {
+  const deadline = exitDeadline(trade);
+  if (deadline === null) return "Original policy";
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) return "Time exit due";
+  const hours = Math.ceil(remainingMs / (60 * 60 * 1000));
+  return `${hours}h remaining`;
 }
 
 function TradeHistoryTable({ tradeHistory }) {
