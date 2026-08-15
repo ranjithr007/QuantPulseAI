@@ -5,6 +5,10 @@ from app.database.models.automation_settings import AutomationSetting
 from app.database.models.automation_settings import AutomationSettingsAudit
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.governance.evidence_policy import r0_runtime_policy
+from app.paper_trading.inr_sizing import MAXIMUM_TIER_ALLOCATION_PERCENT
+from app.paper_trading.inr_sizing import MINIMUM_TIER_ALLOCATION_PERCENT
+from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
+from app.paper_trading.inr_sizing import PAPER_MAX_POSITION_INR
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 
@@ -18,7 +22,7 @@ DEFAULT_AUTOMATION_SETTINGS = {
     "dailyLossLimit": 4.0,
     "maxOpenTrades": 4,
     "maxLeverage": 5,
-    "maxPositionSize": 25000.0,
+    "maxPositionSize": PAPER_MAX_POSITION_INR,
     "minConfidence": MIN_ENTRY_CONFIDENCE,
     "direction": "BOTH",
     "executionMode": "PAPER",
@@ -34,31 +38,44 @@ def ensure_automation_settings_schema(engine):
 def get_automation_settings(db):
     row = db.query(AutomationSetting).filter(AutomationSetting.id == 1).first()
     if row:
-        if float(row.min_confidence) != MIN_ENTRY_CONFIDENCE:
+        confidence_changed = float(row.min_confidence) != MIN_ENTRY_CONFIDENCE
+        position_changed = float(row.max_position_size) != PAPER_MAX_POSITION_INR
+        if confidence_changed or position_changed:
             previous_confidence = float(row.min_confidence)
+            previous_position_size = float(row.max_position_size)
             row.min_confidence = MIN_ENTRY_CONFIDENCE
+            row.max_position_size = PAPER_MAX_POSITION_INR
             row.version = int(row.version or 0) + 1
             row.updated_at = datetime.utcnow()
+            changed_fields = {}
+            if confidence_changed:
+                changed_fields["minConfidence"] = {
+                    "from": previous_confidence,
+                    "to": MIN_ENTRY_CONFIDENCE,
+                }
+            if position_changed:
+                changed_fields["maxPositionSize"] = {
+                    "from": previous_position_size,
+                    "to": PAPER_MAX_POSITION_INR,
+                }
             db.add(
                 AutomationSettingsAudit(
                     setting_id=row.id,
-                    action="GOVERNED_CONFIDENCE_REPAIRED",
+                    action="GOVERNED_PAPER_SETTINGS_REPAIRED",
                     actor="system",
-                    changed_fields=json.dumps(
+                    changed_fields=json.dumps(changed_fields, sort_keys=True),
+                    previous_values=json.dumps(
                         {
-                            "minConfidence": {
-                                "from": previous_confidence,
-                                "to": MIN_ENTRY_CONFIDENCE,
-                            }
+                            "minConfidence": previous_confidence,
+                            "maxPositionSize": previous_position_size,
                         },
                         sort_keys=True,
                     ),
-                    previous_values=json.dumps(
-                        {"minConfidence": previous_confidence},
-                        sort_keys=True,
-                    ),
                     new_values=json.dumps(
-                        {"minConfidence": MIN_ENTRY_CONFIDENCE},
+                        {
+                            "minConfidence": MIN_ENTRY_CONFIDENCE,
+                            "maxPositionSize": PAPER_MAX_POSITION_INR,
+                        },
                         sort_keys=True,
                     ),
                 )
@@ -164,6 +181,9 @@ def automation_settings_payload(row):
         "maxOpenTrades": int(row.max_open_trades),
         "maxLeverage": int(row.max_leverage),
         "maxPositionSize": float(row.max_position_size),
+        "paperCapitalInr": PAPER_CAPITAL_INR,
+        "minimumAllocationPercent": MINIMUM_TIER_ALLOCATION_PERCENT,
+        "maximumAllocationPercent": MAXIMUM_TIER_ALLOCATION_PERCENT,
         # The execution boundary is a governed invariant, not an operator-tuned
         # setting. This also repairs legacy rows that still contain 60 or 70.
         "minConfidence": MIN_ENTRY_CONFIDENCE,
@@ -195,7 +215,7 @@ def normalize_automation_settings(value):
         "dailyLossLimit": float(value.get("dailyLossLimit", 4.0)),
         "maxOpenTrades": int(value.get("maxOpenTrades", 4)),
         "maxLeverage": int(value.get("maxLeverage", 5)),
-        "maxPositionSize": float(value.get("maxPositionSize", 25000)),
+        "maxPositionSize": PAPER_MAX_POSITION_INR,
         "minConfidence": MIN_ENTRY_CONFIDENCE,
         "direction": direction,
         "executionMode": "PAPER",

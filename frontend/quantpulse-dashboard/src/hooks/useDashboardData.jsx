@@ -33,6 +33,7 @@ function createInitialDashboardData() {
     pipeline: null,
     performance: null,
     accountRisk: null,
+    paperWallet: null,
     openTrades: [],
     closedTrades: [],
     selected: {
@@ -167,6 +168,7 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
     pipeline: overviewByKey.pipeline || current.pipeline,
     performance: officialPerformance || current.performance,
     accountRisk: paperTradeBundle.accountRisk || current.accountRisk,
+    paperWallet: paperTradeBundle.paperWallet || current.paperWallet,
     openTrades: hasPaperTradePayload ? officialOpenTrades : current.openTrades,
     closedTrades: hasPaperTradePayload ? officialClosedTrades : current.closedTrades,
     selected: {
@@ -588,6 +590,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const watchlist = data.watchlist;
   const performance = data.performance || {};
   const accountRisk = data.accountRisk || null;
+  const paperWallet = data.paperWallet || null;
   const openTrades = data.openTrades || [];
   const closedTrades = data.closedTrades || [];
 
@@ -782,6 +785,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     activeTradePlan,
     autoDecision,
     openTrades,
+    paperWallet,
     selectedPipeline,
     candleSeries,
     volumeSeries,

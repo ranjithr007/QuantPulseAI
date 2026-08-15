@@ -6,6 +6,8 @@ from app.database.models.funding_rates import FundingRate
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import USING_SQLITE_FALLBACK
+from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
+from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 from app.repositories.trade_thesis_repository import TradeThesisRepository
@@ -62,6 +64,73 @@ class PaperTradeRepository:
         self.ensure_table(db)
 
         return db.query(PaperTrade).filter(PaperTrade.status == "OPEN").all()
+
+    def ensure_staged_exit_policy(self, db, trade):
+        """Apply the official staged policy to an existing open paper trade."""
+        levels = build_policy_trade_levels(
+            trade.side,
+            trade.entry_price,
+            symbol=trade.symbol,
+            timeframe=trade.entry_timeframe,
+            confidence=trade.confidence or 0,
+            fee_bps=getattr(trade, "fee_bps", None) or 7.5,
+            price_precision=_price_precision(trade.entry_price),
+        )
+        if levels is None:
+            return False
+
+        target1_complete = getattr(trade, "target1_hit_at", None) is not None
+        desired_stop = (
+            float(trade.entry_price)
+            if target1_complete
+            else levels["stop_loss"]
+        )
+        desired_remaining = 0.5 if target1_complete else 1.0
+        values = {
+            "exit_policy": PAPER_STAGED_EXIT_POLICY,
+            "initial_stop_loss": levels["stop_loss"],
+            "stop_loss": desired_stop,
+            "target1": levels["target1"],
+            "target2": levels["target2"],
+            "target1_fraction": levels["target1_fraction"],
+            "remaining_position_fraction": desired_remaining,
+            "max_hold_hours": levels["max_hold_hours"],
+        }
+        trade_changed = any(
+            not _same_policy_value(getattr(trade, key, None), value)
+            for key, value in values.items()
+        )
+        linked_plan = (
+            db.query(TradePlan)
+            .filter(TradePlan.id == getattr(trade, "trade_plan_id", None))
+            .first()
+        )
+        plan_values = {
+            "stop_loss": levels["stop_loss"],
+            "target1": levels["target1"],
+            "target2": levels["target2"],
+            "risk_reward": levels["target2_net_risk_reward"],
+            "exit_policy": PAPER_STAGED_EXIT_POLICY,
+            "target1_fraction": levels["target1_fraction"],
+            "max_hold_hours": levels["max_hold_hours"],
+        }
+        plan_changed = linked_plan is not None and any(
+            not _same_policy_value(getattr(linked_plan, key, None), value)
+            for key, value in plan_values.items()
+        )
+        if not trade_changed and not plan_changed:
+            return False
+
+        for key, value in values.items():
+            setattr(trade, key, value)
+
+        if linked_plan is not None:
+            for key, value in plan_values.items():
+                setattr(linked_plan, key, value)
+
+        commit_or_rollback(db)
+        db.refresh(trade)
+        return True
 
     def list_trades(self, db, status=None, symbol=None, limit=50):
         self.ensure_table(db)
@@ -122,7 +191,37 @@ class PaperTradeRepository:
         fill_profile = candidate.get("fill_profile") or {}
         market_context = candidate.get("market_context") or {}
         entry_price = fill_profile.get("entry_fill_price", trade_plan["entry_price"])
-        risk_reward = fill_profile.get("effective_risk_reward", risk["risk_reward"])
+        policy_levels = build_policy_trade_levels(
+            candidate["side"],
+            entry_price,
+            symbol=candidate["symbol"],
+            timeframe=trade_plan.get("entry_timeframe"),
+            confidence=(
+                risk.get("confidence") or trade_plan.get("confidence") or 0
+            ),
+            fee_bps=fill_profile.get("fee_bps", 7.5),
+            price_precision=_price_precision(entry_price),
+        )
+        risk_reward = (
+            policy_levels["target2_net_risk_reward"]
+            if policy_levels is not None
+            else fill_profile.get("effective_risk_reward", risk["risk_reward"])
+        )
+        stop_loss = (
+            policy_levels["stop_loss"]
+            if policy_levels is not None
+            else trade_plan["stop_loss"]
+        )
+        target1 = (
+            policy_levels["target1"]
+            if policy_levels is not None
+            else trade_plan["target1"]
+        )
+        target2 = (
+            policy_levels["target2"]
+            if policy_levels is not None
+            else trade_plan["target2"]
+        )
         paper_trade = PaperTrade(
             trade_plan_id=trade_plan["id"],
             risk_decision_id=risk["id"],
@@ -130,9 +229,9 @@ class PaperTradeRepository:
             symbol=str(candidate["symbol"]).upper(),
             side=candidate["side"],
             entry_price=entry_price,
-            stop_loss=trade_plan["stop_loss"],
-            target1=trade_plan["target1"],
-            target2=trade_plan["target2"],
+            stop_loss=stop_loss,
+            target1=target1,
+            target2=target2,
             position_size=risk["position_size"],
             risk_reward=risk_reward,
             risk_percent=risk["risk_percent"],
@@ -142,11 +241,23 @@ class PaperTradeRepository:
             timeframe_stack=trade_plan.get("timeframe_stack"),
             regime=trade_plan.get("regime"),
             data_generation_id=trade_plan.get("data_generation_id"),
-            exit_policy=trade_plan.get("exit_policy"),
-            initial_stop_loss=trade_plan["stop_loss"],
-            target1_fraction=trade_plan.get("target1_fraction"),
+            exit_policy=(
+                policy_levels["name"]
+                if policy_levels is not None
+                else trade_plan.get("exit_policy")
+            ),
+            initial_stop_loss=stop_loss,
+            target1_fraction=(
+                policy_levels["target1_fraction"]
+                if policy_levels is not None
+                else trade_plan.get("target1_fraction")
+            ),
             remaining_position_fraction=1.0,
-            max_hold_hours=trade_plan.get("max_hold_hours"),
+            max_hold_hours=(
+                policy_levels["max_hold_hours"]
+                if policy_levels is not None
+                else trade_plan.get("max_hold_hours")
+            ),
             validation_contract_version=candidate.get("validation_contract_version"),
             fill_model_version=fill_profile.get("model"),
             planned_entry_price=fill_profile.get(
@@ -314,3 +425,23 @@ class PaperTradeRepository:
             if row.funding_time is not None and row.rate is not None:
                 rates_by_event[row.funding_time] = float(row.rate)
         return list(rates_by_event.items())
+
+
+def _price_precision(price):
+    price = float(price)
+    if price < 1:
+        return 6
+    if price < 10:
+        return 5
+    if price < 100:
+        return 4
+    return 2
+
+
+def _same_policy_value(current, desired):
+    if isinstance(desired, float):
+        try:
+            return abs(float(current) - desired) <= 1e-9
+        except (TypeError, ValueError):
+            return False
+    return current == desired

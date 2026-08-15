@@ -4,6 +4,8 @@ import pytest
 
 from app.api.v1 import backtest_api
 from app.backtesting.filtered_replay_engine import FilteredReplayConfig
+from app.backtesting.filtered_replay_engine import _entry_exit_levels
+from app.backtesting.filtered_replay_engine import _execution_confidence
 from app.backtesting.filtered_replay_engine import _exit_trigger_with_policy
 from app.backtesting.filtered_replay_engine import _liquidation_diagnostics
 from app.backtesting.filtered_replay_engine import _position_sizing
@@ -128,6 +130,57 @@ def test_replay_config_rejects_two_sizing_authorities():
             risk_percent_per_trade=1,
             target_trade_volatility_percent=1,
         )
+
+
+def test_paper_policy_replay_uses_fixed_five_percent_stop_and_cost_adjusted_2r():
+    config = FilteredReplayConfig(
+        stop_atr_multiple=5,
+        target_atr_multiple=10,
+        exit_distance_model="PAPER_POLICY",
+    )
+
+    long_stop, long_target, long_risk, long_reward = _entry_exit_levels(
+        "LONG",
+        100,
+        2,
+        50,
+        config,
+    )
+    short_stop, short_target, short_risk, short_reward = _entry_exit_levels(
+        "SHORT",
+        100,
+        2,
+        50,
+        config,
+    )
+
+    assert long_stop == pytest.approx(95)
+    assert short_stop == pytest.approx(105)
+    assert long_target > 110
+    assert short_target < 90
+    assert long_risk == pytest.approx(5)
+    assert short_risk == pytest.approx(5)
+    assert long_reward > 10
+    assert short_reward > 10
+
+
+def test_replay_config_rejects_unknown_exit_distance_model():
+    with pytest.raises(ValueError, match="exit_distance_model"):
+        FilteredReplayConfig(exit_distance_model="UNKNOWN")
+
+
+def test_replay_sizing_uses_governed_entry_confidence_over_composite_confidence():
+    decision = {
+        "confidence": 74.5,
+        "timeframe_stack": {
+            "decision_chain": {
+                "signal": {"confidence": 49.0},
+                "risk": {"confidence": 49.0},
+            }
+        },
+    }
+
+    assert _execution_confidence(decision) == 49.0
 
 
 def test_backtest_api_rejects_two_sizing_authorities():

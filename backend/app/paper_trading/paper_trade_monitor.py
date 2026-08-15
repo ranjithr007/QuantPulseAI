@@ -1,14 +1,14 @@
 from datetime import timedelta
 
 from app.paper_trading.fill_model import simulate_exit_fill
-from app.paper_trading.exit_policy import BTC_1H_STAGED_EXIT_POLICY
+from app.paper_trading.exit_policy import is_staged_exit_policy
 
 
 def evaluate_paper_trade_exit(trade, candle):
     high = float(candle.high_price)
     low = float(candle.low_price)
 
-    if getattr(trade, "exit_policy", None) == BTC_1H_STAGED_EXIT_POLICY:
+    if is_staged_exit_policy(getattr(trade, "exit_policy", None)):
         return _evaluate_staged_exit(trade, candle, high, low)
 
     if trade.side == "LONG":

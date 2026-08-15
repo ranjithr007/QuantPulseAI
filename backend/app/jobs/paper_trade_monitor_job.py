@@ -15,6 +15,7 @@ def run_paper_trade_monitor_job():
     try:
         summary = {
             "processed": 0,
+            "policy_updates": 0,
             "closed": 0,
             "partial_closes": 0,
             "wins": 0,
@@ -28,6 +29,8 @@ def run_paper_trade_monitor_job():
         for trade in repo.get_open_trades(db):
             summary["processed"] += 1
             try:
+                if repo.ensure_staged_exit_policy(db, trade):
+                    summary["policy_updates"] += 1
                 timeframe = getattr(trade, "entry_timeframe", None) or DEFAULT_TIMEFRAME
                 candle = get_latest_candle(db, trade.symbol, timeframe)
 

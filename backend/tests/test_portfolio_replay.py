@@ -61,7 +61,8 @@ def test_portfolio_replay_rejects_lower_priority_same_cluster_overlap():
         "PORTFOLIO_MAX_CLUSTER_EXPOSURE": 1
     }
     assert report["portfolio_policy"]["same_timestamp_priority"] == (
-        "CONFIDENCE_DESC_SYMBOL_ASC_SIDE_ASC"
+        "VALIDATED_CONFIDENCE_DESC_SYMBOL_ASC_REWARD_RISK_DESC_"
+        "TIMEFRAME_DURABILITY_DESC_SIDE_ASC"
     )
 
 
@@ -99,6 +100,44 @@ def test_portfolio_replay_releases_exited_position_before_next_entry():
     assert report["total_trades"] == 2
     assert report["rejection_counts"] == {}
     assert report["final_capital"] == 10_200
+
+
+def test_portfolio_replay_rejects_overlapping_second_trade_for_same_symbol():
+    results = {
+        "BTCUSDT": {
+            "trades": [
+                {
+                    **_trade(
+                        entry_time="2026-01-01T01:00:00+00:00",
+                        exit_time="2026-01-01T04:00:00+00:00",
+                        confidence=70,
+                    ),
+                    "entry_timeframe": "1h",
+                    "selection_confidence": 70,
+                },
+                {
+                    **_trade(
+                        entry_time="2026-01-01T02:00:00+00:00",
+                        exit_time="2026-01-01T03:00:00+00:00",
+                        confidence=90,
+                    ),
+                    "entry_timeframe": "4h",
+                    "selection_confidence": 90,
+                },
+            ]
+        }
+    }
+
+    report = build_portfolio_replay(
+        results,
+        max_open_positions=5,
+        max_gross_exposure_percent=1_000,
+        max_cluster_exposure_percent=1_000,
+    )
+
+    assert report["total_trades"] == 1
+    assert report["rejection_counts"] == {"SYMBOL_ACTIVE_POSITION": 1}
+    assert report["portfolio_policy"]["one_active_position_per_symbol"] is True
 
 
 def test_portfolio_replay_does_not_infer_missing_clusters():

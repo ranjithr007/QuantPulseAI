@@ -16,6 +16,8 @@ from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
+from app.paper_trading.inr_sizing import build_inr_paper_sizing
+from app.paper_trading.inr_sizing import build_inr_paper_wallet
 from app.paper_trading.measurement import MeasurementGates
 from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
@@ -68,12 +70,14 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     closed_count = len(closed_trades)
     account_trades = trades if normalized_symbol is None else repo.all_trades(db)
     account_risk = _account_risk_snapshot(db, account_trades)
+    paper_wallet = build_inr_paper_wallet(account_trades)
 
     return {
         "source": "paper_trade_bundle",
         "symbol_filter": normalized_symbol,
         "marketContext": _market_context_payload(normalized_symbol),
         "accountRisk": account_risk,
+        "paperWallet": paper_wallet,
         "performance": {
             **paper_trade_performance(trades),
             "total_trades": len(trades),
@@ -701,6 +705,11 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             stale_after_seconds,
         )
         repo = PaperTradeRepository()
+        try:
+            auto = automation_settings_payload(get_automation_settings(db))
+        except (SQLAlchemyError, AttributeError):
+            db.rollback()
+            auto = DEFAULT_AUTOMATION_SETTINGS
         executed = []
         skipped = []
 
@@ -750,6 +759,34 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             )
 
             candidate = winner
+            wallet = build_inr_paper_wallet(
+                repo.all_trades(db) if hasattr(repo, "all_trades") else []
+            )
+            candidate_margin = float(
+                (candidate.get("paper_sizing") or {}).get("margin_used_inr") or 0
+            )
+            if wallet["open_position_count"] >= int(auto.get("maxOpenTrades", 4)):
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_account_open_trade_cap",
+                    }
+                )
+                continue
+            if candidate_margin > wallet["remaining_margin_capacity_inr"]:
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_inr_margin_cap",
+                        "required_margin_inr": candidate_margin,
+                        "remaining_margin_capacity_inr": wallet[
+                            "remaining_margin_capacity_inr"
+                        ],
+                    }
+                )
+                continue
             trade_plan_id = candidate["trade_plan"]["id"]
             if repo.has_trade_for_plan(db, trade_plan_id):
                 skipped.append(
@@ -860,6 +897,12 @@ def build_paper_trade_candidates(
     }
     account_trades = PaperTradeRepository().all_trades(db)
     account_risk = _account_risk_snapshot(db, account_trades)
+    paper_wallet = build_inr_paper_wallet(account_trades)
+    try:
+        auto = automation_settings_payload(get_automation_settings(db))
+    except SQLAlchemyError:
+        db.rollback()
+        auto = DEFAULT_AUTOMATION_SETTINGS
     open_symbols = {
         str(item.symbol).upper()
         for item in account_trades
@@ -872,6 +915,8 @@ def build_paper_trade_candidates(
             stale_after_seconds,
             derivative_payloads.get(trade.symbol),
             account_risk=account_risk,
+            paper_wallet=paper_wallet,
+            max_open_trades=int(auto.get("maxOpenTrades", 4)),
             coin_has_active_trade=str(trade.symbol).upper() in open_symbols,
         )
         for trade in trades
@@ -1332,6 +1377,18 @@ def _build_phase2_evidence_checkpoint(db, checkpoint_date):
 
 
 def _paper_trade_payload(paper_trade, fill_profile=None):
+    remaining_fraction = getattr(
+        paper_trade,
+        "remaining_position_fraction",
+        None,
+    )
+    sizing = build_inr_paper_sizing(
+        paper_trade.confidence or 0,
+        fee_bps=paper_trade.fee_bps or DEFAULT_FEE_BPS,
+        remaining_fraction=(
+            1.0 if remaining_fraction is None else remaining_fraction
+        ),
+    )
     payload = {
         "id": paper_trade.id,
         "trade_plan_id": paper_trade.trade_plan_id,
@@ -1355,11 +1412,7 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "exit_policy": getattr(paper_trade, "exit_policy", None),
         "initial_stop_loss": getattr(paper_trade, "initial_stop_loss", None),
         "target1_fraction": getattr(paper_trade, "target1_fraction", None),
-        "remaining_position_fraction": getattr(
-            paper_trade,
-            "remaining_position_fraction",
-            None,
-        ),
+        "remaining_position_fraction": remaining_fraction,
         "max_hold_hours": getattr(paper_trade, "max_hold_hours", None),
         "target1_hit_at": getattr(paper_trade, "target1_hit_at", None),
         "target1_exit_price": getattr(paper_trade, "target1_exit_price", None),
@@ -1417,7 +1470,14 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "created_at": paper_trade.created_at,
         "market_type": "FUTURES",
         "instrument_type": "PERPETUAL",
-        "venue": "BINANCE_FUTURES",
+        "venue": "COINDCX_INR_M_PAPER",
+        "price_reference_venue": "BINANCE_FUTURES",
+        "paper_sizing": sizing,
+        "currency": sizing["currency"],
+        "position_notional_inr": sizing["position_notional_inr"],
+        "margin_used_inr": sizing["margin_used_inr"],
+        "allocation_percent": sizing["allocation_percent"],
+        "leverage": sizing["leverage"],
     }
 
     if fill_profile is not None:
@@ -1442,9 +1502,15 @@ def _paper_trade_candidate(
     derivatives=None,
     *,
     account_risk=None,
+    paper_wallet=None,
+    max_open_trades=4,
     coin_has_active_trade=False,
 ):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
+    paper_sizing = build_inr_paper_sizing(
+        risk_payload.get("confidence", trade.confidence or 0),
+        fee_bps=DEFAULT_FEE_BPS,
+    )
     fill_profile = build_fill_profile(
         side=trade.side,
         planned_entry_price=trade.entry_price,
@@ -1469,11 +1535,21 @@ def _paper_trade_candidate(
         if coin_has_active_trade
         else []
     )
-    account_blockers = (
-        ["Account-wide daily loss limit reached"]
-        if (account_risk or {}).get("limit_reached")
-        else []
+    account_blockers = []
+    if (account_risk or {}).get("limit_reached"):
+        account_blockers.append("Account-wide daily loss limit reached")
+    if int((paper_wallet or {}).get("open_position_count") or 0) >= int(
+        max_open_trades
+    ):
+        account_blockers.append("Account-wide open trade cap reached")
+    remaining_margin_capacity = (paper_wallet or {}).get(
+        "remaining_margin_capacity_inr"
     )
+    if (
+        remaining_margin_capacity is not None
+        and paper_sizing["margin_used_inr"] > float(remaining_margin_capacity)
+    ):
+        account_blockers.append("INR paper-wallet margin cap reached")
     blocker_scopes = {
         "trade": trade_blockers,
         "coin": coin_blockers,
@@ -1491,6 +1567,7 @@ def _paper_trade_candidate(
         "validation_contract_version": PHASE2_VALIDATION_CONTRACT_VERSION,
         "trade_plan": _trade_plan_payload(trade),
         "risk_decision": risk_payload,
+        "paper_sizing": paper_sizing,
         "fill_profile": fill_profile,
         "market_context": _market_context_payload(trade.symbol, derivatives),
     }
@@ -1611,6 +1688,8 @@ def _market_context_payload(symbol=None, derivatives=None):
         "market_type": "FUTURES",
         "instrument_type": "PERPETUAL",
         "venue": "BINANCE_FUTURES",
+        "paper_execution_venue": "COINDCX_INR_M_PAPER",
+        "margin_currency": "INR",
         "fundingRate": (derivatives or {}).get("latest_funding_rate"),
         "openInterest": (derivatives or {}).get("latest_open_interest"),
         "openInterestChangePercent": (derivatives or {}).get(
@@ -1728,6 +1807,7 @@ def _paper_trade_unavailable_payload(operation, symbol_filter=None, status_filte
                     "total_pnl_percent": 0,
                 },
                 "summary": {"open": 0, "closed": 0, "wins": 0, "losses": 0},
+                "paperWallet": build_inr_paper_wallet([]),
                 "openTrades": {"count": 0, "records": []},
                 "closedTrades": {"count": 0, "records": []},
             }

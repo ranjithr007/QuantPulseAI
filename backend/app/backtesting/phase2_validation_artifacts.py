@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from app.governance.evidence_policy import govern_phase2_report
@@ -26,7 +26,10 @@ def persist_phase2_validation_artifact(report, walk_forward_result, *, symbol, t
         "report": governed_report,
         "walk_forward_result": walk_forward_result,
     }
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(payload, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
     md_path.write_text(
         _markdown_summary(governed_report, symbol, timeframe, signal),
         encoding="utf-8",
@@ -189,6 +192,12 @@ def _as_datetime(value):
     if isinstance(value, datetime):
         return value
     return datetime.utcnow()
+
+
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _read_payload(json_path):

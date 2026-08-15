@@ -25,7 +25,7 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
             "target2": 97.7,
             "confidence": 50,
             "risk_reward": 2.0,
-            "exit_policy": "BTC_1H_STAGED_V1",
+            "exit_policy": "PAPER_STAGED_EXIT_V1",
             "target1_fraction": 0.5,
             "target1_hit_at": None,
             "max_hold_hours": 48,
@@ -135,6 +135,20 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         self.assertEqual(result["remaining_position_fraction"], 0.5)
         self.assertEqual(result["new_stop_loss"], 100.0)
         self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET1")
+
+    def test_legacy_btc_policy_name_still_uses_staged_lifecycle(self):
+        trade = self._staged_trade(exit_policy="BTC_1H_STAGED_V1")
+        candle = SimpleNamespace(
+            high_price=100.2,
+            low_price=98.4,
+            close_price=98.8,
+            candle_time=datetime(2026, 8, 10, 4, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "PARTIAL_CLOSE")
+        self.assertEqual(result["remaining_position_fraction"], 0.5)
 
     def test_staged_trade_closes_remainder_at_target2(self):
         trade = self._staged_trade(
