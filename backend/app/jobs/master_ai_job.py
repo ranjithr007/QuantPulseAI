@@ -79,6 +79,8 @@ def run_master_ai_job():
                     current_price,
                     atr,
                     confidence=result["confidence"],
+                    symbol=symbol,
+                    timeframe=timeframe,
                 )
                 result["entry_price"] = trade_plan["entry"]
                 result["target_price"] = trade_plan["target1"]

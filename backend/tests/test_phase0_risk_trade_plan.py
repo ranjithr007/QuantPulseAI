@@ -205,6 +205,63 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
         self.assertGreaterEqual(long_plan["risk_reward"], 2.0)
         self.assertGreaterEqual(short_plan["risk_reward"], 2.0)
 
+    def test_btc_one_hour_plan_uses_staged_paper_exit_policy(self):
+        plan = build_trade_plan(
+            "SHORT",
+            63048.90,
+            192.71,
+            confidence=47.27,
+            symbol="BTCUSDT",
+            timeframe="1h",
+        )
+
+        self.assertEqual(plan["exit_policy"], "BTC_1H_STAGED_V1")
+        self.assertEqual(plan["stop_loss"], 63521.77)
+        self.assertEqual(plan["target1"], 62103.17)
+        self.assertEqual(plan["target2"], 61598.78)
+        self.assertEqual(plan["target1_fraction"], 0.5)
+        self.assertEqual(plan["max_hold_hours"], 48)
+        self.assertLess(plan["target1_net_risk_reward"], 2.0)
+        self.assertGreaterEqual(plan["target2_net_risk_reward"], 2.0)
+
+    def test_staged_plan_uses_final_target_for_two_risk_approval(self):
+        plan = build_trade_plan(
+            "SHORT",
+            63048.90,
+            192.71,
+            confidence=47.27,
+            symbol="BTCUSDT",
+            timeframe="1h",
+        )
+        risk = RiskEngine().analyze_trade_plan(
+            symbol="BTCUSDT",
+            side="SHORT",
+            entry=plan["entry"],
+            stop_loss=plan["stop_loss"],
+            target1=plan["target1"],
+            target2=plan["target2"],
+            confidence=47.27,
+            fee_bps=7.5,
+            minimum_reward_target=plan["target2"],
+        )
+
+        self.assertEqual(risk["decision"], "APPROVE")
+        self.assertEqual(risk["minimum_reward_target"], plan["target2"])
+        self.assertGreaterEqual(risk["risk_reward"], 2.0)
+
+    def test_btc_other_timeframes_keep_default_exit_policy(self):
+        plan = build_trade_plan(
+            "LONG",
+            100.0,
+            1.0,
+            confidence=50,
+            symbol="BTCUSDT",
+            timeframe="4h",
+        )
+
+        self.assertNotIn("exit_policy", plan)
+        self.assertEqual(plan["stop_loss_percent"], 5.0)
+
     def test_minimum_tier_never_exceeds_configured_risk_cap(self):
         risk = RiskEngine().analyze_trade_plan(
             symbol="BTCUSDT",
