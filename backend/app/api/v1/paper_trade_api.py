@@ -39,6 +39,7 @@ from app.repositories.automation_settings_repository import PAPER_DAILY_LOSS_LIM
 from app.repositories.automation_settings_repository import PAPER_MAX_OPEN_TRADES
 from app.repositories.derivative_repository import DerivativeRepository
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
+from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.repositories.point_in_time_snapshot_repository import list_decision_snapshots
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.symbol_repository import SymbolRepository
@@ -56,6 +57,9 @@ PHASE2_CHECKPOINT_EVENT_SOURCE = "phase2_daily_checkpoint"
 PHASE2_CHECKPOINT_EVENT_CATEGORY = "PHASE2_DAILY_EVIDENCE"
 PAPER_RISK_MARK_TIMEFRAME = "5m"
 PAPER_RISK_MARK_MAX_AGE_SECONDS = 15 * 60
+MARKET_PARTICIPATION_MAX_AGE_SECONDS = 75 * 60
+MARKET_PARTICIPATION_EXECUTION_THRESHOLD = 40.0
+_MARKET_PARTICIPATION_UNSET = object()
 
 
 def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
@@ -1135,6 +1139,10 @@ def build_paper_trade_candidates(
         )
         for trade_symbol in {trade.symbol for trade in trades}
     }
+    market_participation_payloads = MarketParticipationRepository().latest_for_symbols(
+        db,
+        [trade.symbol for trade in trades],
+    )
     account_trades = PaperTradeRepository().all_trades(db)
     account_risk = _account_risk_snapshot(db, account_trades)
     paper_wallet = _paper_wallet_snapshot(
@@ -1158,6 +1166,7 @@ def build_paper_trade_candidates(
             latest_risks.get(trade.symbol),
             stale_after_seconds,
             derivative_payloads.get(trade.symbol),
+            market_participation=market_participation_payloads.get(trade.symbol),
             account_risk=account_risk,
             paper_wallet=paper_wallet,
             max_open_trades=min(
@@ -1794,6 +1803,7 @@ def _paper_trade_candidate(
     stale_after_seconds,
     derivatives=None,
     *,
+    market_participation=_MARKET_PARTICIPATION_UNSET,
     account_risk=None,
     paper_wallet=None,
     max_open_trades=4,
@@ -1823,6 +1833,13 @@ def _paper_trade_candidate(
         derivatives,
         fill_profile=fill_profile,
     )
+    if market_participation is not _MARKET_PARTICIPATION_UNSET:
+        trade_blockers.extend(
+            _market_participation_blockers(
+                market_participation,
+                trade.side,
+            )
+        )
     coin_blockers = (
         ["Active trade already exists for this coin"]
         if coin_has_active_trade
@@ -1864,8 +1881,37 @@ def _paper_trade_candidate(
         "risk_decision": risk_payload,
         "paper_sizing": paper_sizing,
         "fill_profile": fill_profile,
+        "market_participation": (
+            None
+            if market_participation is _MARKET_PARTICIPATION_UNSET
+            else market_participation
+        ),
         "market_context": _market_context_payload(trade.symbol, derivatives),
     }
+
+
+def _market_participation_blockers(payload, side):
+    if not payload:
+        return ["Market participation trend is unavailable"]
+
+    freshness = freshness_status(
+        payload.get("effective_timestamp"),
+        MARKET_PARTICIPATION_MAX_AGE_SECONDS,
+    )
+    if freshness.get("is_stale"):
+        return ["Market participation trend is stale"]
+    if payload.get("status") != "READY" or payload.get("quality_state") != "OK":
+        return ["Market participation spot evidence is incomplete"]
+
+    expected = "BULLISH" if str(side).upper() == "LONG" else "BEARISH"
+    direction = str(payload.get("direction") or "NEUTRAL").upper()
+    if direction != expected:
+        return [
+            f"Market participation trend is {direction}; {str(side).upper()} requires {expected}"
+        ]
+    if float(payload.get("confidence") or 0) < MARKET_PARTICIPATION_EXECUTION_THRESHOLD:
+        return ["Market participation confidence is below 40%"]
+    return []
 
 
 def _trade_plan_payload(trade):

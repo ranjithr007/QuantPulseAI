@@ -11,6 +11,8 @@ from app.database.sqlserver import SessionLocal, USING_SQLITE_FALLBACK
 from app.jobs.feature_jobs import run_feature_job
 from app.jobs.fusion_job import run_fusion_job
 from app.jobs.market_job import run_market_job
+from app.jobs.market_participation_trend_job import run_market_participation_trend_job
+from app.jobs.opportunity_coverage_recovery_job import run_opportunity_coverage_recovery_job
 from app.jobs.orderflow_jobs import run_orderflow_job
 from app.jobs.paper_trade_execute_job import run_paper_trade_execute_job
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
@@ -31,7 +33,9 @@ STAGE_ORDER = (
     ("orderflow", run_orderflow_job),
     ("smc", run_smc_job),
     ("fusion", run_fusion_job),
+    ("market_participation_trend", run_market_participation_trend_job),
     ("watchlist_persist", run_watchlist_persist_job),
+    ("opportunity_coverage_recovery", run_opportunity_coverage_recovery_job),
     ("risk", run_risk_job),
     ("paper_trade_execute", run_paper_trade_execute_job),
 )

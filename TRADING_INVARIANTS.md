@@ -178,6 +178,46 @@ each timeframe contributes 25 percentage points. Bullish, Bearish, Neutral, and
 Unknown percentages are calculated as `direction count / 4 * 100`. This aggregate
 percentage does not change any timeframe's regime or confidence. Regime confidence
 is calculated independently by the selected rule for that single timeframe.
+
+## QP-TI-002: Independent market-participation confirmation
+
+**Status:** Implemented for new paper-trade entries. Live execution remains
+disabled.
+
+The market-participation trend is a separate `BULLISH`, `BEARISH`, or `NEUTRAL`
+decision and must never replace or mutate an individual timeframe's regime. It
+uses finalized Binance Spot evidence on `1h`, `2h`, `4h`, and `1d`, including
+actual taker-buy and taker-sell quote volume, spot CVD, relative spot volume,
+price/EMA structure, and dynamically calculated support and resistance zones.
+
+Dynamic resistance or support must not be hard-coded to a published price. A
+repeated-rejection adjustment requires at least two historical tests in the
+calculated zone. A breakout requires acceptance above resistance; a breakdown
+requires acceptance below support. A wick through a zone without confirming
+closes is not acceptance.
+
+The combined participation result may also use fresh futures open interest and
+funding, observed (not estimated) liquidation pressure, ETH/BTC participation,
+and configured-symbol breadth. ETF flows, macroeconomic conditions, regulatory
+events, and corporate treasury flows may affect the score only when supplied by
+a verified provider with timestamped evidence. Missing external-context data is
+reported as unavailable and contributes zero; it must never be fabricated.
+
+New paper-trade entry requires both governed decisions to agree:
+
+- existing selected timeframe `BULLISH` + participation `BULLISH` permits a Long
+  candidate to continue through risk checks;
+- existing selected timeframe `BEARISH` + participation `BEARISH` permits a Short
+  candidate to continue through risk checks;
+- participation `NEUTRAL`, opposite, stale, degraded, or below absolute score
+  `40` blocks the new entry;
+- this confirmation must not delay or block monitoring and closure of an already
+  active paper trade.
+
+The participation result is a trade-level blocker. It does not change the
+one-active-trade-per-symbol lock, account-wide limits, staged exits, or the
+canonical rescan lifecycle in QP-TI-001.
+
 # INR-M paper-wallet sizing
 
 - Paper trading uses a governed starting wallet of **INR 100,000**. This is

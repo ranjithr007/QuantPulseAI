@@ -22,12 +22,14 @@ from app.config import get_settings
 from app.database.models.automation_settings import AutomationSetting
 from app.database.models.automation_settings import AutomationSettingsAudit
 from app.database.models.paper_trade import PaperTrade
+from app.database.models.point_in_time_snapshots import DecisionSnapshot, FeatureSnapshot
 from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import Base
 from app.api.v1 import paper_trade_api
 from app.main import app
 from app.repositories.automation_settings_repository import update_automation_settings
+from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.trading.trade_plan_engine import build_trade_plan
 
 
@@ -53,12 +55,16 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         PaperTrade.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
         RiskDecision.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
         TradePlan.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
+        DecisionSnapshot.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
+        FeatureSnapshot.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
 
         TradePlan.__table__.create(bind=TEST_ENGINE, checkfirst=True)
         RiskDecision.__table__.create(bind=TEST_ENGINE, checkfirst=True)
         PaperTrade.__table__.create(bind=TEST_ENGINE, checkfirst=True)
         AutomationSetting.__table__.create(bind=TEST_ENGINE, checkfirst=True)
         AutomationSettingsAudit.__table__.create(bind=TEST_ENGINE, checkfirst=True)
+        DecisionSnapshot.__table__.create(bind=TEST_ENGINE, checkfirst=True)
+        FeatureSnapshot.__table__.create(bind=TEST_ENGINE, checkfirst=True)
 
         with TestSessionLocal() as db:
             update_automation_settings(
@@ -102,6 +108,7 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
                 created_at=risk_created_at,
             )
             db.add(risk)
+            _seed_bullish_market_participation(db)
             db.commit()
 
     def test_paper_trade_candidate_execution_uses_test_database(self):
@@ -162,6 +169,29 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(payload["source"], "paper_trade_fill_model")
         self.assertEqual(payload["profile"]["entry_fill_price"], 100.06)
         self.assertEqual(payload["profile"]["fill_quality"], "NORMAL")
+
+
+def _seed_bullish_market_participation(db):
+    now = datetime.utcnow()
+    MarketParticipationRepository().save(
+        db,
+        {
+            "source": "market_participation_trend_v1",
+            "symbol": "BTCUSDT",
+            "status": "READY",
+            "quality_state": "OK",
+            "direction": "BULLISH",
+            "execution_side": "LONG",
+            "score": 62.0,
+            "confidence": 62.0,
+            "spot": {
+                "status": "READY",
+                "timeframes": [
+                    {"timeframe": "1h", "source_timestamp": now},
+                ],
+            },
+        },
+    )
 
 
 if __name__ == "__main__":

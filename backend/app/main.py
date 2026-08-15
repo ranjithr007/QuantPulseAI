@@ -20,6 +20,7 @@ from app.api.v1 import indicators_api
 from app.api.v1 import intelligence_api
 from app.api.v1 import live_market_api
 from app.api.v1 import market_api
+from app.api.v1 import market_participation_api
 from app.api.v1 import master_ai_api
 from app.api.v1 import ml_api
 from app.api.v1 import ml_label_api
@@ -260,6 +261,7 @@ app.include_router(auth_api.router)
 app.include_router(automation_api.router)
 app.include_router(derivatives_api.router)
 app.include_router(market_api.router)
+app.include_router(market_participation_api.router)
 app.include_router(features_api.router)
 app.include_router(regime_api.router)
 app.include_router(orderflow_api.router)
