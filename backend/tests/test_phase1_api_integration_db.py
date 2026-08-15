@@ -19,12 +19,15 @@ TEST_ENGINE = create_engine(
 TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=TEST_ENGINE)
 
 from app.config import get_settings
+from app.database.models.automation_settings import AutomationSetting
+from app.database.models.automation_settings import AutomationSettingsAudit
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import Base
 from app.api.v1 import paper_trade_api
 from app.main import app
+from app.repositories.automation_settings_repository import update_automation_settings
 from app.trading.trade_plan_engine import build_trade_plan
 
 
@@ -45,6 +48,8 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
             TEST_DB_PATH.unlink()
 
     def setUp(self):
+        AutomationSettingsAudit.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
+        AutomationSetting.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
         PaperTrade.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
         RiskDecision.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
         TradePlan.__table__.drop(bind=TEST_ENGINE, checkfirst=True)
@@ -52,8 +57,15 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         TradePlan.__table__.create(bind=TEST_ENGINE, checkfirst=True)
         RiskDecision.__table__.create(bind=TEST_ENGINE, checkfirst=True)
         PaperTrade.__table__.create(bind=TEST_ENGINE, checkfirst=True)
+        AutomationSetting.__table__.create(bind=TEST_ENGINE, checkfirst=True)
+        AutomationSettingsAudit.__table__.create(bind=TEST_ENGINE, checkfirst=True)
 
         with TestSessionLocal() as db:
+            update_automation_settings(
+                db,
+                {"enabled": True, "locked": False},
+                actor="integration_test",
+            )
             trade_created_at = datetime.utcnow() - timedelta(minutes=2)
             risk_created_at = datetime.utcnow() - timedelta(minutes=1)
             governed = build_trade_plan("LONG", 100.0, 1.0, confidence=50)

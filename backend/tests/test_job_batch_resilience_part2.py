@@ -64,14 +64,14 @@ def test_run_paper_trade_monitor_job_continues_after_trade_error():
             return False
 
         def close_trade(self, *args, **kwargs):
-            return SimpleNamespace(id=1, pnl_percent=1.0)
+            return SimpleNamespace(id=1, pnl_percent=1.0, result="WIN")
 
     with patch("app.jobs.paper_trade_monitor_job.SessionLocal", return_value=fake_db), patch(
         "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
         return_value=FakeRepo(),
     ), patch(
-        "app.jobs.paper_trade_monitor_job.get_latest_candle",
-        side_effect=[RuntimeError("boom"), candle],
+        "app.jobs.paper_trade_monitor_job.get_final_candles_after",
+        side_effect=[RuntimeError("boom"), [candle]],
     ), patch(
         "app.jobs.paper_trade_monitor_job.evaluate_paper_trade_exit",
         return_value={"action": "CLOSE", "exit_price": 101.0, "result": "WIN"},

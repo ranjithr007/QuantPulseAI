@@ -126,7 +126,10 @@ def _evaluate_staged_exit(trade, candle, high, low):
 
 def _maximum_hold_reached(trade, candle):
     opened_at = getattr(trade, "opened_at", None)
-    candle_time = getattr(candle, "candle_time", None)
+    candle_time = (
+        getattr(candle, "close_time", None)
+        or getattr(candle, "candle_time", None)
+    )
     max_hold_hours = getattr(trade, "max_hold_hours", None)
     if opened_at is None or candle_time is None or not max_hold_hours:
         return False

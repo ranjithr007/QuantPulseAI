@@ -99,6 +99,22 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("paperWallet={paperWallet}", dashboard_call)
         self.assertIn("paperWallet,", dashboard_signature)
 
+    def test_risk_controls_expose_only_governed_account_limit_ranges(self):
+        main = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
+        automation = (
+            FRONTEND_ROOT / "src" / "components" / "AutomationSection.jsx"
+        ).read_text(encoding="utf-8")
+        risk_controls = (
+            FRONTEND_ROOT / "src" / "pages" / "RiskControlsPage.jsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Math.min(4, Number(value.dailyLossLimit)", main)
+        self.assertIn("Math.min(4, Number(value.maxOpenTrades)", main)
+        self.assertNotIn("max={15}", automation)
+        self.assertNotIn("max={20}", automation)
+        self.assertNotIn("max={15}", risk_controls)
+        self.assertNotIn("max={20}", risk_controls)
+
 
 if __name__ == "__main__":
     unittest.main()

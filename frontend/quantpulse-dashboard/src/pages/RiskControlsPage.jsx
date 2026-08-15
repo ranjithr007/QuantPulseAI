@@ -131,10 +131,10 @@ export default function RiskControlsPage({
                 <RangeInput value={auto.maxRiskPerTrade} min={0.1} max={5} step={0.1} onChange={(maxRiskPerTrade) => setAuto((current) => ({ ...current, maxRiskPerTrade }))} />
               </RiskField>
               <RiskField label="Daily loss limit" value={`${auto.dailyLossLimit}%`}>
-                <RangeInput value={auto.dailyLossLimit} min={0.5} max={15} step={0.5} onChange={(dailyLossLimit) => setAuto((current) => ({ ...current, dailyLossLimit }))} />
+                <RangeInput value={auto.dailyLossLimit} min={0.5} max={4} step={0.5} onChange={(dailyLossLimit) => setAuto((current) => ({ ...current, dailyLossLimit }))} />
               </RiskField>
               <RiskField label="Max open trades" value={auto.maxOpenTrades}>
-                <NumberInput value={auto.maxOpenTrades} min={1} max={20} step={1} onChange={(maxOpenTrades) => setAuto((current) => ({ ...current, maxOpenTrades }))} />
+                <NumberInput value={auto.maxOpenTrades} min={1} max={4} step={1} onChange={(maxOpenTrades) => setAuto((current) => ({ ...current, maxOpenTrades }))} />
               </RiskField>
               <RiskField label="Max leverage" value={`${auto.maxLeverage}x`}>
                 <NumberInput value={auto.maxLeverage} min={1} max={25} step={1} onChange={(maxLeverage) => setAuto((current) => ({ ...current, maxLeverage }))} />

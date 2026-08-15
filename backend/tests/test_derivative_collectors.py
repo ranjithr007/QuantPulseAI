@@ -201,7 +201,7 @@ def test_derivative_job_skips_missing_collector_payloads():
     ), patch(
         "app.jobs.derivative_job.MarkPriceCollector.get_klines",
         return_value=[],
-    ), patch(
+    ) as get_mark_prices, patch(
         "app.jobs.derivative_job.LeverageBracketCollector.get_brackets",
         return_value=[],
     ), patch(
@@ -213,4 +213,11 @@ def test_derivative_job_skips_missing_collector_payloads():
 
     assert not save_funding.called
     assert save_open_interest.called
+    assert [call.args[1] for call in get_mark_prices.call_args_list] == [
+        "5m",
+        "1h",
+        "2h",
+        "4h",
+        "1d",
+    ]
     assert fake_db.close.called

@@ -6,6 +6,7 @@ from app.collectors.Bybit.candle_collector import (
 )
 
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
+from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.market_data.incremental_fetch import plan_incremental_fetch
 from app.market_data.quality import analyze_candle_sequence
 from app.repositories.market_repository import MarketRepository
@@ -13,7 +14,8 @@ from app.repositories.symbol_repository import SymbolRepository
 from app.utils.network_resilience import classify_network_error
 from app.utils.network_resilience import is_transient_network_error
 
-TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
+TIMEFRAMES = [PAPER_EXIT_MONITOR_TIMEFRAME, *OFFICIAL_ENTRY_TIMEFRAMES]
+EXIT_MONITOR_BOOTSTRAP_CANDLES = 600
 
 
 def run_market_job():
@@ -52,6 +54,11 @@ def run_market_job():
                     fetch_plan = plan_incremental_fetch(
                         latest_candle_cursor,
                         timeframe,
+                        bootstrap_limit=(
+                            EXIT_MONITOR_BOOTSTRAP_CANDLES
+                            if timeframe == PAPER_EXIT_MONITOR_TIMEFRAME
+                            else 3
+                        ),
                     )
                     if not fetch_plan.should_fetch:
                         results.append(

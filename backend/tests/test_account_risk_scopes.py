@@ -108,3 +108,52 @@ def test_closed_loss_outside_daily_window_does_not_block_account():
 
     assert snapshot["daily_pnl_percent"] == 0
     assert snapshot["limit_reached"] is False
+
+
+def test_required_open_mark_price_fails_closed_without_entry_price_fallback():
+    snapshot = build_account_daily_pnl_snapshot(
+        [_trade("BTCUSDT")],
+        {},
+        require_open_prices=True,
+    )
+
+    assert snapshot["risk_available"] is False
+    assert snapshot["daily_pnl_percent"] == 0
+    assert snapshot["contributions"] == []
+    assert "Fresh mark price" in snapshot["skipped"][0]["reason"]
+
+
+def test_persisted_notional_and_remaining_fraction_drive_account_exposure():
+    trade = _trade("BTCUSDT")
+    trade.confidence = 90
+    trade.position_notional_inr = 75_000
+    trade.remaining_position_fraction = 0.5
+
+    snapshot = build_account_daily_pnl_snapshot(
+        [trade],
+        {"BTCUSDT": 96},
+        require_open_prices=True,
+    )
+
+    assert snapshot["risk_available"] is True
+    assert snapshot["contributions"][0]["account_exposure_factor"] == 0.375
+    assert snapshot["daily_pnl_percent"] == -1.5
+
+
+def test_closed_trade_uses_persisted_realized_inr_for_exact_account_pnl():
+    trade = _trade(
+        "BTCUSDT",
+        status="CLOSED",
+        pnl_percent=-4.0,
+        closed_at=datetime.utcnow() - timedelta(hours=1),
+    )
+    trade.position_notional_inr = 75_000
+    trade.remaining_position_fraction = 0.5
+    trade.realized_pnl_inr = -3_000
+
+    snapshot = build_account_daily_pnl_snapshot([trade])
+
+    assert snapshot["daily_pnl_percent"] == -3.0
+    assert snapshot["contributions"][0]["account_pnl_source"] == (
+        "PERSISTED_REALIZED_INR"
+    )

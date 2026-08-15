@@ -13,10 +13,29 @@ from app.api.v1.paper_trade_api import _phase2_lifecycle_state
 from app.database.models.funding_rates import FundingRate
 from app.database.models.market_candles import MarketCandle
 from app.database.models.paper_trade import PaperTrade
+from app.database.models.paper_wallet_ledger import PaperWalletLedgerEntry
 from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
 from app.trading.trade_plan_engine import build_trade_plan
+
+
+def _enabled_automation_settings():
+    return {
+        "enabled": True,
+        "locked": False,
+        "emergencyStop": False,
+        "allowedSymbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"],
+        "maxRiskPerTrade": 1.0,
+        "dailyLossLimit": 4.0,
+        "maxOpenTrades": 4,
+        "maxLeverage": 5,
+        "maxPositionSize": 85_000.0,
+        "minConfidence": 40.0,
+        "direction": "BOTH",
+        "executionMode": "PAPER",
+        "liveExecutionEnabled": False,
+    }
 
 
 class Phase1PaperTradeLifecycleTests(unittest.TestCase):
@@ -78,7 +97,13 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             )
             db.commit()
 
-        with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session):
+        with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(
+            "app.api.v1.paper_trade_api.get_automation_settings",
+            return_value=object(),
+        ), patch(
+            "app.api.v1.paper_trade_api.automation_settings_payload",
+            return_value=_enabled_automation_settings(),
+        ):
             execution = execute_paper_trade_candidates_for_symbol("BTCUSDT", stale_after_seconds=900)
             duplicate = execute_paper_trade_candidates_for_symbol("BTCUSDT", stale_after_seconds=900)
 
@@ -93,19 +118,28 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         self.assertEqual("skipped_existing_open_paper_trade", duplicate["skipped"][0]["action"])
 
         with self.Session() as db:
+            trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
+            self.assertEqual(85_000, trade.position_notional_inr)
+            self.assertEqual(17_000, trade.margin_used_inr)
+            self.assertEqual(5, trade.leverage)
+            entry_event = db.query(PaperWalletLedgerEntry).one()
+            self.assertEqual("ENTRY", entry_event.event_type)
+            self.assertEqual(0, entry_event.delta_inr)
+            trade.opened_at = now - timedelta(hours=2)
+            trade.last_exit_evaluated_at = trade.opened_at
             db.add(
                 MarketCandle(
                     id=1,
                     symbol="BTCUSDT",
-                    timeframe="1h",
+                    timeframe="5m",
                     open_price=100.5,
                     high_price=112.0,
                     low_price=100.0,
                     close_price=102.5,
                     volume=1000,
-                    candle_time=now,
-                    open_time=now - timedelta(hours=1),
-                    close_time=now - timedelta(milliseconds=1),
+                    candle_time=now - timedelta(minutes=10),
+                    open_time=now - timedelta(minutes=10),
+                    close_time=now - timedelta(minutes=5),
                     is_final=True,
                 )
             )
@@ -128,14 +162,14 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 MarketCandle(
                     id=2,
                     symbol="BTCUSDT",
-                    timeframe="1h",
+                    timeframe="5m",
                     open_price=101.8,
                     high_price=103.0,
                     low_price=100.2,
                     close_price=102.5,
                     volume=1000,
-                    candle_time=now - timedelta(minutes=1),
-                    open_time=now - timedelta(minutes=1),
+                    candle_time=now - timedelta(minutes=5),
+                    open_time=now - timedelta(minutes=5),
                     close_time=now - timedelta(milliseconds=1),
                     is_final=True,
                 )
@@ -150,6 +184,20 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         self.assertEqual("TARGET2", second_monitor["records"][0]["fill_profile"]["trigger_type"])
 
         with self.Session() as db:
+            trade = db.query(PaperTrade).filter(PaperTrade.status == "CLOSED").one()
+            ledger = (
+                db.query(PaperWalletLedgerEntry)
+                .order_by(PaperWalletLedgerEntry.id.asc())
+                .all()
+            )
+            self.assertEqual(
+                ["ENTRY", "TARGET1_REALIZED", "FINAL_CLOSE_REALIZED"],
+                [entry.event_type for entry in ledger],
+            )
+            self.assertEqual(
+                trade.realized_pnl_inr,
+                round(sum(entry.delta_inr for entry in ledger), 2),
+            )
             bundle = build_paper_trade_bundle(db, symbol="BTCUSDT")
 
         self.assertEqual(0, bundle["openTrades"]["count"])
@@ -157,6 +205,12 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         self.assertEqual(1, bundle["summary"]["wins"])
         self.assertEqual(100.0, bundle["performance"]["win_rate"])
         self.assertGreater(bundle["performance"]["total_pnl_percent"], 0)
+        self.assertEqual("PERSISTED_LEDGER", bundle["paperWallet"]["accounting_source"])
+        self.assertEqual(3, bundle["paperWallet"]["ledger_entry_count"])
+        self.assertEqual(
+            bundle["closedTrades"]["records"][0]["realized_pnl_inr"],
+            bundle["paperWallet"]["realized_pnl_inr"],
+        )
         self.assertGreater(bundle["closedTrades"]["records"][0]["fees_percent"], 0)
         self.assertGreater(
             bundle["closedTrades"]["records"][0]["gross_pnl_percent"],
@@ -210,7 +264,13 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             )
             db.commit()
 
-        with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session):
+        with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(
+            "app.api.v1.paper_trade_api.get_automation_settings",
+            return_value=object(),
+        ), patch(
+            "app.api.v1.paper_trade_api.automation_settings_payload",
+            return_value=_enabled_automation_settings(),
+        ):
             execution = execute_paper_trade_candidates_for_symbol(
                 "BTCUSDT",
                 stale_after_seconds=900,
@@ -223,19 +283,22 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         )
 
         with self.Session() as db:
+            trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
+            trade.opened_at = now - timedelta(hours=2)
+            trade.last_exit_evaluated_at = trade.opened_at
             db.add(
                 MarketCandle(
                     id=10,
                     symbol="BTCUSDT",
-                    timeframe="1h",
+                    timeframe="5m",
                     open_price=100.5,
                     high_price=101.6,
                     low_price=100.2,
                     close_price=101.2,
                     volume=1000,
-                    candle_time=now - timedelta(minutes=1),
-                    open_time=now - timedelta(hours=1),
-                    close_time=now - timedelta(milliseconds=1),
+                    candle_time=now - timedelta(minutes=10),
+                    open_time=now - timedelta(minutes=10),
+                    close_time=now - timedelta(minutes=5),
                     is_final=True,
                 )
             )
@@ -257,14 +320,14 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 MarketCandle(
                     id=11,
                     symbol="BTCUSDT",
-                    timeframe="1h",
+                    timeframe="5m",
                     open_price=101.2,
                     high_price=102.5,
                     low_price=100.2,
                     close_price=102.4,
                     volume=1000,
-                    candle_time=now,
-                    open_time=now - timedelta(minutes=1),
+                    candle_time=now - timedelta(minutes=5),
+                    open_time=now - timedelta(minutes=5),
                     close_time=now - timedelta(milliseconds=1),
                     is_final=True,
                 )

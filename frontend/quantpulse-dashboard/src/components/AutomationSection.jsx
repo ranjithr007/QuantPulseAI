@@ -124,7 +124,7 @@ export default function AutomationSection({
                   <RangeInput
                     value={auto.dailyLossLimit}
                     min={0.5}
-                    max={15}
+                    max={4}
                     step={0.5}
                     onChange={(value) => setAuto((current) => ({ ...current, dailyLossLimit: value }))}
                   />
@@ -138,7 +138,7 @@ export default function AutomationSection({
                   <NumberInput
                     value={auto.maxOpenTrades}
                     min={1}
-                    max={20}
+                    max={4}
                     step={1}
                     onChange={(value) => setAuto((current) => ({ ...current, maxOpenTrades: value }))}
                   />

@@ -35,6 +35,7 @@ STAGE_ORDER = (
     ("risk", run_risk_job),
     ("paper_trade_execute", run_paper_trade_execute_job),
 )
+ALWAYS_RUN_SAFETY_STAGES = frozenset({"paper_trade_monitor"})
 STALE_PIPELINE_AFTER_SECONDS = 1800
 
 
@@ -72,7 +73,7 @@ def run_deterministic_pipeline_job():
 
     try:
         for name, job in STAGE_ORDER:
-            if blocked:
+            if blocked and name not in ALWAYS_RUN_SAFETY_STAGES:
                 results[name] = {"status": "BLOCKED", "reason": "UPSTREAM_STAGE_FAILED"}
                 continue
 
@@ -103,7 +104,8 @@ def run_deterministic_pipeline_job():
                         )
                     continue
                 result = _invoke_stage(job, context)
-                if _failed(result):
+                stage_failed = _failed(result)
+                if stage_failed:
                     blocked = True
                     result = {"status": "FAILED", "result": result}
                 results[name] = result
@@ -111,7 +113,7 @@ def run_deterministic_pipeline_job():
                     ledger.finish_job(
                         ledger_db,
                         job_record.id,
-                        status="FAILED" if blocked else "COMPLETED",
+                        status="FAILED" if stage_failed else "COMPLETED",
                         rows_written=_rows_written(result),
                         output_generation_id=generation_id,
                         error_category="UPSTREAM_STAGE_FAILED" if blocked else None,

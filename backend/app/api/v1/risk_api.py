@@ -18,6 +18,8 @@ from app.paper_trading.exit_policy import approval_target_for_policy
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.automation_settings_repository import automation_settings_payload
 from app.repositories.automation_settings_repository import get_automation_settings
+from app.repositories.automation_settings_repository import PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT
+from app.repositories.automation_settings_repository import PAPER_MAX_OPEN_TRADES
 from app.utils.network_resilience import summarize_network_error
 from app.utils.freshness import freshness_status
 from app.utils.signal_validation import validate_trade_plan_direction
@@ -375,8 +377,14 @@ def _normalize_auto_settings(auto):
         "emergencyStop": bool(auto.get("emergencyStop", False)),
         "allowedSymbols": allowed_symbols,
         "maxRiskPerTrade": _safe_number(auto.get("maxRiskPerTrade"), 1.0),
-        "dailyLossLimit": _safe_number(auto.get("dailyLossLimit"), 4.0),
-        "maxOpenTrades": int(_safe_number(auto.get("maxOpenTrades"), 4)),
+        "dailyLossLimit": min(
+            _safe_number(auto.get("dailyLossLimit"), 4.0),
+            PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+        ),
+        "maxOpenTrades": min(
+            int(_safe_number(auto.get("maxOpenTrades"), 4)),
+            PAPER_MAX_OPEN_TRADES,
+        ),
         "maxLeverage": int(_safe_number(auto.get("maxLeverage"), 5)),
         "maxPositionSize": PAPER_MAX_POSITION_INR,
         "minConfidence": MIN_ENTRY_CONFIDENCE,

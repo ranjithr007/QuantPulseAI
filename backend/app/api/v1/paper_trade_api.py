@@ -1,6 +1,7 @@
 import json
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from math import isfinite
 
 from fastapi import APIRouter, Body, Query
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -30,16 +31,20 @@ from app.risk.confidence_sizing import confidence_sizing_profile
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.paper_trading.exit_policy import approval_target_for_policy
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
 from app.repositories.automation_settings_repository import DEFAULT_AUTOMATION_SETTINGS
 from app.repositories.automation_settings_repository import automation_settings_payload
 from app.repositories.automation_settings_repository import get_automation_settings
-from app.repositories.candle_repository import get_latest_candle
+from app.repositories.automation_settings_repository import PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT
+from app.repositories.automation_settings_repository import PAPER_MAX_OPEN_TRADES
+from app.repositories.derivative_repository import DerivativeRepository
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.point_in_time_snapshot_repository import list_decision_snapshots
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
 from app.utils.freshness import freshness_status
+from app.utils.freshness import normalize_timestamp_to_utc
 
 
 router = APIRouter(prefix="/paper-trade", tags=["Paper Trade"])
@@ -49,6 +54,8 @@ PHASE2_RECOVERY_EVENT_SOURCE = "phase2_supervisor"
 PHASE2_RECOVERY_EVENT_CATEGORY = "OPPORTUNITY_COVERAGE_RECOVERY"
 PHASE2_CHECKPOINT_EVENT_SOURCE = "phase2_daily_checkpoint"
 PHASE2_CHECKPOINT_EVENT_CATEGORY = "PHASE2_DAILY_EVIDENCE"
+PAPER_RISK_MARK_TIMEFRAME = "5m"
+PAPER_RISK_MARK_MAX_AGE_SECONDS = 15 * 60
 
 
 def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
@@ -70,7 +77,11 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     closed_count = len(closed_trades)
     account_trades = trades if normalized_symbol is None else repo.all_trades(db)
     account_risk = _account_risk_snapshot(db, account_trades)
-    paper_wallet = build_inr_paper_wallet(account_trades)
+    paper_wallet = _paper_wallet_snapshot(
+        db,
+        account_trades,
+        account_risk=account_risk,
+    )
 
     return {
         "source": "paper_trade_bundle",
@@ -102,6 +113,17 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     }
 
 
+def _paper_wallet_snapshot(db, trades, account_risk=None):
+    account_risk = account_risk or _account_risk_snapshot(db, trades)
+    ledger_entries = PaperWalletLedgerRepository().list_entries(db)
+    return build_inr_paper_wallet(
+        trades,
+        ledger_entries=ledger_entries,
+        current_prices=account_risk.get("current_prices") or {},
+        require_open_prices=True,
+    )
+
+
 def _account_risk_snapshot(db, trades):
     open_trades = [
         trade
@@ -109,22 +131,44 @@ def _account_risk_snapshot(db, trades):
         if str(getattr(trade, "status", "") or "").upper() == "OPEN"
     ]
     prices = {}
+    price_evidence = {}
+    mark_repo = DerivativeRepository()
     for trade in open_trades:
-        timeframe = (
-            trade.entry_timeframe
-            if is_phase2_official_timeframe(trade.entry_timeframe)
-            else "1h"
-        )
+        symbol = str(trade.symbol).upper()
         try:
-            candle = get_latest_candle(db, trade.symbol, timeframe)
+            mark = mark_repo.latest_mark_price(
+                db,
+                symbol,
+                timeframe=PAPER_RISK_MARK_TIMEFRAME,
+            )
         except SQLAlchemyError:
             db.rollback()
-            candle = None
-        prices[str(trade.symbol).upper()] = (
-            float(candle.close_price)
-            if candle is not None and candle.close_price is not None
-            else float(trade.entry_price)
+            mark = None
+
+        mark_price = _finite_float(getattr(mark, "close_price", None))
+        mark_timestamp = getattr(mark, "close_time", None)
+        freshness = freshness_status(
+            mark_timestamp,
+            PAPER_RISK_MARK_MAX_AGE_SECONDS,
         )
+        status = "FRESH"
+        if mark is None:
+            status = "MISSING"
+        elif mark_price is None or mark_price <= 0:
+            status = "INVALID"
+        elif freshness["is_stale"]:
+            status = "STALE"
+        else:
+            prices[symbol] = mark_price
+        price_evidence[symbol] = {
+            "status": status,
+            "timeframe": PAPER_RISK_MARK_TIMEFRAME,
+            "price": mark_price,
+            "source": getattr(mark, "source", None),
+            "as_of": normalize_timestamp_to_utc(mark_timestamp),
+            "age_seconds": freshness["data_age_seconds"],
+            "stale_after_seconds": PAPER_RISK_MARK_MAX_AGE_SECONDS,
+        }
 
     try:
         auto = automation_settings_payload(get_automation_settings(db))
@@ -132,11 +176,30 @@ def _account_risk_snapshot(db, trades):
         db.rollback()
         auto = DEFAULT_AUTOMATION_SETTINGS
 
-    return build_account_daily_pnl_snapshot(
+    snapshot = build_account_daily_pnl_snapshot(
         trades,
         prices,
-        daily_loss_limit=auto.get("dailyLossLimit", 4.0),
+        daily_loss_limit=min(
+            float(
+                auto.get(
+                    "dailyLossLimit",
+                    PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+                )
+            ),
+            PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+        ),
+        require_open_prices=True,
     )
+    snapshot.update(
+        {
+            "current_prices": prices,
+            "price_evidence": price_evidence,
+            "valuation_timeframe": PAPER_RISK_MARK_TIMEFRAME,
+            "valuation_complete": snapshot["risk_available"],
+            "valued_at": datetime.now(timezone.utc),
+        }
+    )
+    return snapshot
 
 
 @router.get("/performance")
@@ -707,7 +770,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
         repo = PaperTradeRepository()
         try:
             auto = automation_settings_payload(get_automation_settings(db))
-        except (SQLAlchemyError, AttributeError):
+        except Exception:
             db.rollback()
             auto = DEFAULT_AUTOMATION_SETTINGS
         executed = []
@@ -732,9 +795,43 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                     }
                 )
                 continue
+
+            automation_blockers = _automation_execution_blockers(auto, candidate)
+            if automation_blockers:
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_automation_control",
+                        "blocked_reasons": automation_blockers,
+                        "blocker_scopes": {
+                            "trade": [],
+                            "coin": [],
+                            "account": automation_blockers,
+                        },
+                    }
+                )
+                continue
             eligible_by_symbol[str(candidate["symbol"]).upper()].append(candidate)
 
         for candidate_symbol, candidates in sorted(eligible_by_symbol.items()):
+            try:
+                repo.acquire_account_execution_lock(db)
+            except (RuntimeError, SQLAlchemyError):
+                db.rollback()
+                skipped.extend(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_account_reservation_unavailable",
+                        "blocked_reasons": [
+                            "Atomic account capacity reservation is unavailable"
+                        ],
+                    }
+                    for candidate in candidates
+                )
+                continue
+
             if repo.has_open_trade(db, candidate_symbol):
                 skipped.extend(
                     {
@@ -744,6 +841,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                     }
                     for candidate in candidates
                 )
+                db.rollback()
                 continue
 
             winner = max(candidates, key=_paper_trade_candidate_rank)
@@ -759,13 +857,49 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             )
 
             candidate = winner
-            wallet = build_inr_paper_wallet(
-                repo.all_trades(db) if hasattr(repo, "all_trades") else []
+            account_trades = repo.all_trades(db)
+            locked_account_risk = _account_risk_snapshot(db, account_trades)
+            if not locked_account_risk.get("risk_available", False):
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_account_risk_unavailable",
+                        "blocked_reasons": [
+                            "Fresh account-wide mark-price valuation is unavailable"
+                        ],
+                        "account_risk": locked_account_risk,
+                    }
+                )
+                db.rollback()
+                continue
+            if locked_account_risk.get("limit_reached"):
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_account_daily_loss_limit",
+                        "blocked_reasons": [
+                            "Account-wide daily loss limit reached"
+                        ],
+                        "account_risk": locked_account_risk,
+                    }
+                )
+                db.rollback()
+                continue
+            wallet = _paper_wallet_snapshot(
+                db,
+                account_trades,
+                account_risk=locked_account_risk,
             )
             candidate_margin = float(
                 (candidate.get("paper_sizing") or {}).get("margin_used_inr") or 0
             )
-            if wallet["open_position_count"] >= int(auto.get("maxOpenTrades", 4)):
+            effective_max_open_trades = min(
+                int(auto.get("maxOpenTrades", PAPER_MAX_OPEN_TRADES)),
+                PAPER_MAX_OPEN_TRADES,
+            )
+            if wallet["open_position_count"] >= effective_max_open_trades:
                 skipped.append(
                     {
                         "symbol": candidate["symbol"],
@@ -773,6 +907,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                         "action": "skipped_account_open_trade_cap",
                     }
                 )
+                db.rollback()
                 continue
             if candidate_margin > wallet["remaining_margin_capacity_inr"]:
                 skipped.append(
@@ -786,6 +921,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                         ],
                     }
                 )
+                db.rollback()
                 continue
             trade_plan_id = candidate["trade_plan"]["id"]
             if repo.has_trade_for_plan(db, trade_plan_id):
@@ -797,6 +933,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                         "trade_plan_id": trade_plan_id,
                     }
                 )
+                db.rollback()
                 continue
 
             try:
@@ -836,6 +973,109 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
 
     finally:
         db.close()
+
+
+def _automation_execution_blockers(auto, candidate):
+    """Enforce operator controls at the final paper-fill boundary.
+
+    Upstream risk and UI checks are informative only.  This boundary must
+    independently fail closed because scheduled jobs call it without the UI.
+    """
+
+    if not isinstance(auto, dict):
+        return ["Automation settings are unavailable"]
+
+    reasons = []
+    if bool(auto.get("emergencyStop")):
+        reasons.append("Automation emergency stop is active")
+    if not bool(auto.get("enabled")):
+        reasons.append("Paper-trade automation is disabled")
+    if bool(auto.get("locked", True)):
+        reasons.append("Paper-trade automation is locked")
+    if str(auto.get("executionMode") or "").upper() != "PAPER":
+        reasons.append("Automation execution mode is not PAPER")
+    if bool(auto.get("liveExecutionEnabled")):
+        reasons.append("Live execution must remain disabled for paper trading")
+
+    symbol = str((candidate or {}).get("symbol") or "").upper()
+    allowed_symbols = {
+        str(item).strip().upper()
+        for item in (auto.get("allowedSymbols") or [])
+        if str(item).strip()
+    }
+    if not symbol or symbol not in allowed_symbols:
+        reasons.append(f"{symbol or 'Candidate symbol'} is not in the automation allowlist")
+
+    side = str((candidate or {}).get("side") or "").upper()
+    allowed_direction = str(auto.get("direction") or "").upper()
+    if allowed_direction not in {"LONG", "SHORT", "BOTH"}:
+        reasons.append("Automation direction setting is invalid")
+    elif side not in {"LONG", "SHORT"}:
+        reasons.append("Candidate direction is invalid")
+    elif allowed_direction != "BOTH" and side != allowed_direction:
+        reasons.append(f"{side} entries are disabled by the automation direction setting")
+
+    risk = (candidate or {}).get("risk_decision") or {}
+    sizing = (candidate or {}).get("paper_sizing") or {}
+    _append_automation_numeric_limit_blocker(
+        reasons,
+        value=risk.get("confidence"),
+        limit=auto.get("minConfidence"),
+        comparison="minimum",
+        missing_reason="Candidate confidence is unavailable",
+        blocked_reason="Candidate confidence is below the automation minimum",
+    )
+    _append_automation_numeric_limit_blocker(
+        reasons,
+        value=risk.get("risk_percent"),
+        limit=auto.get("maxRiskPerTrade"),
+        comparison="maximum",
+        missing_reason="Candidate risk percentage is unavailable",
+        blocked_reason="Candidate risk percentage exceeds the automation maximum",
+    )
+    _append_automation_numeric_limit_blocker(
+        reasons,
+        value=sizing.get("leverage"),
+        limit=auto.get("maxLeverage"),
+        comparison="maximum",
+        missing_reason="Candidate leverage is unavailable",
+        blocked_reason="Candidate leverage exceeds the automation maximum",
+    )
+    _append_automation_numeric_limit_blocker(
+        reasons,
+        value=sizing.get("position_notional_inr"),
+        limit=auto.get("maxPositionSize"),
+        comparison="maximum",
+        missing_reason="Candidate INR position size is unavailable",
+        blocked_reason="Candidate INR position size exceeds the automation maximum",
+    )
+    return reasons
+
+
+def _append_automation_numeric_limit_blocker(
+    reasons,
+    *,
+    value,
+    limit,
+    comparison,
+    missing_reason,
+    blocked_reason,
+):
+    try:
+        numeric_value = float(value)
+        numeric_limit = float(limit)
+    except (TypeError, ValueError):
+        reasons.append(missing_reason)
+        return
+
+    if not isfinite(numeric_value) or not isfinite(numeric_limit):
+        reasons.append(missing_reason)
+        return
+
+    if comparison == "minimum" and numeric_value < numeric_limit:
+        reasons.append(blocked_reason)
+    elif comparison == "maximum" and numeric_value > numeric_limit:
+        reasons.append(blocked_reason)
 
 
 QP_TI_001_TIMEFRAME_PRIORITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
@@ -897,7 +1137,11 @@ def build_paper_trade_candidates(
     }
     account_trades = PaperTradeRepository().all_trades(db)
     account_risk = _account_risk_snapshot(db, account_trades)
-    paper_wallet = build_inr_paper_wallet(account_trades)
+    paper_wallet = _paper_wallet_snapshot(
+        db,
+        account_trades,
+        account_risk=account_risk,
+    )
     try:
         auto = automation_settings_payload(get_automation_settings(db))
     except SQLAlchemyError:
@@ -916,7 +1160,10 @@ def build_paper_trade_candidates(
             derivative_payloads.get(trade.symbol),
             account_risk=account_risk,
             paper_wallet=paper_wallet,
-            max_open_trades=int(auto.get("maxOpenTrades", 4)),
+            max_open_trades=min(
+                int(auto.get("maxOpenTrades", PAPER_MAX_OPEN_TRADES)),
+                PAPER_MAX_OPEN_TRADES,
+            ),
             coin_has_active_trade=str(trade.symbol).upper() in open_symbols,
         )
         for trade in trades
@@ -1389,6 +1636,36 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
             1.0 if remaining_fraction is None else remaining_fraction
         ),
     )
+    sizing.update(
+        {
+            "paper_capital_inr": getattr(
+                paper_trade,
+                "paper_capital_at_entry_inr",
+                None,
+            )
+            or sizing["paper_capital_inr"],
+            "allocation_percent": getattr(
+                paper_trade,
+                "allocation_percent",
+                None,
+            )
+            or sizing["allocation_percent"],
+            "position_notional_inr": getattr(
+                paper_trade,
+                "position_notional_inr",
+                None,
+            )
+            or sizing["position_notional_inr"],
+            "leverage": getattr(paper_trade, "leverage", None)
+            or sizing["leverage"],
+            "margin_used_inr": getattr(
+                paper_trade,
+                "margin_used_inr",
+                None,
+            )
+            or sizing["margin_used_inr"],
+        }
+    )
     payload = {
         "id": paper_trade.id,
         "trade_plan_id": paper_trade.trade_plan_id,
@@ -1416,6 +1693,16 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "max_hold_hours": getattr(paper_trade, "max_hold_hours", None),
         "target1_hit_at": getattr(paper_trade, "target1_hit_at", None),
         "target1_exit_price": getattr(paper_trade, "target1_exit_price", None),
+        "exit_monitor_timeframe": getattr(
+            paper_trade,
+            "exit_monitor_timeframe",
+            None,
+        ),
+        "last_exit_evaluated_at": getattr(
+            paper_trade,
+            "last_exit_evaluated_at",
+            None,
+        ),
         "validation_contract_version": getattr(
             paper_trade,
             "validation_contract_version",
@@ -1465,6 +1752,12 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "exit_price": paper_trade.exit_price,
         "result": paper_trade.result,
         "pnl_percent": paper_trade.pnl_percent,
+        "partial_realized_pnl_inr": getattr(
+            paper_trade,
+            "partial_realized_pnl_inr",
+            None,
+        ),
+        "realized_pnl_inr": getattr(paper_trade, "realized_pnl_inr", None),
         "opened_at": paper_trade.opened_at,
         "closed_at": paper_trade.closed_at,
         "created_at": paper_trade.created_at,
@@ -1536,7 +1829,9 @@ def _paper_trade_candidate(
         else []
     )
     account_blockers = []
-    if (account_risk or {}).get("limit_reached"):
+    if not account_risk or not account_risk.get("risk_available", False):
+        account_blockers.append("Account-wide risk valuation is unavailable or stale")
+    elif account_risk.get("limit_reached"):
         account_blockers.append("Account-wide daily loss limit reached")
     if int((paper_wallet or {}).get("open_position_count") or 0) >= int(
         max_open_trades
@@ -1718,6 +2013,14 @@ def _same_price(left, right):
         return False
 
     return abs(float(left) - float(right)) <= 0.00000001
+
+
+def _finite_float(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if isfinite(number) else None
 
 
 def _risk_reason(risk):

@@ -13,14 +13,18 @@ from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 
 
+PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT = 4.0
+PAPER_MAX_OPEN_TRADES = 4
+
+
 DEFAULT_AUTOMATION_SETTINGS = {
     "enabled": False,
     "locked": True,
     "emergencyStop": False,
     "allowedSymbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"],
     "maxRiskPerTrade": 1.0,
-    "dailyLossLimit": 4.0,
-    "maxOpenTrades": 4,
+    "dailyLossLimit": PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+    "maxOpenTrades": PAPER_MAX_OPEN_TRADES,
     "maxLeverage": 5,
     "maxPositionSize": PAPER_MAX_POSITION_INR,
     "minConfidence": MIN_ENTRY_CONFIDENCE,
@@ -40,44 +44,73 @@ def get_automation_settings(db):
     if row:
         confidence_changed = float(row.min_confidence) != MIN_ENTRY_CONFIDENCE
         position_changed = float(row.max_position_size) != PAPER_MAX_POSITION_INR
-        if confidence_changed or position_changed:
+        previous_daily_loss_limit = float(row.daily_loss_limit)
+        governed_daily_loss_limit = min(
+            previous_daily_loss_limit,
+            PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+        )
+        daily_loss_changed = previous_daily_loss_limit != governed_daily_loss_limit
+        previous_max_open_trades = int(row.max_open_trades)
+        governed_max_open_trades = min(
+            previous_max_open_trades,
+            PAPER_MAX_OPEN_TRADES,
+        )
+        open_trade_cap_changed = (
+            previous_max_open_trades != governed_max_open_trades
+        )
+        if (
+            confidence_changed
+            or position_changed
+            or daily_loss_changed
+            or open_trade_cap_changed
+        ):
             previous_confidence = float(row.min_confidence)
             previous_position_size = float(row.max_position_size)
             row.min_confidence = MIN_ENTRY_CONFIDENCE
             row.max_position_size = PAPER_MAX_POSITION_INR
+            row.daily_loss_limit = governed_daily_loss_limit
+            row.max_open_trades = governed_max_open_trades
             row.version = int(row.version or 0) + 1
             row.updated_at = datetime.utcnow()
             changed_fields = {}
+            previous_values = {}
+            new_values = {}
             if confidence_changed:
                 changed_fields["minConfidence"] = {
                     "from": previous_confidence,
                     "to": MIN_ENTRY_CONFIDENCE,
                 }
+                previous_values["minConfidence"] = previous_confidence
+                new_values["minConfidence"] = MIN_ENTRY_CONFIDENCE
             if position_changed:
                 changed_fields["maxPositionSize"] = {
                     "from": previous_position_size,
                     "to": PAPER_MAX_POSITION_INR,
                 }
+                previous_values["maxPositionSize"] = previous_position_size
+                new_values["maxPositionSize"] = PAPER_MAX_POSITION_INR
+            if daily_loss_changed:
+                changed_fields["dailyLossLimit"] = {
+                    "from": previous_daily_loss_limit,
+                    "to": governed_daily_loss_limit,
+                }
+                previous_values["dailyLossLimit"] = previous_daily_loss_limit
+                new_values["dailyLossLimit"] = governed_daily_loss_limit
+            if open_trade_cap_changed:
+                changed_fields["maxOpenTrades"] = {
+                    "from": previous_max_open_trades,
+                    "to": governed_max_open_trades,
+                }
+                previous_values["maxOpenTrades"] = previous_max_open_trades
+                new_values["maxOpenTrades"] = governed_max_open_trades
             db.add(
                 AutomationSettingsAudit(
                     setting_id=row.id,
                     action="GOVERNED_PAPER_SETTINGS_REPAIRED",
                     actor="system",
                     changed_fields=json.dumps(changed_fields, sort_keys=True),
-                    previous_values=json.dumps(
-                        {
-                            "minConfidence": previous_confidence,
-                            "maxPositionSize": previous_position_size,
-                        },
-                        sort_keys=True,
-                    ),
-                    new_values=json.dumps(
-                        {
-                            "minConfidence": MIN_ENTRY_CONFIDENCE,
-                            "maxPositionSize": PAPER_MAX_POSITION_INR,
-                        },
-                        sort_keys=True,
-                    ),
+                    previous_values=json.dumps(previous_values, sort_keys=True),
+                    new_values=json.dumps(new_values, sort_keys=True),
                 )
             )
             commit_or_rollback(db)
@@ -177,8 +210,14 @@ def automation_settings_payload(row):
         "emergencyStop": bool(row.emergency_stop),
         "allowedSymbols": _json_value(row.allowed_symbols, []),
         "maxRiskPerTrade": float(row.max_risk_per_trade),
-        "dailyLossLimit": float(row.daily_loss_limit),
-        "maxOpenTrades": int(row.max_open_trades),
+        "dailyLossLimit": min(
+            float(row.daily_loss_limit),
+            PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+        ),
+        "maxOpenTrades": min(
+            int(row.max_open_trades),
+            PAPER_MAX_OPEN_TRADES,
+        ),
         "maxLeverage": int(row.max_leverage),
         "maxPositionSize": float(row.max_position_size),
         "paperCapitalInr": PAPER_CAPITAL_INR,
@@ -212,8 +251,20 @@ def normalize_automation_settings(value):
         "emergencyStop": emergency_stop,
         "allowedSymbols": allowed_symbols,
         "maxRiskPerTrade": float(value.get("maxRiskPerTrade", 1.0)),
-        "dailyLossLimit": float(value.get("dailyLossLimit", 4.0)),
-        "maxOpenTrades": int(value.get("maxOpenTrades", 4)),
+        "dailyLossLimit": max(
+            0.5,
+            min(
+                float(value.get("dailyLossLimit", 4.0)),
+                PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
+            ),
+        ),
+        "maxOpenTrades": max(
+            1,
+            min(
+                int(value.get("maxOpenTrades", 4)),
+                PAPER_MAX_OPEN_TRADES,
+            ),
+        ),
         "maxLeverage": int(value.get("maxLeverage", 5)),
         "maxPositionSize": PAPER_MAX_POSITION_INR,
         "minConfidence": MIN_ENTRY_CONFIDENCE,

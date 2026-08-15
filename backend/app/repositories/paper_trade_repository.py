@@ -7,13 +7,42 @@ from app.database.models.paper_trade import PaperTrade
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
+from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.paper_trading.exit_policy import build_policy_trade_levels
+from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 from app.repositories.trade_thesis_repository import TradeThesisRepository
+from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
 
 
 class PaperTradeRepository:
+    ACCOUNT_EXECUTION_LOCK_KEY = 715_202_608_150_001
+
+    def acquire_account_execution_lock(self, db):
+        """Serialize account-wide paper capacity checks within one transaction."""
+        dialect = str(db.get_bind().dialect.name).lower()
+        if dialect == "postgresql":
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": self.ACCOUNT_EXECUTION_LOCK_KEY},
+            )
+        elif dialect == "mssql":
+            result = db.execute(
+                text(
+                    "DECLARE @result int; "
+                    "EXEC @result = sp_getapplock "
+                    "@Resource = :resource, @LockMode = 'Exclusive', "
+                    "@LockOwner = 'Transaction', @LockTimeout = 15000; "
+                    "SELECT @result"
+                ),
+                {"resource": "quantpulse:paper-account-execution"},
+            )
+            lock_result = result.scalar()
+            if lock_result is not None and int(lock_result) < 0:
+                raise RuntimeError("Could not acquire paper account execution lock")
+        return True
+
     def ensure_table(self, db):
         if not USING_SQLITE_FALLBACK:
             return
@@ -43,6 +72,15 @@ class PaperTradeRepository:
             "max_hold_hours": "INTEGER",
             "target1_hit_at": "DATETIME",
             "target1_exit_price": "FLOAT",
+            "exit_monitor_timeframe": "VARCHAR(10)",
+            "last_exit_evaluated_at": "DATETIME",
+            "paper_capital_at_entry_inr": "FLOAT",
+            "allocation_percent": "FLOAT",
+            "position_notional_inr": "FLOAT",
+            "leverage": "FLOAT",
+            "margin_used_inr": "FLOAT",
+            "partial_realized_pnl_inr": "FLOAT",
+            "realized_pnl_inr": "FLOAT",
         }
         for column, definition in evidence_columns.items():
             if column not in existing:
@@ -95,6 +133,11 @@ class PaperTradeRepository:
             "target1_fraction": levels["target1_fraction"],
             "remaining_position_fraction": desired_remaining,
             "max_hold_hours": levels["max_hold_hours"],
+            "exit_monitor_timeframe": PAPER_EXIT_MONITOR_TIMEFRAME,
+            "last_exit_evaluated_at": (
+                getattr(trade, "last_exit_evaluated_at", None)
+                or getattr(trade, "opened_at", None)
+            ),
         }
         trade_changed = any(
             not _same_policy_value(getattr(trade, key, None), value)
@@ -222,6 +265,11 @@ class PaperTradeRepository:
             if policy_levels is not None
             else trade_plan["target2"]
         )
+        opened_at = datetime.utcnow()
+        paper_sizing = candidate.get("paper_sizing") or build_inr_paper_sizing(
+            risk.get("confidence") or trade_plan.get("confidence") or 0,
+            fee_bps=fill_profile.get("fee_bps", 7.5),
+        )
         paper_trade = PaperTrade(
             trade_plan_id=trade_plan["id"],
             risk_decision_id=risk["id"],
@@ -253,6 +301,14 @@ class PaperTradeRepository:
                 else trade_plan.get("target1_fraction")
             ),
             remaining_position_fraction=1.0,
+            exit_monitor_timeframe=PAPER_EXIT_MONITOR_TIMEFRAME,
+            last_exit_evaluated_at=opened_at,
+            paper_capital_at_entry_inr=paper_sizing["paper_capital_inr"],
+            allocation_percent=paper_sizing["allocation_percent"],
+            position_notional_inr=paper_sizing["position_notional_inr"],
+            leverage=paper_sizing["leverage"],
+            margin_used_inr=paper_sizing["margin_used_inr"],
+            partial_realized_pnl_inr=0.0,
             max_hold_hours=(
                 policy_levels["max_hold_hours"]
                 if policy_levels is not None
@@ -272,10 +328,22 @@ class PaperTradeRepository:
             ),
             fee_bps=float(fill_profile.get("fee_bps", 7.5)),
             status="OPEN",
+            opened_at=opened_at,
         )
 
         db.add(paper_trade)
         flush_or_rollback(db)
+        PaperWalletLedgerRepository().append_event(
+            db,
+            event_key=f"paper_trade:{paper_trade.id}:ENTRY",
+            paper_trade_id=paper_trade.id,
+            symbol=paper_trade.symbol,
+            event_type="ENTRY",
+            position_notional_inr=paper_trade.position_notional_inr,
+            margin_inr=paper_trade.margin_used_inr,
+            position_fraction=1.0,
+            created_at=opened_at,
+        )
 
         if paper_trade.thesis_id:
             TradeThesisRepository().attach_paper_trade(
@@ -290,7 +358,14 @@ class PaperTradeRepository:
 
         return paper_trade
 
-    def apply_target1(self, db, trade, exit_price, candle_time=None):
+    def apply_target1(
+        self,
+        db,
+        trade,
+        exit_price,
+        candle_time=None,
+        evaluated_at=None,
+    ):
         """Record a partial paper exit and protect the remainder at entry."""
         fraction = float(getattr(trade, "target1_fraction", None) or 0.5)
         trade.target1_fraction = fraction
@@ -298,6 +373,40 @@ class PaperTradeRepository:
         trade.target1_hit_at = candle_time or datetime.utcnow()
         trade.target1_exit_price = float(exit_price)
         trade.stop_loss = float(trade.entry_price)
+        _ensure_trade_sizing_snapshot(trade)
+        gross_leg_percent = _directional_pnl_percent(
+            trade.side,
+            trade.entry_price,
+            exit_price,
+        )
+        fee_percent = (float(getattr(trade, "fee_bps", 7.5) or 0) * 2) / 100
+        contribution_percent = (gross_leg_percent - fee_percent) * fraction
+        partial_pnl_inr = round(
+            float(trade.position_notional_inr) * contribution_percent / 100,
+            2,
+        )
+        trade.partial_realized_pnl_inr = partial_pnl_inr
+        if evaluated_at is not None:
+            trade.last_exit_evaluated_at = evaluated_at
+        PaperWalletLedgerRepository().append_event(
+            db,
+            event_key=f"paper_trade:{trade.id}:TARGET1",
+            paper_trade_id=trade.id,
+            symbol=trade.symbol,
+            event_type="TARGET1_REALIZED",
+            delta_inr=partial_pnl_inr,
+            position_notional_inr=trade.position_notional_inr,
+            margin_inr=float(trade.margin_used_inr) * fraction,
+            position_fraction=fraction,
+            pnl_percent=contribution_percent,
+            created_at=trade.target1_hit_at,
+        )
+        commit_or_rollback(db)
+        db.refresh(trade)
+        return trade
+
+    def mark_exit_evaluated(self, db, trade, evaluated_at):
+        trade.last_exit_evaluated_at = evaluated_at
         commit_or_rollback(db)
         db.refresh(trade)
         return trade
@@ -334,6 +443,30 @@ class PaperTradeRepository:
         trade.pnl_percent = round(
             gross_pnl - fees_percent - funding_cost_percent,
             4,
+        )
+        _ensure_trade_sizing_snapshot(trade)
+        trade.realized_pnl_inr = round(
+            float(trade.position_notional_inr) * trade.pnl_percent / 100,
+            2,
+        )
+        already_realized = float(
+            getattr(trade, "partial_realized_pnl_inr", None) or 0
+        )
+        final_delta_inr = round(trade.realized_pnl_inr - already_realized, 2)
+        PaperWalletLedgerRepository().append_event(
+            db,
+            event_key=f"paper_trade:{trade.id}:CLOSE",
+            paper_trade_id=trade.id,
+            symbol=trade.symbol,
+            event_type="FINAL_CLOSE_REALIZED",
+            delta_inr=final_delta_inr,
+            position_notional_inr=trade.position_notional_inr,
+            margin_inr=float(trade.margin_used_inr) * remaining_fraction,
+            position_fraction=remaining_fraction,
+            pnl_percent=(
+                final_delta_inr / float(trade.position_notional_inr) * 100
+            ),
+            created_at=closed_at,
         )
         if result == "TIME_EXIT":
             trade.result = "WIN" if trade.pnl_percent > 0 else "LOSS"
@@ -445,3 +578,29 @@ def _same_policy_value(current, desired):
         except (TypeError, ValueError):
             return False
     return current == desired
+
+
+def _ensure_trade_sizing_snapshot(trade):
+    if (
+        getattr(trade, "position_notional_inr", None) is not None
+        and getattr(trade, "margin_used_inr", None) is not None
+    ):
+        return
+    sizing = build_inr_paper_sizing(
+        getattr(trade, "confidence", None) or 0,
+        leverage=getattr(trade, "leverage", None) or 5.0,
+        fee_bps=getattr(trade, "fee_bps", None) or 7.5,
+    )
+    trade.paper_capital_at_entry_inr = sizing["paper_capital_inr"]
+    trade.allocation_percent = sizing["allocation_percent"]
+    trade.position_notional_inr = sizing["position_notional_inr"]
+    trade.leverage = sizing["leverage"]
+    trade.margin_used_inr = sizing["margin_used_inr"]
+
+
+def _directional_pnl_percent(side, entry_price, exit_price):
+    entry = float(entry_price)
+    exit_value = float(exit_price)
+    if str(side or "").upper() == "LONG":
+        return (exit_value - entry) / entry * 100
+    return (entry - exit_value) / entry * 100
