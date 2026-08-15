@@ -363,6 +363,7 @@ function DashboardApp({ username, onLogout }) {
       onEmergencyStop={handleEmergencyStop}
       onExecutePaperTrades={handleExecutePaperTrades}
       openTrades={openTrades}
+      paperWallet={paperWallet}
       selectedPipeline={selectedPipeline}
       candleSeries={candleSeries}
       volumeSeries={volumeSeries}
@@ -413,6 +414,7 @@ function DashboardLayout({
   onEmergencyStop,
   onExecutePaperTrades,
   openTrades,
+  paperWallet,
   selectedPipeline,
   candleSeries,
   volumeSeries,

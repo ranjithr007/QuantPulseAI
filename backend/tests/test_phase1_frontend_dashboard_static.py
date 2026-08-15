@@ -82,6 +82,23 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('rawRemaining === null', pnl_section)
         self.assertIn('0.75% SL / 1.5% T1 / 2.3% T2', pnl_section)
 
+    def test_dashboard_layout_receives_paper_wallet_before_rendering_pnl_routes(self):
+        source = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
+        dashboard_call_start = source.index("<DashboardLayout")
+        dashboard_call = source[
+            dashboard_call_start : source.index("/>", dashboard_call_start)
+        ]
+        dashboard_signature_start = source.index("function DashboardLayout({")
+        dashboard_signature = source[
+            dashboard_signature_start : source.index(
+                "}) {",
+                dashboard_signature_start,
+            )
+        ]
+
+        self.assertIn("paperWallet={paperWallet}", dashboard_call)
+        self.assertIn("paperWallet,", dashboard_signature)
+
 
 if __name__ == "__main__":
     unittest.main()
