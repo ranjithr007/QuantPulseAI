@@ -57,6 +57,25 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("selectWatchlistSignal", signal_table)
         self.assertIn("watchRow.entry_timeframe", signal_table)
 
+    def test_market_and_signals_pages_have_distinct_responsibilities(self):
+        dashboard_api = (FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js").read_text(
+            encoding="utf-8"
+        )
+        market = (
+            FRONTEND_ROOT / "src" / "components" / "LiveMarketSection.jsx"
+        ).read_text(encoding="utf-8")
+        signals = (
+            FRONTEND_ROOT / "src" / "components" / "SignalScannerSection.jsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Market scan table", market)
+        self.assertIn("<MarketSignalTable", market)
+        self.assertIn("Actionable signals", signals)
+        self.assertIn('row.type === "BUY" || row.type === "SELL"', signals)
+        self.assertIn("WAIT coins remain in the Market overview", signals)
+        self.assertNotIn("<MarketSignalTable", signals)
+        self.assertIn('activePage !== "signals"', dashboard_api)
+
     def test_pnl_page_shows_the_account_wide_trade_ledger_without_row_caps(self):
         dashboard_api = (FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js").read_text(
             encoding="utf-8"

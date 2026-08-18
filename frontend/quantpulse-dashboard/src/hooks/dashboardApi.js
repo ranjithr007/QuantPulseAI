@@ -377,6 +377,7 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
   };
   const needs = PAGE_DATA_NEEDS[activePage] || PAGE_DATA_NEEDS.dashboard;
   const paperSymbol = SYMBOL_SCOPED_PAPER_PAGES.has(activePage) ? view.symbol : null;
+  const applyServerWatchlistFilters = activePage !== "signals";
 
   const overviewRequests = [];
 
@@ -388,9 +389,9 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
         {
           mode: view.mode,
           stale_after_seconds: staleAfterSeconds(view.timeframe),
-          status: filters.watchlistStatus === "ALL" ? null : filters.watchlistStatus,
-          side: filters.watchlistSide === "ALL" ? null : filters.watchlistSide,
-          failed_max: filters.failedMax,
+          status: applyServerWatchlistFilters && filters.watchlistStatus !== "ALL" ? filters.watchlistStatus : null,
+          side: applyServerWatchlistFilters && filters.watchlistSide !== "ALL" ? filters.watchlistSide : null,
+          failed_max: applyServerWatchlistFilters ? filters.failedMax : null,
         },
         signal
       ),

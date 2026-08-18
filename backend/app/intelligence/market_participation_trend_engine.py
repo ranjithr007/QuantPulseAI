@@ -78,15 +78,25 @@ def analyze_spot_timeframe(symbol, timeframe, candles):
     ema20 = _ema([_number(item.get("close")) for item in recent], 20)
     score = 0.0
     reasons = []
+    score_components = {
+        "ema": 0.0,
+        "cvd": 0.0,
+        "price_change": 0.0,
+        "relative_volume": 0.0,
+        "resistance": 0.0,
+        "support": 0.0,
+    }
 
     if last_close > ema20:
-        score += 12
+        score_components["ema"] = 12.0
         reasons.append("Spot price is above its 20-period EMA")
     elif last_close < ema20:
-        score -= 12
+        score_components["ema"] = -12.0
         reasons.append("Spot price is below its 20-period EMA")
+    score += score_components["ema"]
 
     cvd_score = _clamp(cvd_percent * 1.8, -22, 22)
+    score_components["cvd"] = round(cvd_score, 2)
     score += cvd_score
     if cvd_score > 0:
         reasons.append("Genuine spot taker CVD is positive")
@@ -94,10 +104,13 @@ def analyze_spot_timeframe(symbol, timeframe, candles):
         reasons.append("Genuine spot taker CVD is negative")
 
     price_score = _clamp(price_change_percent * 2.5, -12, 12)
+    score_components["price_change"] = round(price_score, 2)
     score += price_score
     if relative_volume >= 1.2:
         volume_direction = 1 if spot_delta > 0 else -1 if spot_delta < 0 else 0
-        score += volume_direction * min(10, relative_volume * 4)
+        volume_score = volume_direction * min(10, relative_volume * 4)
+        score_components["relative_volume"] = round(volume_score, 2)
+        score += volume_score
         reasons.append(
             "Spot volume expansion confirms buying"
             if volume_direction > 0
@@ -111,20 +124,23 @@ def analyze_spot_timeframe(symbol, timeframe, candles):
     support = zones.get("support")
     if resistance:
         if resistance["breakout_accepted"]:
-            score += 12
+            score_components["resistance"] = 12.0
             reasons.append("Spot price accepted above dynamic resistance")
         elif resistance["latest_rejected"]:
-            score -= 12
+            score_components["resistance"] = -12.0
             reasons.append("Spot price was rejected from dynamic resistance")
+        score += score_components["resistance"]
     if support:
         if support["breakdown_accepted"]:
-            score -= 12
+            score_components["support"] = -12.0
             reasons.append("Spot price accepted below dynamic support")
         elif support["latest_rejected"]:
-            score += 12
+            score_components["support"] = 12.0
             reasons.append("Spot buyers defended dynamic support")
+        score += score_components["support"]
 
     score = round(_clamp(score, -100, 100), 2)
+    score_components["total"] = score
     return {
         "symbol": str(symbol).upper(),
         "timeframe": timeframe,
@@ -140,6 +156,7 @@ def analyze_spot_timeframe(symbol, timeframe, candles):
         "spot_cvd_percent": round(cvd_percent, 4),
         "relative_spot_volume": round(relative_volume, 4),
         "spot_quote_volume": round(quote_volume, 2),
+        "score_components": score_components,
         "resistance": resistance,
         "support": support,
         "reasons": reasons,

@@ -103,6 +103,29 @@ def test_missing_spot_timeframes_fail_closed():
     assert result["quality_state"] == "DEGRADED"
 
 
+def test_timeframe_evidence_exposes_auditable_score_components():
+    timeframe = analyze_spot_stack("BTCUSDT", {"1h": _bars(bullish=True)})[
+        "timeframes"
+    ][0]
+
+    components = timeframe["score_components"]
+
+    assert components["ema"] == 12.0
+    assert components["cvd"] > 0
+    assert components["price_change"] > 0
+    assert components["relative_volume"] > 0
+    assert components["total"] == timeframe["score"]
+    assert set(components) == {
+        "ema",
+        "cvd",
+        "price_change",
+        "relative_volume",
+        "resistance",
+        "support",
+        "total",
+    }
+
+
 def test_paper_entry_requires_fresh_matching_market_participation_direction():
     bullish = {
         "status": "READY",
