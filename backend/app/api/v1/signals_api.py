@@ -32,6 +32,7 @@ from app.repositories.candle_repository import get_latest_candle
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.intelligence_repository import get_ai_inputs
 from app.repositories.master_signal_repository import MasterSignalRepository
+from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories._db_utils import safe_rollback
 from app.repositories.risk_repository import RiskRepository
@@ -42,6 +43,7 @@ from app.features.point_in_time_feature_service import build_decision_snapshot
 from app.features.point_in_time_feature_service import persist_decision_snapshot
 from app.trading.trade_plan_engine import build_trade_plan
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.trading.market_participation_guard import evaluate_market_participation
 from app.paper_trading.exit_policy import approval_target_for_policy
 from app.observability.performance_budget import LatencyBudget
 from app.observability.performance_budget import build_stage_latency_report
@@ -82,6 +84,7 @@ PHASE2_OPPORTUNITY_DECISION_VERSION = "phase2_opportunity_ledger_v1"
 _watchlist_payload_cache = {}
 _watchlist_cache_key_locks = {}
 _watchlist_cache_guard = threading.Lock()
+_MARKET_PARTICIPATION_UNSET = object()
 
 
 @router.post(
@@ -553,8 +556,16 @@ def build_signal_watchlist_payload(
         symbol: _watchlist_risk_payload(risk, stale_after_seconds)
         for symbol, risk in risk_rows.items()
     }
+    participation_payloads = MarketParticipationRepository().latest_for_symbols(
+        db,
+        [payload["symbol"] for payload in payloads],
+    )
     records = [
-        _watchlist_row(payload, risk_payloads.get(payload["symbol"]))
+        _watchlist_row(
+            payload,
+            risk_payloads.get(payload["symbol"]),
+            participation_payloads.get(payload["symbol"]),
+        )
         for payload in payloads
     ]
     filtered_records, filters = _filter_watchlist(
@@ -688,6 +699,10 @@ def persist_ready_watchlist_setups_for_stack(
             stale_after_seconds,
         )
         trade_repo = TradePlanRepository()
+        participation_payloads = MarketParticipationRepository().latest_for_symbols(
+            db,
+            [payload["symbol"] for payload in payloads],
+        )
         records = []
 
         for payload in payloads:
@@ -697,6 +712,7 @@ def persist_ready_watchlist_setups_for_stack(
                 trade_repo,
                 payload,
                 normalized_side,
+                participation_payloads.get(payload["symbol"]),
             )
             record["opportunity_snapshot"] = opportunity_snapshot
             records.append(record)
@@ -1460,7 +1476,13 @@ def _watchlist_priority_key(item):
     )
 
 
-def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
+def _persist_ready_watchlist_payload(
+    db,
+    trade_repo,
+    payload,
+    side_filter=None,
+    market_participation=_MARKET_PARTICIPATION_UNSET,
+):
     symbol = payload["symbol"]
     trigger = payload["trigger"]
     side = trigger["side"]
@@ -1493,6 +1515,16 @@ def _persist_ready_watchlist_payload(db, trade_repo, payload, side_filter=None):
                 if not item["passed"]
             ],
         }
+
+    if market_participation is not _MARKET_PARTICIPATION_UNSET:
+        participation = evaluate_market_participation(market_participation, side)
+        if not participation["allowed"]:
+            return {
+                **base,
+                "action": "skipped_market_participation",
+                "message": participation["reason"],
+                "market_participation": participation,
+            }
 
     if not trade_plan:
         return {
@@ -1807,7 +1839,11 @@ def _same_optional_number(left, right, tolerance=1e-8):
     return abs(float(left) - float(right)) <= tolerance
 
 
-def _watchlist_row(payload, risk=None):
+def _watchlist_row(
+    payload,
+    risk=None,
+    market_participation=_MARKET_PARTICIPATION_UNSET,
+):
     timeframes = {
         item["timeframe"]: item
         for item in payload["timeframes"]
@@ -1818,7 +1854,23 @@ def _watchlist_row(payload, risk=None):
     trigger = payload["trigger"]
     confirmation = payload["confirmation"]
     computed_risk = _watchlist_computed_risk_payload(payload)
-    eligibility = _watchlist_eligibility(payload, risk, computed_risk)
+    participation_payload = (
+        None
+        if market_participation is _MARKET_PARTICIPATION_UNSET
+        else market_participation
+    )
+    participation = evaluate_market_participation(
+        participation_payload,
+        trigger.get("side"),
+    )
+    eligibility = _watchlist_eligibility(
+        payload,
+        risk,
+        computed_risk,
+        participation
+        if market_participation is not _MARKET_PARTICIPATION_UNSET
+        else None,
+    )
     risk_source = "persisted" if risk else "computed" if computed_risk else "trigger"
 
     return {
@@ -1844,6 +1896,19 @@ def _watchlist_row(payload, risk=None):
         "eligibility_label": eligibility["label"],
         "eligibility_tone": eligibility["tone"],
         "eligibility_reason": eligibility["reason"],
+        "eligibility_allowed": eligibility["allowed"],
+        "eligibility_status": eligibility["status"],
+        "market_participation": participation,
+        "combined_execution": {
+            "allowed": eligibility["allowed"],
+            "status": eligibility["status"],
+            "reason": eligibility["reason"],
+            "selected_timeframe": entry_timeframe,
+            "side": trigger.get("side"),
+            "score": _timeframe_value(timeframes, entry_timeframe, "score"),
+            "confidence": _timeframe_confidence(selected, confirmation),
+            "market_participation_status": participation["status"],
+        },
         "risk_source": risk_source,
         "persisted_risk": risk,
         "computed_risk": computed_risk,
@@ -1875,7 +1940,12 @@ def _watchlist_row(payload, risk=None):
     }
 
 
-def _watchlist_eligibility(payload, risk=None, computed_risk=None):
+def _watchlist_eligibility(
+    payload,
+    risk=None,
+    computed_risk=None,
+    market_participation=None,
+):
     trigger = payload["trigger"] or {}
     trade_plan = payload.get("trade_plan") or {}
     validation = payload.get("trade_plan_validation") or {}
@@ -1891,12 +1961,25 @@ def _watchlist_eligibility(payload, risk=None, computed_risk=None):
                 "label": "Blocked by confidence",
                 "tone": "amber",
                 "reason": trigger.get("reason") or "Confidence is outside the entry window",
+                "allowed": False,
+                "status": "BLOCKED_CONFIDENCE",
             }
 
         return {
             "label": "Blocked",
             "tone": "rose",
             "reason": trigger.get("reason") or "Entry trigger is not ready",
+            "allowed": False,
+            "status": "BLOCKED_SIGNAL",
+        }
+
+    if market_participation and not market_participation.get("allowed"):
+        return {
+            "label": "Blocked by participation",
+            "tone": "rose",
+            "reason": market_participation.get("reason") or "Spot participation does not confirm the signal",
+            "allowed": False,
+            "status": "BLOCKED_PARTICIPATION",
         }
 
     if risk and risk.get("is_usable") is False:
@@ -1904,6 +1987,8 @@ def _watchlist_eligibility(payload, risk=None, computed_risk=None):
             "label": "Blocked by risk",
             "tone": "rose",
             "reason": risk.get("reason") or "Persisted risk decision is not usable",
+            "allowed": False,
+            "status": "BLOCKED_RISK",
         }
 
     if risk and risk.get("is_usable") is True:
@@ -1911,6 +1996,8 @@ def _watchlist_eligibility(payload, risk=None, computed_risk=None):
             "label": "Eligible",
             "tone": "emerald",
             "reason": risk.get("reason") or "Persisted risk decision approved",
+            "allowed": True,
+            "status": "ELIGIBLE",
         }
 
     if computed_risk and computed_risk.get("is_usable") is False:
@@ -1918,6 +2005,8 @@ def _watchlist_eligibility(payload, risk=None, computed_risk=None):
             "label": "Blocked by risk",
             "tone": "rose",
             "reason": computed_risk.get("reason") or "Computed risk decision is not usable",
+            "allowed": False,
+            "status": "BLOCKED_RISK",
         }
 
     if computed_risk and computed_risk.get("is_usable") is True:
@@ -1925,6 +2014,8 @@ def _watchlist_eligibility(payload, risk=None, computed_risk=None):
             "label": "Eligible",
             "tone": "emerald",
             "reason": computed_risk.get("reason") or "Computed risk decision approved",
+            "allowed": True,
+            "status": "ELIGIBLE",
         }
 
     if validation and not validation.get("is_valid", True):
@@ -1933,6 +2024,8 @@ def _watchlist_eligibility(payload, risk=None, computed_risk=None):
             "label": "Blocked by risk",
             "tone": "rose",
             "reason": ", ".join(errors) if errors else "Trade plan validation failed",
+            "allowed": False,
+            "status": "BLOCKED_RISK",
         }
 
     risk_reward = trade_plan.get("risk_reward")
@@ -1941,12 +2034,16 @@ def _watchlist_eligibility(payload, risk=None, computed_risk=None):
             "label": "Blocked by risk",
             "tone": "rose",
             "reason": "Risk reward is below minimum threshold",
+            "allowed": False,
+            "status": "BLOCKED_RISK",
         }
 
     return {
         "label": "Eligible",
         "tone": "emerald",
         "reason": trigger.get("reason") or "Signal passes watchlist eligibility checks",
+        "allowed": True,
+        "status": "ELIGIBLE",
     }
 
 

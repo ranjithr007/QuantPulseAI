@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.api.v1 import backtest_api
+from app.backtesting import phase2_validation_artifacts as phase2_artifacts
 from app.backtesting.phase2_validation_artifacts import list_phase2_validation_artifacts
 from app.backtesting.phase2_validation_artifacts import load_phase2_validation_artifact
 from app.backtesting.phase2_validation_artifacts import persist_phase2_validation_artifact
@@ -136,6 +137,67 @@ def test_phase2_export_route_returns_artifact_payload(monkeypatch):
     assert payload["report"]["overall_status"] == "PARTIAL"
 
 
+def test_phase2_export_reuses_completed_async_result_without_recalculation(monkeypatch):
+    completed = {
+        **_walk_forward(),
+        "engine_version": "walk_forward_v1",
+        "symbol": "XRPUSDT",
+        "timeframe": "1h",
+        "signal": "SHORT",
+    }
+    monkeypatch.setattr(
+        backtest_api,
+        "execute_walk_forward",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("export must not rerun walk-forward")
+        ),
+    )
+    monkeypatch.setattr(
+        backtest_api,
+        "build_phase2_validation_report",
+        lambda result, **kwargs: _report(),
+    )
+    monkeypatch.setattr(backtest_api, "_load_paper_measurement", lambda symbol: None)
+    monkeypatch.setattr(
+        backtest_api,
+        "persist_phase2_validation_artifact",
+        lambda report, result, **kwargs: {"saved": True},
+    )
+
+    payload = backtest_api.export_phase2_validation_report(
+        symbol="XRPUSDT",
+        signal="SHORT",
+        timeframe="1h",
+        payload={"result": completed},
+    )
+
+    assert payload["calculation_source"] == "COMPLETED_ASYNC_JOB"
+    assert payload["artifact"]["saved"] is True
+
+
+def test_phase2_export_rejects_completed_result_from_another_scope():
+    completed = {
+        **_walk_forward(),
+        "engine_version": "walk_forward_v1",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "signal": "LONG",
+    }
+
+    try:
+        backtest_api.export_phase2_validation_report(
+            symbol="XRPUSDT",
+            signal="SHORT",
+            timeframe="1h",
+            payload={"result": completed},
+        )
+    except Exception as exc:
+        assert exc.status_code == 422
+        assert "does not match export scope" in exc.detail
+    else:
+        raise AssertionError("scope mismatch must be rejected")
+
+
 def test_artifact_history_and_load_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "app.backtesting.phase2_validation_artifacts._outputs_root",
@@ -185,6 +247,23 @@ def test_phase2_history_and_artifact_routes(monkeypatch):
     assert history["count"] == 1
     assert artifact["source"] == "phase2_validation_artifact_v1"
     assert artifact["artifact"]["artifact_id"] == "dogeusdt_1h_long_20260708_120000"
+
+
+def test_outputs_root_uses_runtime_directory_in_shallow_container_layout(
+    tmp_path,
+    monkeypatch,
+):
+    runtime_root = tmp_path / "runtime-outputs"
+    monkeypatch.setattr(
+        phase2_artifacts,
+        "__file__",
+        "/app/app/backtesting/phase2_validation_artifacts.py",
+    )
+    monkeypatch.setenv("QUANTPULSE_OUTPUTS_DIR", str(runtime_root))
+
+    assert phase2_artifacts._outputs_root() == runtime_root
+    assert phase2_artifacts.list_phase2_validation_artifacts() == []
+    assert phase2_artifacts.summarize_phase2_validation_artifacts() == []
 
 
 def test_phase2_summary_groups_latest_and_previous_by_scope(tmp_path, monkeypatch):

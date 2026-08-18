@@ -1,3 +1,7 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from app.collectors.binances.mark_price_collector import MarkPriceCollector
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
@@ -18,6 +22,7 @@ def run_paper_trade_monitor_job():
     db = SessionLocal()
     try:
         summary = {
+            "status": "OK",
             "processed": 0,
             "policy_updates": 0,
             "closed": 0,
@@ -28,6 +33,8 @@ def run_paper_trade_monitor_job():
             "skipped": 0,
             "candles_evaluated": 0,
             "entry_timeframe_fallbacks": 0,
+            "deadline_catchups": 0,
+            "overdue_unresolved": 0,
             "errors": [],
             "records": [],
         }
@@ -43,6 +50,22 @@ def run_paper_trade_monitor_job():
                 )
                 if used_fallback:
                     summary["entry_timeframe_fallbacks"] += 1
+
+                if not candles and _maximum_hold_due(trade):
+                    catchup_candle, catchup_error = _deadline_catchup_candle(
+                        db,
+                        trade,
+                        timeframe,
+                    )
+                    if catchup_candle is not None:
+                        candles = [catchup_candle]
+                        source_available = True
+                        summary["deadline_catchups"] += 1
+                    else:
+                        summary["overdue_unresolved"] += 1
+                        summary["errors"].append(
+                            f"{trade.symbol}: {catchup_error or 'OVERDUE_EXIT_PRICE_UNAVAILABLE'}"
+                        )
 
                 if not source_available:
                     summary["skipped"] += 1
@@ -132,16 +155,20 @@ def run_paper_trade_monitor_job():
                     if last_decision and last_decision["action"] == "HOLD":
                         summary["records"].append(last_decision)
             except Exception as ex:
+                safe_rollback(db)
                 summary["errors"].append(
                     f"{trade.symbol}: {summarize_network_error(ex)}"
                 )
                 continue
 
+        if summary["errors"] or summary["overdue_unresolved"]:
+            summary["status"] = "FAILED"
         print("Paper Trade Monitor Completed", summary)
         return summary
 
     except Exception as ex:
         safe_rollback(db)
+        summary["status"] = "FAILED"
         summary["errors"].append(summarize_network_error(ex))
         if not is_transient_network_error(ex):
             print("Paper trade monitor job error:", summarize_network_error(ex))
@@ -203,3 +230,56 @@ def _candle_checkpoint(candle):
     if value is None:
         return None
     return value.replace(tzinfo=None)
+
+
+def _maximum_hold_due(trade, now=None):
+    opened_at = normalize_timestamp_to_utc(getattr(trade, "opened_at", None))
+    max_hold_hours = getattr(trade, "max_hold_hours", None)
+    if opened_at is None or not max_hold_hours:
+        return False
+    observed_at = normalize_timestamp_to_utc(now or datetime.now(timezone.utc))
+    return observed_at >= opened_at + timedelta(hours=float(max_hold_hours))
+
+
+def _deadline_catchup_candle(db, trade, timeframe, *, collector=None, now=None):
+    deadline = _maximum_hold_deadline(trade)
+    if deadline is None:
+        return None, "MAX_HOLD_DEADLINE_UNAVAILABLE"
+
+    latest = get_latest_candle(db, trade.symbol, timeframe)
+    latest_close = normalize_timestamp_to_utc(
+        getattr(latest, "close_time", None) if latest is not None else None
+    )
+    if latest is not None and latest_close is not None and latest_close >= deadline:
+        latest.force_time_exit = True
+        latest.deadline_catchup_source = "LATEST_FINAL_DB_CANDLE"
+        return latest, None
+
+    mark = (collector or MarkPriceCollector()).get_current_mark_price(trade.symbol)
+    if not mark:
+        return None, "OVERDUE_EXIT_MARK_PRICE_UNAVAILABLE"
+    observed_at = normalize_timestamp_to_utc(mark.get("observed_at") or now)
+    if observed_at is None or observed_at < deadline:
+        return None, "OVERDUE_EXIT_MARK_PRICE_PREDATES_DEADLINE"
+
+    price = float(mark["mark_price"])
+    timestamp = observed_at.replace(tzinfo=None)
+    return SimpleNamespace(
+        high_price=price,
+        low_price=price,
+        close_price=price,
+        candle_time=timestamp,
+        open_time=timestamp,
+        close_time=timestamp,
+        is_final=True,
+        force_time_exit=True,
+        deadline_catchup_source=mark.get("source") or "CURRENT_MARK_PRICE",
+    ), None
+
+
+def _maximum_hold_deadline(trade):
+    opened_at = normalize_timestamp_to_utc(getattr(trade, "opened_at", None))
+    max_hold_hours = getattr(trade, "max_hold_hours", None)
+    if opened_at is None or not max_hold_hours:
+        return None
+    return opened_at + timedelta(hours=float(max_hold_hours))

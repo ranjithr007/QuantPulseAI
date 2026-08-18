@@ -44,7 +44,7 @@ export default function MarketSignalTable({
       </div>
 
       <div className="hidden overflow-x-auto sm:block">
-        <table className="min-w-[920px] divide-y divide-white/5 text-left text-sm xl:min-w-[1040px]">
+        <table className="min-w-[1040px] divide-y divide-white/5 text-left text-sm xl:min-w-[1160px]">
           <thead className="bg-slate-950/60 text-[11px] uppercase tracking-[0.16em] text-slate-500">
             <tr>
               <th className="px-3 py-2.5">Symbol</th>
@@ -55,6 +55,7 @@ export default function MarketSignalTable({
               <th className="px-3 py-2.5">RS score</th>
               <th className="px-3 py-2.5">Stage</th>
               <th className="px-3 py-2.5">Regime</th>
+              <th className="px-3 py-2.5">Spot confirm</th>
               <th className="px-3 py-2.5">Long / short</th>
               <th className="px-3 py-2.5">Risk</th>
               <th className="px-3 py-2.5">Action</th>
@@ -106,6 +107,12 @@ export default function MarketSignalTable({
                 </td>
                 <td className="px-2.5 py-2.5 text-slate-300 sm:px-3">{row.stage}</td>
                 <td className="px-2.5 py-2.5 text-slate-300 sm:px-3">{row.regime}</td>
+                <td className="px-2.5 py-2.5 sm:px-3">
+                  <Pill tone={row.participationTone}>{row.participationDirection}</Pill>
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    {formatSigned(row.participationScore, 0, "-")} · {formatPercent(row.participationConfidence, 0, "-")}
+                  </div>
+                </td>
                 <td className="px-2.5 py-2.5 sm:px-3">
                   <div className="flex min-w-28 overflow-hidden rounded-full bg-slate-950/80">
                     <div className="h-2 bg-emerald-400" style={{ width: `${row.longPct}%` }} />
@@ -170,6 +177,11 @@ function MobileSignalCard({ row, active, minConfidence, onOpenSymbol, getSymbolH
         <MobileDatum label="Signal" value={<Pill tone={signalTone(row.type)}>{row.type}</Pill>} />
         <MobileDatum label="Confidence" value={formatPercent(row.confidence, 0, "-")} />
         <MobileDatum label="Regime" value={row.regime} />
+        <MobileDatum
+          label="Spot confirm"
+          value={`${row.participationDirection} ${formatSigned(row.participationScore, 0, "-")} · ${formatPercent(row.participationConfidence, 0, "-")}`}
+          valueClass={row.participationTone === "emerald" ? "text-emerald-300" : row.participationTone === "rose" ? "text-rose-300" : "text-amber-300"}
+        />
         <MobileDatum label="Stage" value={row.stage} />
         <MobileDatum label="Long / short" value={`${formatPercent(row.longPct, 0)} / ${formatPercent(row.shortPct, 0)}`} />
         <MobileDatum label="RS score" value={formatSigned(row.rsScore, 0, "-")} valueClass={row.rsScore >= 0 ? "text-emerald-300" : "text-rose-300"} />
@@ -220,27 +232,34 @@ function DetailAction({ row, onOpenSymbol, getSymbolHref }) {
 
 export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperTradeCandidates = []) {
   const watchRow = (watchlist?.records || []).find((item) => item.symbol === row.symbol) || {};
-  const rsScore = resolveRsScore(row, watchRow);
-  const longPct = resolveDirectionalPct(row, "LONG");
-  const shortPct = resolveDirectionalPct(row, "SHORT");
-  const riskReward = numberFrom(row.riskReward, watchRow.risk_reward, 0);
-  const stage = inferStage(row, watchRow);
-  const risk = deriveRowEligibilityState({ row, watchRow, minConfidence });
+  const selectedRow = selectWatchlistSignal(row, watchRow);
+  const rsScore = resolveRsScore(selectedRow, watchRow);
+  const longPct = resolveDirectionalPct(selectedRow, "LONG");
+  const shortPct = resolveDirectionalPct(selectedRow, "SHORT");
+  const riskReward = numberFrom(selectedRow.riskReward, watchRow.risk_reward, 0);
+  const stage = inferStage(selectedRow, watchRow);
+  const risk = deriveRowEligibilityState({ row: selectedRow, watchRow, minConfidence });
   const hasLiveRecord = Boolean(row.liveUpdatedAt);
   const liveState = getLiveMarketState({ liveStatus, updatedAt: row.liveUpdatedAt, hasLiveRecord });
-  const executor = deriveExecutorState(row, paperTradeCandidates);
+  const executor = deriveExecutorState(selectedRow, paperTradeCandidates);
+  const participation = watchRow.market_participation || {};
 
   return {
-    ...row,
+    ...selectedRow,
     currentPrice: nullableNumberFrom(row.currentPrice, watchRow.current_price),
     priceSource: liveState.source,
     liveState,
     rsScore,
     stage,
-    regime: row.regime || watchRow.overall_bias || "WAIT",
+    regime: selectedRow.regime || watchRow.overall_bias || "WAIT",
     watchStatus: watchRow.status || "SCAN",
     longPct,
     shortPct,
+    participationDirection: String(participation.direction || "UNAVAILABLE").toUpperCase(),
+    participationScore: nullableNumberFrom(participation.score),
+    participationConfidence: nullableNumberFrom(participation.confidence),
+    participationStatus: participation.status || "UNAVAILABLE",
+    participationTone: participationTone(participation),
     riskReward,
     riskLabel: risk.label,
     riskTone: risk.tone,
@@ -249,6 +268,23 @@ export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperT
     executorLabel: executor.label,
     executorTone: executor.tone,
     executorNote: executor.note,
+  };
+}
+
+function selectWatchlistSignal(row, watchRow) {
+  const status = String(watchRow?.status || "").toUpperCase();
+  const side = normalizeTradeSide(watchRow?.side);
+  if (status !== "READY" || !["LONG", "SHORT"].includes(side)) return row;
+
+  return {
+    ...row,
+    timeframe: watchRow.entry_timeframe || row.timeframe,
+    type: side === "LONG" ? "BUY" : "SELL",
+    confidence: numberFrom(watchRow.confidence, row.confidence),
+    signalScore: numberFrom(watchRow.entry_score, row.signalScore),
+    signalBias: watchRow.entry_bias || row.signalBias,
+    regime: watchRow.entry_bias || watchRow.overall_bias || row.regime,
+    selectedFromWatchlist: true,
   };
 }
 
@@ -309,6 +345,13 @@ function signalTone(type) {
   return "slate";
 }
 
+function participationTone(participation) {
+  if (participation?.allowed) return "emerald";
+  const status = String(participation?.status || "").toUpperCase();
+  if (["STALE", "DEGRADED", "UNAVAILABLE", "BELOW_THRESHOLD"].includes(status)) return "amber";
+  return "rose";
+}
+
 function riskSourceLabel(source) {
   const value = String(source || "").toLowerCase();
   if (value === "persisted") return "Persisted";
@@ -347,6 +390,9 @@ function directionalPct(type, confidence, side) {
 }
 
 function resolveDirectionalPct(row, side) {
+  if (row?.selectedFromWatchlist) {
+    return directionalPct(row.type, row.confidence, side);
+  }
   const probabilityPrimary = side === "LONG" ? "probabilityLong" : "probabilityShort";
   const probabilitySecondary = side === "LONG" ? "probability_long" : "probability_short";
   const probabilityTertiary = side === "LONG" ? "longProbability" : "shortProbability";
@@ -393,6 +439,7 @@ function resolveRsScore(row, watchRow) {
   const timeframeKey = scoreKeyForTimeframe(row.timeframe);
   return numberFrom(
     row.signalScore,
+    row.selectedFromWatchlist ? watchRow?.entry_score : null,
     timeframeKey ? watchRow?.[timeframeKey] : null,
     watchRow?.score_1d,
     watchRow?.score_4h,

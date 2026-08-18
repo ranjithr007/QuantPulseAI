@@ -544,6 +544,7 @@ def phase2_validation_report(
 @router.post("/phase2-report/export")
 def export_phase2_validation_report(
     symbol: str,
+    payload: dict | None = None,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
     timeframe: str = Query(default="15m", pattern="^(1m|5m|15m|1h|2h|4h|1d)$"),
     limit: int | None = Query(default=None, ge=3, le=MAX_WALK_FORWARD_CANDLES),
@@ -562,27 +563,41 @@ def export_phase2_validation_report(
     as_of: datetime | None = Query(default=None),
     frozen_fold_parameters_json: str = Query(default="[]"),
 ):
-    resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
-    result = execute_walk_forward(
-        symbol,
-        timeframe,
-        signal,
-        limit=resolved["limit"],
-        stop_grid=_parse_grid(stop_grid, "stop_grid"),
-        target_grid=_parse_grid(target_grid, "target_grid"),
-        train_size=resolved["train_size"],
-        test_size=resolved["test_size"],
-        step_size=resolved["step_size"],
-        mode=mode,
-        min_train_trades=min_train_trades,
-        initial_capital=initial_capital,
-        position_size_percent=position_size_percent,
-        fee_bps=fee_bps,
-        slippage_bps=slippage_bps,
-        strategy=strategy,
-        **_as_of_options(as_of),
-        **_frozen_fold_options(frozen_fold_parameters_json),
-    )
+    result = dict((payload or {}).get("result") or {})
+    if result:
+        if result.get("engine_version") != "walk_forward_v1":
+            raise HTTPException(
+                status_code=422,
+                detail="result must contain a completed walk_forward_v1 result",
+            )
+        _validate_completed_walk_forward_scope(
+            result,
+            symbol=symbol,
+            timeframe=timeframe,
+            signal=signal,
+        )
+    else:
+        resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
+        result = execute_walk_forward(
+            symbol,
+            timeframe,
+            signal,
+            limit=resolved["limit"],
+            stop_grid=_parse_grid(stop_grid, "stop_grid"),
+            target_grid=_parse_grid(target_grid, "target_grid"),
+            train_size=resolved["train_size"],
+            test_size=resolved["test_size"],
+            step_size=resolved["step_size"],
+            mode=mode,
+            min_train_trades=min_train_trades,
+            initial_capital=initial_capital,
+            position_size_percent=position_size_percent,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+            strategy=strategy,
+            **_as_of_options(as_of),
+            **_frozen_fold_options(frozen_fold_parameters_json),
+        )
     report = build_phase2_validation_report(
         result,
         symbol=symbol,
@@ -599,6 +614,9 @@ def export_phase2_validation_report(
     )
     return {
         "source": "phase2_validation_export_v1",
+        "calculation_source": (
+            "COMPLETED_ASYNC_JOB" if payload and payload.get("result") else "SYNCHRONOUS_COMPATIBILITY"
+        ),
         "report": report,
         "artifact": artifact,
     }
@@ -847,6 +865,33 @@ def _frozen_fold_options(value):
             }
         )
     return {"frozen_fold_parameters": normalized} if normalized else {}
+
+
+def _validate_completed_walk_forward_scope(result, *, symbol, timeframe, signal):
+    expected = {
+        "symbol": str(symbol or "").upper(),
+        "timeframe": str(timeframe or "").lower(),
+        "signal": str(signal or "").upper(),
+    }
+    normalizers = {
+        "symbol": lambda value: str(value or "").upper(),
+        "timeframe": lambda value: str(value or "").lower(),
+        "signal": lambda value: str(value or "").upper(),
+    }
+    mismatches = [
+        name
+        for name, expected_value in expected.items()
+        if result.get(name) is not None
+        and normalizers[name](result.get(name)) != expected_value
+    ]
+    if mismatches:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "completed walk-forward result does not match export scope: "
+                + ", ".join(mismatches)
+            ),
+        )
 
 
 def _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size):

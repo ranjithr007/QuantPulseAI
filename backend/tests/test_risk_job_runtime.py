@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 from app.jobs.risk_job import RiskJob
 from app.jobs.risk_job import run_risk_job
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -140,6 +140,70 @@ def test_risk_job_uses_persisted_configured_max_risk_percent():
     )
 
     assert job._configured_max_risk_percent(db) == 1.5
+
+
+def test_duplicate_risk_decision_is_suppressed_inside_refresh_window():
+    now = datetime(2026, 8, 17, 12, 0, 0)
+    risk_repo = Mock()
+    risk_repo.latest_for_symbol.return_value = SimpleNamespace(
+        thesis_id=42,
+        signal="LONG",
+        created_at=now - timedelta(minutes=9),
+    )
+    job = RiskJob(
+        config=RiskJobConfig(risk_decision_refresh_seconds=600),
+        risk_repo=risk_repo,
+    )
+
+    with patch.object(job, "_utc_now", return_value=now):
+        assert job._already_processed(
+            db=Mock(),
+            symbol="BTCUSDT",
+            signal="LONG",
+            thesis_id=42,
+            source_timestamp=now - timedelta(hours=1),
+        )
+
+
+def test_stale_duplicate_risk_decision_is_refreshed_before_api_expiry():
+    now = datetime(2026, 8, 17, 12, 0, 0)
+    risk_repo = Mock()
+    risk_repo.latest_for_symbol.return_value = SimpleNamespace(
+        thesis_id=42,
+        signal="LONG",
+        created_at=now - timedelta(minutes=10),
+    )
+    job = RiskJob(
+        config=RiskJobConfig(risk_decision_refresh_seconds=600),
+        risk_repo=risk_repo,
+    )
+
+    with patch.object(job, "_utc_now", return_value=now):
+        assert not job._already_processed(
+            db=Mock(),
+            symbol="BTCUSDT",
+            signal="LONG",
+            thesis_id=42,
+            source_timestamp=now - timedelta(hours=1),
+        )
+
+
+def test_missing_risk_decision_timestamp_is_not_suppressed_forever():
+    risk_repo = Mock()
+    risk_repo.latest_for_symbol.return_value = SimpleNamespace(
+        thesis_id=42,
+        signal="LONG",
+        created_at=None,
+    )
+    job = RiskJob(risk_repo=risk_repo)
+
+    assert not job._already_processed(
+        db=Mock(),
+        symbol="BTCUSDT",
+        signal="LONG",
+        thesis_id=42,
+        source_timestamp=datetime(2026, 8, 17, 11, 0, 0),
+    )
 
 
 def test_run_risk_job_continues_after_one_signal_error():

@@ -147,6 +147,26 @@ def test_mark_price_collector_parses_only_final_klines():
     assert rows[0]["is_final"] is True
 
 
+def test_mark_price_collector_fetches_current_mark_for_deadline_exit():
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "symbol": "XRPUSDT",
+        "markPrice": "1.0025",
+        "time": 1786977000000,
+    }
+
+    with patch(
+        "app.collectors.binances.mark_price_collector.requests.get",
+        return_value=response,
+    ):
+        item = MarkPriceCollector().get_current_mark_price("XRPUSDT")
+
+    assert item["symbol"] == "XRPUSDT"
+    assert item["mark_price"] == 1.0025
+    assert item["source"] == "BINANCE_FUTURES_MARK_PRICE"
+
+
 def test_leverage_bracket_collector_fails_closed_without_credentials():
     collector = LeverageBracketCollector(api_key="", api_secret="")
     collector.api_key = None

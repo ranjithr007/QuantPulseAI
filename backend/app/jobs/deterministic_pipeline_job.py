@@ -39,7 +39,9 @@ STAGE_ORDER = (
     ("risk", run_risk_job),
     ("paper_trade_execute", run_paper_trade_execute_job),
 )
-ALWAYS_RUN_SAFETY_STAGES = frozenset({"paper_trade_monitor"})
+ALWAYS_RUN_SAFETY_STAGES = frozenset(
+    {"paper_trade_monitor", "opportunity_coverage_recovery"}
+)
 STALE_PIPELINE_AFTER_SECONDS = 1800
 
 

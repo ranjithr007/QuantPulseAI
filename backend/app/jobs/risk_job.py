@@ -73,6 +73,12 @@ class RiskJobConfig:
     # Prevent repeated risk decisions for the same thesis/source signal.
     skip_duplicate_signals: bool = True
 
+    # Duplicate suppression must expire before the API's 15-minute risk
+    # freshness boundary. This lets an unchanged, still-valid thesis be
+    # re-evaluated against the latest market inputs instead of leaving a stale
+    # risk decision that can never recover until the thesis changes.
+    risk_decision_refresh_seconds: int = 10 * 60
+
 
 class RiskInputError(Exception):
     """Raised when risk inputs are unavailable, stale, or invalid."""
@@ -662,6 +668,9 @@ class RiskJob:
             self._get_value(latest, "created_at")
         )
 
+        if not self._risk_decision_is_recent(latest_created_at):
+            return False
+
         if (
             thesis_id is not None
             and latest_thesis_id is not None
@@ -679,6 +688,20 @@ class RiskJob:
             return True
 
         return False
+
+    def _risk_decision_is_recent(self, created_at: datetime | None) -> bool:
+        if created_at is None:
+            return False
+
+        refresh_seconds = max(
+            0,
+            int(self.config.risk_decision_refresh_seconds),
+        )
+        if refresh_seconds == 0:
+            return False
+
+        age = self._utc_now() - created_at
+        return timedelta(0) <= age < timedelta(seconds=refresh_seconds)
 
     def _deduplicate_master_signals(self, signals) -> list[Any]:
         """

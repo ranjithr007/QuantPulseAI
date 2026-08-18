@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -9,6 +9,7 @@ from app.utils.network_resilience import is_transient_network_error
 
 class MarkPriceCollector:
     URL = "https://fapi.binance.com/fapi/v1/markPriceKlines"
+    CURRENT_PRICE_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 
     def get_klines(
         self,
@@ -57,6 +58,40 @@ class MarkPriceCollector:
                 f"{classify_network_error(last_error)}"
             )
         return []
+
+    def get_current_mark_price(self, symbol):
+        """Return a bounded live mark-price fallback for overdue paper exits."""
+        last_error = None
+        for _attempt in range(2):
+            try:
+                response = requests.get(
+                    self.CURRENT_PRICE_URL,
+                    params={"symbol": symbol},
+                    timeout=5,
+                )
+                response.raise_for_status()
+                payload = response.json() or {}
+                price = float(payload["markPrice"])
+                observed_ms = int(payload.get("time") or time.time() * 1000)
+                return {
+                    "symbol": symbol,
+                    "mark_price": price,
+                    "observed_at": datetime.fromtimestamp(
+                        observed_ms / 1000,
+                        timezone.utc,
+                    ),
+                    "source": "BINANCE_FUTURES_MARK_PRICE",
+                }
+            except Exception as ex:
+                last_error = ex
+                time.sleep(1)
+
+        if last_error is not None and not is_transient_network_error(last_error):
+            print(
+                f"Current mark price error {symbol}: "
+                f"{classify_network_error(last_error)}"
+            )
+        return None
 
 
 def _parse_mark_price_kline(symbol, timeframe, row, now_ms):

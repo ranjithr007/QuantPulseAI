@@ -75,6 +75,13 @@ points per side). Target 2 is the reward level used by the minimum 2:1 net
 reward/risk approval guard. Funding is charged from actual funding events when
 paper P&L is closed and reported separately.
 
+The 48-hour exit is a safety deadline and must not depend exclusively on a new
+database candle arriving. If the normal 5-minute replay has no new finalized
+candle, the monitor must use a finalized post-deadline database candle or a
+fresh Binance Futures mark price to close the paper position. If neither is
+available, the monitor must fail visibly and block new execution rather than
+silently leaving the overdue position open.
+
 Selection must be deterministic. If two candidates cannot be separated by the
 governed ranking and tie-breaking policy, the safe result is no new trade.
 
@@ -172,6 +179,10 @@ Operational readiness is separate from code compliance. Every deployed database
 must contain fresh, finalized candle coverage for all four canonical timeframes.
 Missing timeframe data must produce an incomplete/neutral decision and must never
 be silently replaced by another timeframe or mixed into that timeframe's regime.
+An unchanged valid thesis must still refresh its risk decision at least once
+before the 15-minute execution freshness boundary. Duplicate suppression may
+reduce repeated writes, but it must expire early enough to re-evaluate current
+price, ATR, stop, targets, net reward/risk, and position sizing.
 
 For reporting, the four canonical timeframe directions are equally weighted:
 each timeframe contributes 25 percentage points. Bullish, Bearish, Neutral, and
@@ -217,6 +228,13 @@ New paper-trade entry requires both governed decisions to agree:
 The participation result is a trade-level blocker. It does not change the
 one-active-trade-per-symbol lock, account-wide limits, staged exits, or the
 canonical rescan lifecycle in QP-TI-001.
+
+The signal watchlist, market scanner, queued-plan persistence, and paper executor
+must use the same participation guard and the same selected opportunity. When a
+watchlist candidate is selected from `1h`, `2h`, `4h`, or `1d`, the dashboard must
+show that candidate's timeframe, direction, score, confidence, participation
+state, and combined eligibility together. A signal from the currently viewed
+timeframe must not be labelled with another timeframe's eligibility.
 
 # INR-M paper-wallet sizing
 

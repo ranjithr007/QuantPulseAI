@@ -248,7 +248,7 @@ export async function loadPhase2ValidationReport({ symbol, signalSide, timeframe
   return response || null;
 }
 
-export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", signal }) {
+export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", validation, signal }) {
   const response = await requestJson(
     "/backtest/phase2-report/export",
     {
@@ -259,7 +259,8 @@ export async function exportPhase2ValidationReport({ symbol, signalSide, timefra
     },
     signal,
     120000,
-    "POST"
+    "POST",
+    { result: validation?.result || null }
   );
 
   return response || null;
