@@ -21,6 +21,7 @@ import {
 import { Link, NavLink } from "react-router-dom";
 import { formatPercent, formatPrice, formatTimeInIst } from "../utils/formatters";
 import { getUnifiedMarketState } from "../utils/liveMarket";
+import { selectWatchlistSignal } from "./MarketSignalTable";
 
 const PAGE_ITEMS = [
   { id: "dashboard", label: "Dashboard", shortLabel: "Home", icon: BarChart3 },
@@ -50,6 +51,7 @@ export default function DashboardHeader({
   modes,
   timeframes,
   signalRows,
+  watchlist,
   setView,
   setTick,
   username,
@@ -160,7 +162,7 @@ export default function DashboardHeader({
             </button>
           </div>
 
-          <MarketTicker signalRows={signalRows} view={view} getPageHref={getPageHref} />
+          <MarketTicker signalRows={signalRows} watchlist={watchlist} view={view} getPageHref={getPageHref} />
         </div>
       </header>
 
@@ -257,9 +259,19 @@ function SourceChip({ icon: Icon, label, value, tone }) {
   );
 }
 
-function MarketTicker({ signalRows = [], view, getPageHref }) {
+function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
   const rows = useMemo(() => {
-    return [...signalRows]
+    const watchRowsBySymbol = new Map(
+      (watchlist?.records || []).map((row) => [String(row?.symbol || "").toUpperCase(), row])
+    );
+
+    return signalRows
+      .map((row) =>
+        selectWatchlistSignal(
+          row,
+          watchRowsBySymbol.get(String(row?.symbol || "").toUpperCase()) || {}
+        )
+      )
       .sort((a, b) => {
         const priority = signalPriority(a.type) - signalPriority(b.type);
         if (priority !== 0) return priority;
@@ -268,7 +280,7 @@ function MarketTicker({ signalRows = [], view, getPageHref }) {
         return String(a.symbol).localeCompare(String(b.symbol));
       })
       .slice(0, 10);
-  }, [signalRows]);
+  }, [signalRows, watchlist]);
 
   return (
     <div className="market-tape mt-1.5 rounded-lg border border-white/10 bg-slate-900/70 p-1.5">
@@ -301,7 +313,7 @@ function MarketTicker({ signalRows = [], view, getPageHref }) {
                     </div>
                     <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px]">
                       <span className="text-slate-400">{formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}</span>
-                      <span className="text-cyan-200">{formatPercent(row.confidence, 0, "-")}</span>
+                      <span className="text-cyan-200">{formatPercent(row.confidence, 1, "-")}</span>
                     </div>
                   </Link>
                 ))}

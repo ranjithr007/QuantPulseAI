@@ -457,6 +457,7 @@ function DashboardLayout({
         modes={MODES}
         timeframes={TIMEFRAMES}
         signalRows={signalRows}
+        watchlist={watchlist}
         setView={setView}
         setTick={setTick}
         username={username}

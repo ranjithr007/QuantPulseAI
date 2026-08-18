@@ -271,7 +271,7 @@ export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperT
   };
 }
 
-function selectWatchlistSignal(row, watchRow) {
+export function selectWatchlistSignal(row, watchRow) {
   const status = String(watchRow?.status || "").toUpperCase();
   const side = normalizeTradeSide(watchRow?.side);
   if (status !== "READY" || !["LONG", "SHORT"].includes(side)) return row;
