@@ -204,6 +204,113 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         self.assertEqual(result["result"], "TIME_EXIT")
         self.assertEqual(result["fill_profile"]["trigger_type"], "TIME_EXIT")
 
+    def test_forced_deadline_catchup_closes_instead_of_partial_target1(self):
+        trade = self._staged_trade()
+        candle = SimpleNamespace(
+            high_price=98.4,
+            low_price=98.4,
+            close_price=98.4,
+            candle_time=trade.opened_at + timedelta(hours=49),
+            close_time=trade.opened_at + timedelta(hours=49),
+            force_time_exit=True,
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["result"], "TIME_EXIT")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TIME_EXIT")
+
+    def test_monitor_closes_overdue_trade_from_latest_final_db_candle(self):
+        base = datetime(2026, 8, 10, 0, 0)
+        trade = self._staged_trade(
+            entry_timeframe="1h",
+            exit_monitor_timeframe="5m",
+            last_exit_evaluated_at=base + timedelta(hours=49),
+        )
+        latest = SimpleNamespace(
+            high_price=100.2,
+            low_price=99.0,
+            close_price=99.4,
+            candle_time=base + timedelta(hours=49),
+            open_time=base + timedelta(hours=49),
+            close_time=base + timedelta(hours=49, minutes=5),
+        )
+        fake_db = SimpleNamespace(close=Mock())
+        closed = []
+
+        class FakeRepo:
+            def get_open_trades(self, db):
+                return [trade]
+
+            def ensure_staged_exit_policy(self, db, item):
+                return False
+
+            def close_trade(self, db, item, exit_price, result, **kwargs):
+                closed.append((exit_price, result, kwargs["fill_profile"]))
+                return SimpleNamespace(id=item.id, result="LOSS", pnl_percent=-0.75)
+
+        with patch(
+            "app.jobs.paper_trade_monitor_job.SessionLocal",
+            return_value=fake_db,
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
+            return_value=FakeRepo(),
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_final_candles_after",
+            return_value=[],
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_latest_candle",
+            return_value=latest,
+        ):
+            summary = run_paper_trade_monitor_job()
+
+        self.assertEqual(summary["status"], "OK")
+        self.assertEqual(summary["deadline_catchups"], 1)
+        self.assertEqual(summary["closed"], 1)
+        self.assertEqual(closed[0][1], "TIME_EXIT")
+        self.assertEqual(closed[0][2]["trigger_type"], "TIME_EXIT")
+
+    def test_monitor_fails_visibly_when_overdue_exit_price_is_unavailable(self):
+        trade = self._staged_trade(
+            opened_at=datetime.utcnow() - timedelta(hours=49),
+            entry_timeframe="1h",
+            exit_monitor_timeframe="5m",
+            last_exit_evaluated_at=datetime.utcnow(),
+        )
+        fake_db = SimpleNamespace(close=Mock())
+
+        class FakeRepo:
+            def get_open_trades(self, db):
+                return [trade]
+
+            def ensure_staged_exit_policy(self, db, item):
+                return False
+
+        collector = Mock()
+        collector.get_current_mark_price.return_value = None
+        with patch(
+            "app.jobs.paper_trade_monitor_job.SessionLocal",
+            return_value=fake_db,
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
+            return_value=FakeRepo(),
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_final_candles_after",
+            return_value=[],
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_latest_candle",
+            return_value=None,
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.MarkPriceCollector",
+            return_value=collector,
+        ):
+            summary = run_paper_trade_monitor_job()
+
+        self.assertEqual(summary["status"], "FAILED")
+        self.assertEqual(summary["overdue_unresolved"], 1)
+        self.assertTrue(summary["errors"])
+
     def test_monitor_replays_missed_five_minute_candles_in_order(self):
         base = datetime(2026, 8, 10, 0, 0)
         trade = self._staged_trade(

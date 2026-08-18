@@ -80,6 +80,7 @@ def test_run_paper_trade_monitor_job_continues_after_trade_error():
 
     assert summary["processed"] == 2
     assert summary["closed"] == 1
+    assert summary["status"] == "FAILED"
     assert fake_db.close.called
 
 

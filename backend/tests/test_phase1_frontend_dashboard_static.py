@@ -53,6 +53,9 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("xl:grid-cols", dashboard)
         self.assertIn("overflow-x-auto", signal_table)
         self.assertIn("<table", signal_table)
+        self.assertIn("Spot confirm", signal_table)
+        self.assertIn("selectWatchlistSignal", signal_table)
+        self.assertIn("watchRow.entry_timeframe", signal_table)
 
     def test_pnl_page_shows_the_account_wide_trade_ledger_without_row_caps(self):
         dashboard_api = (FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js").read_text(

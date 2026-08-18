@@ -210,6 +210,46 @@ def test_selected_timeframe_confidence_drives_watchlist_and_risk():
     assert row["entry_score"] == -49
     assert row["confidence"] == 49
 
+    aligned = _watchlist_row(
+        payload,
+        market_participation={
+            "status": "READY",
+            "quality_state": "OK",
+            "direction": "BEARISH",
+            "score": -53,
+            "confidence": 53,
+            "effective_timestamp": datetime.now(timezone.utc),
+        },
+    )
+    assert aligned["eligibility_allowed"] is True
+    assert aligned["combined_execution"] == {
+        "allowed": True,
+        "status": "ELIGIBLE",
+        "reason": aligned["eligibility_reason"],
+        "selected_timeframe": "4h",
+        "side": "SHORT",
+        "score": -49,
+        "confidence": 49,
+        "market_participation_status": "ALIGNED",
+    }
+    assert aligned["market_participation"]["score"] == -53
+
+    conflicting = _watchlist_row(
+        payload,
+        market_participation={
+            "status": "READY",
+            "quality_state": "OK",
+            "direction": "BULLISH",
+            "score": 53,
+            "confidence": 53,
+            "effective_timestamp": datetime.now(timezone.utc),
+        },
+    )
+    assert conflicting["eligibility_allowed"] is False
+    assert conflicting["eligibility_label"] == "Blocked by participation"
+    assert conflicting["eligibility_status"] == "BLOCKED_PARTICIPATION"
+    assert "SHORT requires BEARISH" in conflicting["eligibility_reason"]
+
 
 def test_legacy_fusion_repository_uses_governed_40_percent_floor():
     engine = create_engine("sqlite:///:memory:")

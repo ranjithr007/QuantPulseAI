@@ -47,6 +47,20 @@ def run_opportunity_coverage_recovery_job(*, context=None, now=None):
             expected_symbols,
             SCHEDULER_GRACE_MINUTES,
         )
+        if coverage_before.get("status") == "NOT_STARTED" and expected_symbols:
+            bootstrap_missing = _bootstrap_missing(expected_symbols, observed_at)
+            coverage_before = {
+                **coverage_before,
+                "status": "GAPS_DETECTED",
+                "expected_evaluations": sum(
+                    len(item["symbols"]) for item in bootstrap_missing
+                ),
+                "missing_evaluations": sum(
+                    len(item["symbols"]) for item in bootstrap_missing
+                ),
+                "missing": bootstrap_missing,
+                "bootstrap_recovery": True,
+            }
         if coverage_before.get("status") != "GAPS_DETECTED":
             return {
                 "status": "OK",
@@ -177,6 +191,24 @@ def _bounded_missing(missing):
         )
         remaining -= len(symbols)
     return bounded
+
+
+def _bootstrap_missing(expected_symbols, observed_at):
+    """Build the complete rolling window when the ledger has no seed record."""
+    grace_cutoff = observed_at - timedelta(minutes=SCHEDULER_GRACE_MINUTES)
+    latest_slot = (
+        grace_cutoff.replace(minute=0, second=0, microsecond=0)
+        - timedelta(hours=1)
+    )
+    first_slot = latest_slot - timedelta(hours=RECOVERY_WINDOW_HOURS - 1)
+    return [
+        {
+            "effective_timestamp": first_slot + timedelta(hours=offset),
+            "symbols": list(expected_symbols),
+            "missing_count": len(expected_symbols),
+        }
+        for offset in range(RECOVERY_WINDOW_HOURS)
+    ]
 
 
 def _gap_signature(missing):

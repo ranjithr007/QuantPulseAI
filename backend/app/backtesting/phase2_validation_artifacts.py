@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 
@@ -173,7 +174,8 @@ def _outputs_root():
         candidate = ancestor / "outputs"
         if candidate.exists():
             return candidate
-    return current.parents[4] / "outputs"
+    configured = str(os.getenv("QUANTPULSE_OUTPUTS_DIR") or "").strip()
+    return Path(configured).expanduser() if configured else Path.cwd() / "outputs"
 
 
 def _artifact_dir():

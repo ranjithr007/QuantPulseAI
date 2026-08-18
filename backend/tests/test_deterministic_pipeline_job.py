@@ -71,6 +71,34 @@ def test_exit_monitor_runs_after_market_failure_but_new_entries_stay_blocked():
     assert result["results"]["feature"]["status"] == "BLOCKED"
 
 
+def test_opportunity_recovery_runs_after_upstream_failure():
+    calls = []
+
+    def failed_watchlist():
+        calls.append("watchlist_persist")
+        return {"status": "FAILED", "error": "persistence unavailable"}
+
+    def recovery():
+        calls.append("opportunity_coverage_recovery")
+        return {"status": "OK", "persisted_count": 6}
+
+    def risk():
+        calls.append("risk")
+        return {"status": "OK"}
+
+    stages = [
+        ("watchlist_persist", failed_watchlist),
+        ("opportunity_coverage_recovery", recovery),
+        ("risk", risk),
+    ]
+    with patch("app.jobs.deterministic_pipeline_job.STAGE_ORDER", stages):
+        result = run_deterministic_pipeline_job()
+
+    assert result["status"] == "FAILED"
+    assert calls == ["watchlist_persist", "opportunity_coverage_recovery"]
+    assert result["results"]["risk"]["status"] == "BLOCKED"
+
+
 def test_execution_gate_requires_all_upstream_stages_without_errors():
     required = {
         name: {"status": "COMPLETED"}

@@ -44,6 +44,7 @@ from app.repositories.point_in_time_snapshot_repository import list_decision_sna
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
+from app.trading.market_participation_guard import market_participation_blockers
 from app.utils.freshness import freshness_status
 from app.utils.freshness import normalize_timestamp_to_utc
 
@@ -57,8 +58,6 @@ PHASE2_CHECKPOINT_EVENT_SOURCE = "phase2_daily_checkpoint"
 PHASE2_CHECKPOINT_EVENT_CATEGORY = "PHASE2_DAILY_EVIDENCE"
 PAPER_RISK_MARK_TIMEFRAME = "5m"
 PAPER_RISK_MARK_MAX_AGE_SECONDS = 15 * 60
-MARKET_PARTICIPATION_MAX_AGE_SECONDS = 75 * 60
-MARKET_PARTICIPATION_EXECUTION_THRESHOLD = 40.0
 _MARKET_PARTICIPATION_UNSET = object()
 
 
@@ -1891,27 +1890,7 @@ def _paper_trade_candidate(
 
 
 def _market_participation_blockers(payload, side):
-    if not payload:
-        return ["Market participation trend is unavailable"]
-
-    freshness = freshness_status(
-        payload.get("effective_timestamp"),
-        MARKET_PARTICIPATION_MAX_AGE_SECONDS,
-    )
-    if freshness.get("is_stale"):
-        return ["Market participation trend is stale"]
-    if payload.get("status") != "READY" or payload.get("quality_state") != "OK":
-        return ["Market participation spot evidence is incomplete"]
-
-    expected = "BULLISH" if str(side).upper() == "LONG" else "BEARISH"
-    direction = str(payload.get("direction") or "NEUTRAL").upper()
-    if direction != expected:
-        return [
-            f"Market participation trend is {direction}; {str(side).upper()} requires {expected}"
-        ]
-    if float(payload.get("confidence") or 0) < MARKET_PARTICIPATION_EXECUTION_THRESHOLD:
-        return ["Market participation confidence is below 40%"]
-    return []
+    return market_participation_blockers(payload, side)
 
 
 def _trade_plan_payload(trade):

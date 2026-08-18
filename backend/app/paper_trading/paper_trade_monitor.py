@@ -54,6 +54,12 @@ def _evaluate_staged_exit(trade, candle, high, low):
     target1_complete = getattr(trade, "target1_hit_at", None) is not None
     target_price = trade.target2 if target1_complete else trade.target1
 
+    if getattr(candle, "force_time_exit", False) and _maximum_hold_reached(
+        trade,
+        candle,
+    ):
+        return _time_exit_decision(trade, candle)
+
     if trade.side == "LONG":
         stop_hit = low <= trade.stop_loss
         target_hit = high >= target_price
@@ -101,15 +107,7 @@ def _evaluate_staged_exit(trade, candle, high, low):
         )
 
     if _maximum_hold_reached(trade, candle):
-        close_price = float(getattr(candle, "close_price", trade.entry_price))
-        exit_fill = simulate_exit_fill(trade, close_price, trigger_type="TIME_EXIT")
-        return _exit_decision(
-            trade,
-            candle,
-            "TIME_EXIT",
-            exit_fill["exit_fill_price"],
-            exit_fill,
-        )
+        return _time_exit_decision(trade, candle)
 
     return {
         "paper_trade_id": trade.id,
@@ -141,6 +139,18 @@ def _maximum_hold_reached(trade, candle):
     elif getattr(opened_at, "tzinfo", None) and getattr(candle_time, "tzinfo", None) is None:
         opened_at = opened_at.replace(tzinfo=None)
     return candle_time >= opened_at + timedelta(hours=float(max_hold_hours))
+
+
+def _time_exit_decision(trade, candle):
+    close_price = float(getattr(candle, "close_price", trade.entry_price))
+    exit_fill = simulate_exit_fill(trade, close_price, trigger_type="TIME_EXIT")
+    return _exit_decision(
+        trade,
+        candle,
+        "TIME_EXIT",
+        exit_fill["exit_fill_price"],
+        exit_fill,
+    )
 
 
 def _exit_decision(trade, candle, result, exit_price, fill_profile=None):

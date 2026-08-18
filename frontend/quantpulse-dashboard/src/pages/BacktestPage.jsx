@@ -154,7 +154,13 @@ export default function BacktestPage({
     const controller = new AbortController();
 
     async function loadEngineSummary() {
-      if (!view?.symbol || !signalSide) {
+      const validationMatchesScope =
+        phase2ReportSummary?.symbol === view?.symbol &&
+        phase2ReportSummary?.signal === signalSide &&
+        phase2ReportSummary?.timeframe === (view?.timeframe || "1h") &&
+        phase2ReportSummary?.result;
+
+      if (!view?.symbol || !signalSide || !phase2Enabled || !validationMatchesScope) {
         setEngineSummary(null);
         setEngineError("");
         setEngineLoading(false);
@@ -180,7 +186,7 @@ export default function BacktestPage({
       } catch (error) {
         if (!cancelled) {
           setEngineSummary(null);
-          setEngineError(error instanceof Error ? error.message : "Unable to load backtest summary");
+          setEngineError(describeReplayError(error));
         }
       } finally {
         if (!cancelled) {
@@ -195,7 +201,7 @@ export default function BacktestPage({
       cancelled = true;
       controller.abort();
     };
-  }, [view?.symbol, view?.timeframe, signalSide]);
+  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled, phase2ReportSummary]);
 
   useEffect(() => {
     let cancelled = false;
@@ -301,8 +307,8 @@ export default function BacktestPage({
   }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled]);
 
   async function handleExportPhase2Report() {
-    if (!view?.symbol || !signalSide) {
-      setPhase2ExportError("Choose a BUY or SELL signal before exporting the Phase 2 report.");
+    if (!view?.symbol || !signalSide || !phase2ReportSummary?.result) {
+      setPhase2ExportError("Load and complete Phase 2 validation before exporting the report.");
       setPhase2ExportResult(null);
       return;
     }
@@ -316,6 +322,7 @@ export default function BacktestPage({
         symbol: view.symbol,
         signalSide,
         timeframe: view.timeframe || "1h",
+        validation: phase2ReportSummary,
         signal: controller.signal,
       });
       setPhase2ExportResult(response?.artifact || null);
@@ -377,9 +384,11 @@ export default function BacktestPage({
             <div>
               <div className="text-sm font-medium text-white">Filtered strategy replay</div>
               <div className="text-xs text-slate-500">
-                {signalSide
-                  ? `${view.symbol} ${signalSide} candle-regime filter on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`
-                  : "Choose a BUY or SELL signal on the dashboard to run the engine summary."}
+                {!signalSide
+                  ? "Choose a BUY or SELL signal on the dashboard to run the engine summary."
+                  : !phase2Enabled
+                    ? "Loaded after manual Phase 2 validation so heavy replay jobs do not compete."
+                    : `${view.symbol} ${signalSide} candle-regime filter on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -802,7 +811,7 @@ export default function BacktestPage({
               <button
                 type="button"
                 onClick={handleExportPhase2Report}
-                disabled={phase2ExportLoading || !signalSide || !phase2Enabled}
+                disabled={phase2ExportLoading || phase2ReportLoading || !signalSide || !phase2ReportSummary?.result}
                 className="inline-flex items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {phase2ExportLoading ? "Exporting..." : "Export report"}
@@ -2155,6 +2164,14 @@ function humanizeStatusChange(value) {
     .replace(/_TO_/g, " → ")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function describeReplayError(error) {
+  const message = error instanceof Error ? error.message : "";
+  if (error?.name === "AbortError" || /abort(ed)?/i.test(message)) {
+    return "Filtered replay exceeded the browser time limit. The completed asynchronous Phase 2 result remains available.";
+  }
+  return message || "Unable to load filtered strategy replay";
 }
 
 function normalizeFamilyEntries(items) {

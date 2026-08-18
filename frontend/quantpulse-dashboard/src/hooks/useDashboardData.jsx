@@ -232,8 +232,10 @@ function normalizeTradeSide(value) {
   return side || null;
 }
 
-function executorRowState(row, candidates = []) {
-  const side = normalizeTradeSide(row?.type);
+function executorRowState(row, watchRow, candidates = []) {
+  const side = normalizeTradeSide(
+    watchRow?.combined_execution?.side || watchRow?.side || row?.type
+  );
   const candidate = candidates.find(
     (item) =>
       String(item?.symbol || "").toUpperCase() === String(row?.symbol || "").toUpperCase() &&
@@ -681,19 +683,20 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
         watchRow,
         minConfidence: auto.minConfidence,
       });
-      return { row, risk };
+      const combinedAllowed = watchRow?.combined_execution?.allowed === true;
+      return { row, watchRow, risk, combinedAllowed };
     });
-    const eligibleRows = rowStates.filter(({ risk }) => risk.label === "Eligible" || risk.label === "Ready to execute");
-    const buyCount = rows.filter((row) => row.type === "BUY").length;
-    const sellCount = rows.filter((row) => row.type === "SELL").length;
-    const waitCount = rows.filter((row) => row.type === "WAIT").length;
+    const eligibleRows = rowStates.filter(({ combinedAllowed }) => combinedAllowed);
+    const buyCount = rowStates.filter(({ row, watchRow }) => normalizeTradeSide(watchRow?.status === "READY" ? watchRow?.side : row.type) === "LONG").length;
+    const sellCount = rowStates.filter(({ row, watchRow }) => normalizeTradeSide(watchRow?.status === "READY" ? watchRow?.side : row.type) === "SHORT").length;
+    const waitCount = rows.length - buyCount - sellCount;
     const readyCount = eligibleRows.length;
     const persistedReadyCount = eligibleRows.filter(({ risk }) => String(risk.note || "").startsWith("Persisted risk:")).length;
     const computedReadyCount = eligibleRows.filter(({ risk }) => String(risk.note || "").startsWith("Computed risk:")).length;
     const fallbackReadyCount = eligibleRows.filter(({ risk }) => String(risk.note || "").startsWith("Trigger fallback:")).length;
-    const executorReadyCount = rows.filter((row) => executorRowState(row, selectedPaperTradeCandidates) === "executor_ready").length;
-    const executorBlockedCount = rows.filter((row) => executorRowState(row, selectedPaperTradeCandidates) === "executor_blocked").length;
-    const noQueuedPlanCount = rows.filter((row) => executorRowState(row, selectedPaperTradeCandidates) === "no_queued_plan").length;
+    const executorReadyCount = rowStates.filter(({ row, watchRow }) => executorRowState(row, watchRow, selectedPaperTradeCandidates) === "executor_ready").length;
+    const executorBlockedCount = rowStates.filter(({ row, watchRow }) => executorRowState(row, watchRow, selectedPaperTradeCandidates) === "executor_blocked").length;
+    const noQueuedPlanCount = eligibleRows.filter(({ row, watchRow }) => executorRowState(row, watchRow, selectedPaperTradeCandidates) === "no_queued_plan").length;
     const openCount = openTrades.length;
     const priceChange = selectedDetail.priceChangePct ?? 0;
     const avgConfidence = rows.length

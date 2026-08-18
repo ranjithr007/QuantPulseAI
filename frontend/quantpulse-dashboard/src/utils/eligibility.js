@@ -61,11 +61,14 @@ export function deriveSelectedEligibilityState({ auto, autoDecision, selectedDet
 export function deriveRowEligibilityState({ row, watchRow, minConfidence = 40 }) {
   if (watchRow?.eligibility_label) {
     const riskSource = String(watchRow?.risk_source || "").toLowerCase();
-    const sourceLabel = riskSource === "persisted"
-      ? "Persisted risk"
-      : riskSource === "computed"
-        ? "Computed risk"
-        : "Trigger fallback";
+    const eligibilityStatus = String(watchRow?.eligibility_status || "").toUpperCase();
+    const sourceLabel = eligibilityStatus === "BLOCKED_PARTICIPATION"
+      ? "Spot confirmation"
+      : riskSource === "persisted"
+        ? "Persisted risk"
+        : riskSource === "computed"
+          ? "Computed risk"
+          : "Trigger fallback";
 
     return {
       label: String(watchRow.eligibility_label),

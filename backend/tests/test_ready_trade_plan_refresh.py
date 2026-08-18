@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.api.v1.signals_api import _persist_ready_watchlist_payload
@@ -110,4 +111,27 @@ def test_persist_ready_payload_keeps_existing_matching_open_trade_plan():
 
     assert result["action"] == "skipped_existing_open"
     assert repo.invalidated == []
+    assert repo.saved == []
+
+
+def test_persist_ready_payload_uses_same_market_participation_guard_as_executor():
+    repo = FakeTradeRepo()
+
+    result = _persist_ready_watchlist_payload(
+        db=None,
+        trade_repo=repo,
+        payload=_ready_payload(),
+        market_participation={
+            "status": "READY",
+            "quality_state": "OK",
+            "direction": "BEARISH",
+            "score": -64,
+            "confidence": 64,
+            "effective_timestamp": datetime.now(timezone.utc),
+        },
+    )
+
+    assert result["action"] == "skipped_market_participation"
+    assert result["market_participation"]["status"] == "DIRECTION_CONFLICT"
+    assert "LONG requires BULLISH" in result["message"]
     assert repo.saved == []
