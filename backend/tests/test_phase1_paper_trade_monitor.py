@@ -383,6 +383,90 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         self.assertEqual(summary["entry_timeframe_fallbacks"], 0)
         self.assertEqual(summary["records"][-1]["monitor_timeframe"], "5m")
 
+    def test_live_mark_above_target2_closes_long_position_immediately(self):
+        base = datetime.utcnow()
+        trade = self._staged_trade(
+            side="LONG",
+            entry_price=100.0,
+            stop_loss=99.25,
+            target1=101.5,
+            target2=102.3,
+            opened_at=base,
+            entry_timeframe="1h",
+            exit_monitor_timeframe="5m",
+            last_exit_evaluated_at=base,
+        )
+        fake_db = SimpleNamespace(close=Mock())
+        closes = []
+
+        class FakeRepo:
+            def get_open_trades(self, db):
+                return [trade]
+
+            def ensure_staged_exit_policy(self, db, item):
+                return False
+
+            def apply_target1(self, db, item, exit_price, **kwargs):
+                item.target1_hit_at = kwargs["candle_time"]
+                item.target1_exit_price = exit_price
+                item.remaining_position_fraction = 0.5
+                item.stop_loss = item.entry_price
+                return item
+
+            def close_trade(self, db, item, exit_price, result, **kwargs):
+                closes.append((exit_price, result, kwargs["fill_profile"]))
+                return SimpleNamespace(id=item.id, result="WIN", pnl_percent=2.0)
+
+        collector = Mock()
+        collector.get_current_mark_price.return_value = {
+            "mark_price": 102.5,
+            "observed_at": base + timedelta(minutes=1),
+            "source": "BINANCE_FUTURES_MARK_PRICE",
+        }
+        with patch(
+            "app.jobs.paper_trade_monitor_job.SessionLocal",
+            return_value=fake_db,
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
+            return_value=FakeRepo(),
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_final_candles_after",
+            return_value=[],
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_latest_candle",
+            return_value=SimpleNamespace(),
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.MarkPriceCollector",
+            return_value=collector,
+        ):
+            summary = run_paper_trade_monitor_job()
+
+        self.assertEqual(summary["status"], "OK")
+        self.assertEqual(summary["live_marks_evaluated"], 1)
+        self.assertEqual(summary["partial_closes"], 1)
+        self.assertEqual(summary["closed"], 1)
+        self.assertEqual(summary["wins"], 1)
+        self.assertEqual(closes[0][2]["trigger_type"], "TARGET2")
+
+    def test_live_mark_below_target2_closes_short_remainder(self):
+        trade = self._staged_trade(
+            stop_loss=100.0,
+            target1_hit_at=datetime(2026, 8, 10, 4, 0),
+        )
+        candle = SimpleNamespace(
+            high_price=97.5,
+            low_price=97.5,
+            close_price=97.5,
+            candle_time=datetime(2026, 8, 10, 5, 0),
+            live_mark=True,
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["result"], "WIN")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET2")
+
     def test_existing_btc_trade_without_policy_keeps_legacy_target1_close(self):
         trade = SimpleNamespace(
             id=35,

@@ -32,6 +32,7 @@ def run_paper_trade_monitor_job():
             "still_open": 0,
             "skipped": 0,
             "candles_evaluated": 0,
+            "live_marks_evaluated": 0,
             "entry_timeframe_fallbacks": 0,
             "deadline_catchups": 0,
             "overdue_unresolved": 0,
@@ -66,6 +67,13 @@ def run_paper_trade_monitor_job():
                         summary["errors"].append(
                             f"{trade.symbol}: {catchup_error or 'OVERDUE_EXIT_PRICE_UNAVAILABLE'}"
                         )
+
+                if not candles:
+                    live_mark_candle = _current_mark_candle(trade)
+                    if live_mark_candle is not None:
+                        candles = [live_mark_candle]
+                        source_available = True
+                        summary["live_marks_evaluated"] += 1
 
                 if not source_available:
                     summary["skipped"] += 1
@@ -121,6 +129,32 @@ def run_paper_trade_monitor_job():
                                 "target1_hit_at": updated_trade.target1_hit_at,
                             }
                         )
+                        if getattr(candle, "live_mark", False):
+                            target2_decision = {
+                                **evaluate_paper_trade_exit(updated_trade, candle),
+                                "monitor_timeframe": timeframe,
+                            }
+                            if target2_decision["action"] == "CLOSE":
+                                closed_trade = repo.close_trade(
+                                    db,
+                                    updated_trade,
+                                    target2_decision["exit_price"],
+                                    target2_decision["result"],
+                                    fill_profile=target2_decision.get("fill_profile"),
+                                )
+                                summary["closed"] += 1
+                                summary["wins"] += int(closed_trade.result == "WIN")
+                                summary["losses"] += int(closed_trade.result != "WIN")
+                                summary["records"].append(
+                                    {
+                                        **target2_decision,
+                                        "paper_trade_id": closed_trade.id,
+                                        "result": closed_trade.result,
+                                        "pnl_percent": closed_trade.pnl_percent,
+                                    }
+                                )
+                                trade_closed = True
+                                break
                         continue
 
                     closed_trade = repo.close_trade(
@@ -223,6 +257,11 @@ def _exit_candles(db, trade):
 
 
 def _candle_checkpoint(candle):
+    if getattr(candle, "live_mark", False):
+        # A point-in-time mark cannot prove the completed candle's high/low.
+        # Keep the durable checkpoint unchanged so the final candle is still
+        # replayed later and no intrabar stop/target evidence is skipped.
+        return None
     value = normalize_timestamp_to_utc(
         getattr(candle, "open_time", None)
         or getattr(candle, "candle_time", None)
@@ -230,6 +269,28 @@ def _candle_checkpoint(candle):
     if value is None:
         return None
     return value.replace(tzinfo=None)
+
+
+def _current_mark_candle(trade, *, collector=None, now=None):
+    mark = (collector or MarkPriceCollector()).get_current_mark_price(trade.symbol)
+    if not mark or mark.get("mark_price") is None:
+        return None
+    observed_at = normalize_timestamp_to_utc(mark.get("observed_at") or now)
+    if observed_at is None:
+        observed_at = datetime.now(timezone.utc)
+    price = float(mark["mark_price"])
+    timestamp = observed_at.replace(tzinfo=None)
+    return SimpleNamespace(
+        high_price=price,
+        low_price=price,
+        close_price=price,
+        candle_time=timestamp,
+        open_time=timestamp,
+        close_time=timestamp,
+        is_final=False,
+        live_mark=True,
+        mark_source=mark.get("source") or "CURRENT_MARK_PRICE",
+    )
 
 
 def _maximum_hold_due(trade, now=None):
