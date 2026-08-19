@@ -58,6 +58,7 @@ class PaperTrade(Base):
     gross_pnl_percent = Column(Float, nullable=True)
     status = Column(String(20), default="OPEN", index=True)
     exit_price = Column(Float, nullable=True)
+    exit_reason = Column(String(30), nullable=True, index=True)
     result = Column(String(20), nullable=True)
     pnl_percent = Column(Float, nullable=True)
     opened_at = Column(DateTime, default=datetime.utcnow)

@@ -20,6 +20,7 @@ from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
 from app.repositories.market_participation_repository import MarketParticipationRepository
+from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.trading.trade_plan_engine import build_trade_plan
 
 
@@ -103,6 +104,37 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 },
             },
         )
+
+    def test_stop_close_persists_exact_exit_reason(self):
+        with self.Session() as db:
+            trade = PaperTrade(
+                symbol="ETHUSDT",
+                side="LONG",
+                entry_price=100.0,
+                stop_loss=99.25,
+                target1=101.5,
+                target2=102.3,
+                confidence=50.0,
+                status="OPEN",
+                opened_at=datetime.utcnow() - timedelta(hours=1),
+            )
+            db.add(trade)
+            db.commit()
+
+            closed = PaperTradeRepository().close_trade(
+                db,
+                trade,
+                99.25,
+                "LOSS",
+                fill_profile={
+                    "trigger_type": "STOP",
+                    "exit_slippage_pct": 0.0,
+                },
+            )
+
+            self.assertEqual("STOP", closed.exit_reason)
+            self.assertEqual("CLOSED", closed.status)
+            self.assertIsNotNone(closed.closed_at)
 
     def test_candidate_to_fill_to_close_to_pnl(self):
         now = datetime.utcnow().replace(microsecond=0)
@@ -242,6 +274,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
 
         with self.Session() as db:
             trade = db.query(PaperTrade).filter(PaperTrade.status == "CLOSED").one()
+            self.assertEqual("TARGET2", trade.exit_reason)
             ledger = (
                 db.query(PaperWalletLedgerEntry)
                 .order_by(PaperWalletLedgerEntry.id.asc())

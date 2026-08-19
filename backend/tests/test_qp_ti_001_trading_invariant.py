@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -525,6 +525,179 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
         and item["action"] == "skipped_existing_open_paper_trade"
         for item in result["skipped"]
     )
+
+
+def test_executor_blocks_only_same_side_during_post_stop_cooldown(monkeypatch):
+    candidate = _candidate(12, "1h", 64, side="LONG")
+    stopped_trade = SimpleNamespace(
+        id=91,
+        symbol="BTCUSDT",
+        side="LONG",
+        status="CLOSED",
+        exit_reason="STOP",
+        closed_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+
+    class DummyDb:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeRepo:
+        def acquire_account_execution_lock(self, db):
+            pass
+
+        def all_trades(self, db):
+            return [stopped_trade]
+
+        def has_open_trade(self, db, symbol, side=None):
+            return False
+
+        def save_candidate(self, db, item):
+            raise AssertionError("Same-side cooldown must prevent persistence")
+
+    monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "build_paper_trade_candidates",
+        lambda *args, **kwargs: (None, [candidate]),
+    )
+    monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
+    monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
+    monkeypatch.setattr(
+        paper_trade_api,
+        "automation_settings_payload",
+        lambda row: _enabled_automation_settings(),
+    )
+
+    result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
+
+    assert result["executed_count"] == 0
+    assert result["skipped"][0]["action"] == "skipped_same_side_stop_cooldown"
+    assert result["skipped"][0]["stop_reentry_cooldown"]["blocked_side"] == "LONG"
+
+
+def test_candidate_exposes_post_stop_cooldown_as_coin_level_blocker():
+    trade = SimpleNamespace(
+        id=12,
+        symbol="BTCUSDT",
+        side="LONG",
+        status="OPEN",
+        entry_price=100.0,
+        stop_loss=99.25,
+        target1=101.5,
+        target2=102.3,
+        target3=None,
+        risk_reward=2.0,
+        confidence=64.0,
+        created_at=datetime.now(timezone.utc),
+    )
+    cooldown = {
+        "active": True,
+        "symbol": "BTCUSDT",
+        "blocked_side": "LONG",
+        "cooldown_minutes": 30,
+        "remaining_seconds": 1200,
+    }
+
+    candidate = paper_trade_api._paper_trade_candidate(
+        trade,
+        None,
+        900,
+        account_risk={"risk_available": True, "limit_reached": False},
+        paper_wallet={
+            "open_position_count": 0,
+            "remaining_margin_capacity_inr": 85_000,
+        },
+        stop_reentry_cooldown=cooldown,
+    )
+
+    assert candidate["eligible"] is False
+    assert candidate["stop_reentry_cooldown"] == cooldown
+    assert (
+        paper_trade_api.PAPER_STOP_REENTRY_COOLDOWN_REASON
+        in candidate["blocker_scopes"]["coin"]
+    )
+
+
+def test_executor_allows_opposite_side_during_post_stop_cooldown(monkeypatch):
+    candidate = _candidate(13, "1h", 64, side="SHORT")
+    stopped_trade = SimpleNamespace(
+        id=92,
+        symbol="BTCUSDT",
+        side="LONG",
+        status="CLOSED",
+        exit_reason="STOP",
+        closed_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+    saved = []
+
+    class DummyDb:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeRepo:
+        def acquire_account_execution_lock(self, db):
+            pass
+
+        def all_trades(self, db):
+            return [stopped_trade]
+
+        def has_open_trade(self, db, symbol, side=None):
+            return False
+
+        def has_trade_for_plan(self, db, trade_plan_id):
+            return False
+
+        def save_candidate(self, db, item):
+            saved.append(item)
+            return SimpleNamespace(id=93)
+
+    monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "build_paper_trade_candidates",
+        lambda *args, **kwargs: (None, [candidate]),
+    )
+    monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_account_risk_snapshot",
+        lambda db, trades: {
+            "risk_available": True,
+            "limit_reached": False,
+            "current_prices": {},
+        },
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_wallet_snapshot",
+        lambda db, trades, account_risk=None: {
+            "open_position_count": 0,
+            "remaining_margin_capacity_inr": 85_000,
+        },
+    )
+    monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
+    monkeypatch.setattr(
+        paper_trade_api,
+        "automation_settings_payload",
+        lambda row: _enabled_automation_settings(),
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_trade_payload",
+        lambda trade, fill_profile=None: {"id": trade.id},
+    )
+
+    result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
+
+    assert result["executed_count"] == 1
+    assert saved[0]["side"] == "SHORT"
 
 
 def test_executor_rechecks_account_capacity_under_lock_for_each_symbol(monkeypatch):
