@@ -11,7 +11,7 @@ from app.database import models as _models  # noqa: F401
 
 
 POSTGRESQL_BASELINE_FINGERPRINT = (
-    "f1448e36ae479b9846b40934e32a9d5f8fdac844415abf414ab105bda3a2811e"
+    "5bbaaa6467db1528872c87b124f712e9cc45b4154659207a33417a5f218a152e"
 )
 POSTGRESQL_POST_BASELINE_TABLES = frozenset({"walk_forward_jobs"})
 

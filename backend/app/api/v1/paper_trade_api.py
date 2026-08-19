@@ -25,6 +25,8 @@ from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
+from app.paper_trading.reentry_policy import PAPER_STOP_REENTRY_COOLDOWN_MINUTES
+from app.paper_trading.reentry_policy import same_side_stop_reentry_cooldown
 from app.paper_trading.validation_policy import build_architecture_paper_gate
 from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
@@ -63,6 +65,10 @@ PAPER_RISK_MARK_MAX_AGE_SECONDS = 15 * 60
 PAPER_ENTRY_MARK_MAX_AGE_SECONDS = 60
 PAPER_ENTRY_MARK_CLOCK_SKEW_SECONDS = 30
 _MARKET_PARTICIPATION_UNSET = object()
+PAPER_STOP_REENTRY_COOLDOWN_REASON = (
+    "Same-direction re-entry is cooling down for "
+    f"{PAPER_STOP_REENTRY_COOLDOWN_MINUTES} minutes after stop-loss"
+)
 
 
 def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
@@ -789,16 +795,21 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 coin_blockers = (
                     candidate.get("blocker_scopes", {}).get("coin") or []
                 )
+                if PAPER_STOP_REENTRY_COOLDOWN_REASON in coin_blockers:
+                    action = "skipped_same_side_stop_cooldown"
+                elif "Active trade already exists for this coin" in coin_blockers:
+                    action = "skipped_existing_open_paper_trade"
+                else:
+                    action = "skipped_not_eligible"
                 skipped.append(
                     {
                         "symbol": candidate["symbol"],
                         "side": candidate["side"],
-                        "action": (
-                            "skipped_existing_open_paper_trade"
-                            if "Active trade already exists for this coin" in coin_blockers
-                            else "skipped_not_eligible"
-                        ),
+                        "action": action,
                         "blocked_reasons": candidate["blocked_reasons"],
+                        "stop_reentry_cooldown": candidate.get(
+                            "stop_reentry_cooldown"
+                        ),
                     }
                 )
                 continue
@@ -865,6 +876,23 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
 
             candidate = winner
             account_trades = repo.all_trades(db)
+            stop_reentry_cooldown = same_side_stop_reentry_cooldown(
+                account_trades,
+                candidate_symbol,
+                candidate["side"],
+            )
+            if stop_reentry_cooldown["active"]:
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_same_side_stop_cooldown",
+                        "blocked_reasons": [PAPER_STOP_REENTRY_COOLDOWN_REASON],
+                        "stop_reentry_cooldown": stop_reentry_cooldown,
+                    }
+                )
+                db.rollback()
+                continue
             locked_account_risk = _account_risk_snapshot(db, account_trades)
             if not locked_account_risk.get("risk_available", False):
                 skipped.append(
@@ -1324,6 +1352,11 @@ def build_paper_trade_candidates(
                 PAPER_MAX_OPEN_TRADES,
             ),
             coin_has_active_trade=str(trade.symbol).upper() in open_symbols,
+            stop_reentry_cooldown=same_side_stop_reentry_cooldown(
+                account_trades,
+                trade.symbol,
+                trade.side,
+            ),
         )
         for trade in trades
     ]
@@ -1913,6 +1946,7 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "gross_pnl_percent": paper_trade.gross_pnl_percent,
         "status": paper_trade.status,
         "exit_price": paper_trade.exit_price,
+        "exit_reason": getattr(paper_trade, "exit_reason", None),
         "result": paper_trade.result,
         "pnl_percent": paper_trade.pnl_percent,
         "partial_realized_pnl_inr": getattr(
@@ -2033,6 +2067,7 @@ def _paper_trade_candidate(
     paper_wallet=None,
     max_open_trades=4,
     coin_has_active_trade=False,
+    stop_reentry_cooldown=None,
 ):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
     paper_sizing = build_inr_paper_sizing(
@@ -2065,11 +2100,11 @@ def _paper_trade_candidate(
                 trade.side,
             )
         )
-    coin_blockers = (
-        ["Active trade already exists for this coin"]
-        if coin_has_active_trade
-        else []
-    )
+    coin_blockers = []
+    if coin_has_active_trade:
+        coin_blockers.append("Active trade already exists for this coin")
+    if (stop_reentry_cooldown or {}).get("active"):
+        coin_blockers.append(PAPER_STOP_REENTRY_COOLDOWN_REASON)
     account_blockers = []
     if not account_risk or not account_risk.get("risk_available", False):
         account_blockers.append("Account-wide risk valuation is unavailable or stale")
@@ -2101,6 +2136,7 @@ def _paper_trade_candidate(
         "blocked_reasons": blocked_reasons,
         "blocker_scopes": blocker_scopes,
         "account_risk": account_risk,
+        "stop_reentry_cooldown": stop_reentry_cooldown,
         "validation_contract_version": PHASE2_VALIDATION_CONTRACT_VERSION,
         "trade_plan": _trade_plan_payload(trade),
         "risk_decision": risk_payload,

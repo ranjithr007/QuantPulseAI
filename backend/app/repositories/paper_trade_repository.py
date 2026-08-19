@@ -60,6 +60,7 @@ class PaperTradeRepository:
             "planned_entry_price": "FLOAT",
             "entry_slippage_percent": "FLOAT",
             "exit_slippage_percent": "FLOAT",
+            "exit_reason": "VARCHAR(30)",
             "funding_rate_snapshot": "FLOAT",
             "funding_event_count": "INTEGER",
             "funding_cost_percent": "FLOAT",
@@ -94,6 +95,12 @@ class PaperTradeRepository:
                 "CREATE UNIQUE INDEX IF NOT EXISTS "
                 "uq_paper_trades_one_open_symbol ON paper_trades(symbol) "
                 "WHERE status = 'OPEN'"
+            )
+        )
+        db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_paper_trades_exit_reason "
+                "ON paper_trades(exit_reason)"
             )
         )
         db.commit()
@@ -417,6 +424,7 @@ class PaperTradeRepository:
         trade.status = "CLOSED"
         trade.exit_price = exit_price
         trade.result = result
+        trade.exit_reason = _paper_exit_reason(result, fill_profile)
         if fill_profile:
             trade.exit_slippage_percent = fill_profile.get("exit_slippage_pct")
 
@@ -605,3 +613,12 @@ def _directional_pnl_percent(side, entry_price, exit_price):
     if str(side or "").upper() == "LONG":
         return (exit_value - entry) / entry * 100
     return (entry - exit_value) / entry * 100
+
+
+def _paper_exit_reason(result, fill_profile):
+    trigger_type = (fill_profile or {}).get("trigger_type")
+    if trigger_type:
+        return str(trigger_type).strip().upper()
+    if str(result or "").strip().upper() == "TIME_EXIT":
+        return "TIME_EXIT"
+    return None
