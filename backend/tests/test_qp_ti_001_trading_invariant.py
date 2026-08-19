@@ -209,6 +209,8 @@ def test_selected_timeframe_confidence_drives_watchlist_and_risk():
     assert row["entry_timeframe"] == "4h"
     assert row["entry_score"] == -49
     assert row["confidence"] == 49
+    assert row["target1"] == governed["target1"]
+    assert row["target2"] == governed["target2"]
 
     aligned = _watchlist_row(
         payload,

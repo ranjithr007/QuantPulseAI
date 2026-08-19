@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.v1.paper_trade_api import build_paper_trade_bundle
 from app.api.v1.paper_trade_api import execute_paper_trade_candidates_for_symbol
 from app.api.v1.paper_trade_api import _official_timeframe_records
+from app.api.v1.paper_trade_api import _paper_trade_payload
 from app.api.v1.paper_trade_api import _phase2_lifecycle_state
 from app.database.models.funding_rates import FundingRate
 from app.database.models.market_candles import MarketCandle
@@ -38,6 +39,28 @@ def _enabled_automation_settings():
         "executionMode": "PAPER",
         "liveExecutionEnabled": False,
     }
+
+
+def test_open_position_payload_supplies_target2_from_official_exit_policy():
+    trade = PaperTrade(
+        id=7,
+        symbol="XRPUSDT",
+        side="LONG",
+        entry_price=1.0,
+        stop_loss=0.9925,
+        target1=1.015,
+        target2=None,
+        confidence=49.0,
+        entry_timeframe="1h",
+        status="OPEN",
+    )
+
+    payload = _paper_trade_payload(trade)
+
+    assert payload["target2"] == 1.023
+    assert payload["exit_policy"] == "PAPER_STAGED_EXIT_V1"
+    assert payload["max_hold_hours"] == 48
+    assert payload["exit_levels_source"] == "POLICY_FALLBACK"
 
 
 class Phase1PaperTradeLifecycleTests(unittest.TestCase):
