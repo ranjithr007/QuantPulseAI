@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -152,6 +152,14 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         ), patch(
             "app.api.v1.paper_trade_api.automation_settings_payload",
             return_value=_enabled_automation_settings(),
+        ), patch(
+            "app.api.v1.paper_trade_api._current_paper_entry_mark",
+            return_value={
+                "symbol": "BTCUSDT",
+                "mark_price": 100.0,
+                "observed_at": datetime.now(timezone.utc),
+                "source": "TEST_MARK",
+            },
         ):
             execution = execute_paper_trade_candidates_for_symbol("BTCUSDT", stale_after_seconds=900)
             duplicate = execute_paper_trade_candidates_for_symbol("BTCUSDT", stale_after_seconds=900)
@@ -266,6 +274,86 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             bundle["closedTrades"]["records"][0]["pnl_percent"],
         )
 
+        # The scanner may produce a new plan while the direction remains LONG.
+        # Its planned price can still be the prior setup price, but execution
+        # must start from the current mark and derive a completely new bracket.
+        decision_time = datetime.utcnow().replace(microsecond=0)
+        with self.Session() as db:
+            new_plan = TradePlan(
+                symbol="BTCUSDT",
+                side="LONG",
+                entry_price=100.0,
+                stop_loss=governed["stop_loss"],
+                target1=governed["target1"],
+                target2=governed["target2"],
+                target3=governed["target3"],
+                risk_reward=governed["risk_reward"],
+                confidence=80.0,
+                mode="intraday",
+                entry_timeframe="1h",
+                timeframe_stack="1h,4h,1d",
+                regime="TRENDING_BULL",
+                status="OPEN",
+                created_at=decision_time - timedelta(seconds=2),
+            )
+            db.add(new_plan)
+            db.flush()
+            db.add(
+                RiskDecision(
+                    symbol="BTCUSDT",
+                    signal="LONG",
+                    decision="APPROVE",
+                    entry_price=100.0,
+                    stop_loss=governed["stop_loss"],
+                    target1=governed["target1"],
+                    target2=governed["target2"],
+                    risk_reward=governed["risk_reward"],
+                    position_size=1.25,
+                    risk_percent=1.0,
+                    confidence=80.0,
+                    created_at=decision_time - timedelta(seconds=1),
+                )
+            )
+            db.commit()
+
+        with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(
+            "app.api.v1.paper_trade_api.get_automation_settings",
+            return_value=object(),
+        ), patch(
+            "app.api.v1.paper_trade_api.automation_settings_payload",
+            return_value=_enabled_automation_settings(),
+        ), patch(
+            "app.api.v1.paper_trade_api._current_paper_entry_mark",
+            return_value={
+                "symbol": "BTCUSDT",
+                "mark_price": 110.0,
+                "observed_at": datetime.now(timezone.utc),
+                "source": "TEST_MARK",
+            },
+        ):
+            reentry = execute_paper_trade_candidates_for_symbol(
+                "BTCUSDT",
+                stale_after_seconds=900,
+            )
+
+        self.assertEqual(1, reentry["executed_count"])
+        with self.Session() as db:
+            new_trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
+            self.assertGreater(new_trade.entry_price, 110.0)
+            self.assertNotEqual(100.0, new_trade.entry_price)
+            self.assertEqual(
+                round(new_trade.entry_price * 0.9925, 2),
+                new_trade.stop_loss,
+            )
+            self.assertEqual(
+                round(new_trade.entry_price * 1.015, 2),
+                new_trade.target1,
+            )
+            self.assertEqual(
+                round(new_trade.entry_price * 1.023, 2),
+                new_trade.target2,
+            )
+
     def test_btc_one_hour_trade_scales_out_then_closes_remainder(self):
         now = datetime.utcnow().replace(microsecond=0)
         governed = build_trade_plan(
@@ -320,6 +408,14 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         ), patch(
             "app.api.v1.paper_trade_api.automation_settings_payload",
             return_value=_enabled_automation_settings(),
+        ), patch(
+            "app.api.v1.paper_trade_api._current_paper_entry_mark",
+            return_value={
+                "symbol": "BTCUSDT",
+                "mark_price": 100.0,
+                "observed_at": datetime.now(timezone.utc),
+                "source": "TEST_MARK",
+            },
         ):
             execution = execute_paper_trade_candidates_for_symbol(
                 "BTCUSDT",

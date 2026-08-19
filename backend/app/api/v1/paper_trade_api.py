@@ -17,6 +17,7 @@ from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
+from app.paper_trading.entry_price_service import get_current_paper_entry_mark
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.paper_trading.inr_sizing import build_inr_paper_wallet
 from app.paper_trading.measurement import MeasurementGates
@@ -59,6 +60,8 @@ PHASE2_CHECKPOINT_EVENT_SOURCE = "phase2_daily_checkpoint"
 PHASE2_CHECKPOINT_EVENT_CATEGORY = "PHASE2_DAILY_EVIDENCE"
 PAPER_RISK_MARK_TIMEFRAME = "5m"
 PAPER_RISK_MARK_MAX_AGE_SECONDS = 15 * 60
+PAPER_ENTRY_MARK_MAX_AGE_SECONDS = 60
+PAPER_ENTRY_MARK_CLOCK_SKEW_SECONDS = 30
 _MARKET_PARTICIPATION_UNSET = object()
 
 
@@ -940,6 +943,23 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 db.rollback()
                 continue
 
+            live_mark = _current_paper_entry_mark(candidate_symbol)
+            candidate, reprice_error = _rebase_paper_trade_candidate(
+                candidate,
+                live_mark,
+            )
+            if reprice_error:
+                skipped.append(
+                    {
+                        "symbol": candidate_symbol,
+                        "side": winner["side"],
+                        "action": "skipped_execution_price_unavailable",
+                        "blocked_reasons": [reprice_error],
+                    }
+                )
+                db.rollback()
+                continue
+
             try:
                 paper_trade = repo.save_candidate(db, candidate)
             except IntegrityError:
@@ -977,6 +997,136 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
 
     finally:
         db.close()
+
+
+def _current_paper_entry_mark(symbol):
+    """Fetch a direct mark used only at the final paper-entry boundary."""
+
+    return get_current_paper_entry_mark(symbol)
+
+
+def _rebase_paper_trade_candidate(candidate, live_mark):
+    """Reprice a new paper position and all exits from one fresh mark.
+
+    The signal plan remains the authorization record.  Execution risk is
+    recalculated independently so a newly opened position can never inherit a
+    completed position's entry, stop, or targets.
+    """
+
+    mark_price = _finite_float((live_mark or {}).get("mark_price"))
+    observed_at = (live_mark or {}).get("observed_at")
+    if mark_price is None or mark_price <= 0 or observed_at is None:
+        return candidate, "Fresh execution mark price is unavailable"
+
+    try:
+        observed_utc = normalize_timestamp_to_utc(observed_at)
+        age_seconds = (datetime.now(timezone.utc) - observed_utc).total_seconds()
+    except (AttributeError, TypeError, ValueError):
+        return candidate, "Execution mark timestamp is invalid"
+
+    if (
+        age_seconds > PAPER_ENTRY_MARK_MAX_AGE_SECONDS
+        or age_seconds < -PAPER_ENTRY_MARK_CLOCK_SKEW_SECONDS
+    ):
+        return candidate, "Execution mark price is stale"
+
+    trade_plan = candidate.get("trade_plan") or {}
+    authorization_risk = candidate.get("risk_decision") or {}
+    side = str(candidate.get("side") or "").upper()
+    symbol = str(candidate.get("symbol") or "").upper()
+    timeframe = trade_plan.get("entry_timeframe")
+    confidence = (
+        authorization_risk.get("confidence")
+        if authorization_risk.get("confidence") is not None
+        else trade_plan.get("confidence") or 0
+    )
+    fee_bps = float(
+        (candidate.get("fill_profile") or {}).get("fee_bps", DEFAULT_FEE_BPS)
+    )
+    precision = _paper_trade_price_precision(mark_price)
+    mark_levels = build_policy_trade_levels(
+        side,
+        mark_price,
+        symbol=symbol,
+        timeframe=timeframe,
+        confidence=confidence,
+        fee_bps=fee_bps,
+        price_precision=precision,
+    )
+    if mark_levels is None:
+        return candidate, "No paper exit policy is available for the selected timeframe"
+
+    fill_profile = build_fill_profile(
+        side=side,
+        planned_entry_price=mark_price,
+        stop_loss=mark_levels["stop_loss"],
+        target1=mark_levels["target2"],
+        confidence=confidence,
+        risk_reward=mark_levels["target2_net_risk_reward"],
+        fee_bps=fee_bps,
+    )
+    entry_fill = _finite_float(fill_profile.get("entry_fill_price"))
+    if entry_fill is None or entry_fill <= 0:
+        return candidate, "Paper entry fill could not be calculated from the live mark"
+
+    execution_levels = build_policy_trade_levels(
+        side,
+        entry_fill,
+        symbol=symbol,
+        timeframe=timeframe,
+        confidence=confidence,
+        fee_bps=fee_bps,
+        price_precision=_paper_trade_price_precision(entry_fill),
+    )
+    if execution_levels is None:
+        return candidate, "Paper exit levels could not be recalculated from the new entry"
+
+    execution_risk = risk_engine.analyze_trade_plan(
+        symbol=symbol,
+        side=side,
+        entry=entry_fill,
+        stop_loss=execution_levels["stop_loss"],
+        target1=execution_levels["target1"],
+        target2=execution_levels["target2"],
+        minimum_reward_target=execution_levels["target2"],
+        confidence=confidence,
+        risk_percent=authorization_risk.get("risk_percent") or 1,
+        fee_bps=fee_bps,
+    )
+    if execution_risk.get("decision") != "APPROVE":
+        return candidate, (
+            "Repriced paper entry failed risk checks: "
+            f"{execution_risk.get('reason') or 'unknown reason'}"
+        )
+
+    signal_entry = _finite_float(trade_plan.get("entry_price"))
+    entry_drift_percent = None
+    if signal_entry is not None and signal_entry > 0:
+        entry_drift_percent = round((mark_price - signal_entry) / signal_entry * 100, 4)
+    fill_profile.update(
+        {
+            "execution_reference": "FRESH_MARK_PRICE",
+            "execution_mark_price": round(mark_price, precision),
+            "execution_mark_observed_at": observed_utc.isoformat(),
+            "execution_mark_source": live_mark.get("source"),
+            "signal_planned_entry_price": signal_entry,
+            "entry_drift_percent": entry_drift_percent,
+            "effective_risk_reward": execution_risk["risk_reward"],
+        }
+    )
+    execution_risk = {
+        **execution_risk,
+        "entry_price": execution_risk["entry"],
+        "target1": execution_risk["targets"]["t1"],
+        "target2": execution_risk["targets"]["t2"],
+        "authorization_risk_decision_id": authorization_risk.get("id"),
+    }
+
+    return {
+        **candidate,
+        "fill_profile": fill_profile,
+        "execution_risk": execution_risk,
+    }, None
 
 
 def _automation_execution_blockers(auto, candidate):

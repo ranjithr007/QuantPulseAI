@@ -230,7 +230,8 @@ class PaperTradeRepository:
     def save_candidate(self, db, candidate):
         self.ensure_table(db)
         trade_plan = candidate["trade_plan"]
-        risk = candidate["risk_decision"]
+        authorization_risk = candidate["risk_decision"]
+        risk = candidate.get("execution_risk") or authorization_risk
         fill_profile = candidate.get("fill_profile") or {}
         market_context = candidate.get("market_context") or {}
         entry_price = fill_profile.get("entry_fill_price", trade_plan["entry_price"])
@@ -272,7 +273,7 @@ class PaperTradeRepository:
         )
         paper_trade = PaperTrade(
             trade_plan_id=trade_plan["id"],
-            risk_decision_id=risk["id"],
+            risk_decision_id=authorization_risk["id"],
             thesis_id=trade_plan.get("thesis_id"),
             symbol=str(candidate["symbol"]).upper(),
             side=candidate["side"],

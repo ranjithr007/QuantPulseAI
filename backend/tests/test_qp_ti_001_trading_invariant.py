@@ -29,6 +29,7 @@ from app.trading.trade_plan_engine import build_trade_plan
 
 
 def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
+    direction = 1 if side == "LONG" else -1
     return {
         "symbol": "BTCUSDT",
         "side": side,
@@ -39,15 +40,41 @@ def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
             "entry_timeframe": timeframe,
             "confidence": confidence,
             "risk_reward": risk_reward,
+            "entry_price": 100.0,
+            "stop_loss": 100.0 - direction * 0.75,
+            "target1": 100.0 + direction * 1.5,
+            "target2": 100.0 + direction * 2.3,
+            "exit_policy": "PAPER_STAGED_EXIT_V1",
             "created_at": datetime(2026, 8, 11, plan_id, tzinfo=timezone.utc),
         },
-        "risk_decision": {"confidence": confidence, "risk_percent": 1.0},
+        "risk_decision": {
+            "id": plan_id,
+            "confidence": confidence,
+            "risk_percent": 1.0,
+            "position_size": 1.0,
+            "risk_reward": risk_reward,
+        },
+        "fill_profile": {"fee_bps": 7.5},
         "paper_sizing": {
             "leverage": 5.0,
             "position_notional_inr": 85_000.0,
             "margin_used_inr": 17_000.0,
         },
     }
+
+
+@pytest.fixture(autouse=True)
+def _fresh_paper_entry_mark(monkeypatch):
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_current_paper_entry_mark",
+        lambda symbol: {
+            "symbol": symbol,
+            "mark_price": 120.0,
+            "observed_at": datetime.now(timezone.utc),
+            "source": "TEST_MARK",
+        },
+    )
 
 
 def _enabled_automation_settings():
@@ -369,6 +396,65 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
         item["action"] == "skipped_weaker_symbol_candidate"
         for item in result["skipped"]
     ) == 2
+
+
+def test_new_paper_entry_rebases_fill_stop_and_targets_from_fresh_mark():
+    candidate = _candidate(9, "1h", 64)
+
+    rebased, error = paper_trade_api._rebase_paper_trade_candidate(
+        candidate,
+        {
+            "symbol": "BTCUSDT",
+            "mark_price": 300.0,
+            "observed_at": datetime.now(timezone.utc),
+            "source": "TEST_MARK",
+        },
+    )
+
+    assert error is None
+    fill = rebased["fill_profile"]
+    execution_risk = rebased["execution_risk"]
+    entry = fill["entry_fill_price"]
+    assert entry > 300.0
+    assert fill["signal_planned_entry_price"] == 100.0
+    assert fill["execution_mark_price"] == 300.0
+    assert execution_risk["decision"] == "APPROVE"
+    assert execution_risk["entry_price"] == entry
+    assert execution_risk["stop_loss"] == round(entry * 0.9925, 2)
+    assert execution_risk["target1"] == round(entry * 1.015, 2)
+    assert execution_risk["target2"] == round(entry * 1.023, 2)
+    assert candidate["trade_plan"]["entry_price"] == 100.0
+
+
+def test_new_paper_entry_fails_closed_without_fresh_mark():
+    candidate = _candidate(10, "1h", 64)
+
+    rebased, error = paper_trade_api._rebase_paper_trade_candidate(candidate, None)
+
+    assert rebased is candidate
+    assert error == "Fresh execution mark price is unavailable"
+
+
+def test_new_short_entry_recalculates_inverse_exit_bracket():
+    candidate = _candidate(11, "4h", 49, side="SHORT")
+
+    rebased, error = paper_trade_api._rebase_paper_trade_candidate(
+        candidate,
+        {
+            "symbol": "BTCUSDT",
+            "mark_price": 2.0,
+            "observed_at": datetime.now(timezone.utc),
+            "source": "TEST_MARK",
+        },
+    )
+
+    assert error is None
+    entry = rebased["fill_profile"]["entry_fill_price"]
+    execution_risk = rebased["execution_risk"]
+    assert entry < 2.0
+    assert execution_risk["stop_loss"] == round(entry * 1.0075, 5)
+    assert execution_risk["target1"] == round(entry * 0.985, 5)
+    assert execution_risk["target2"] == round(entry * 0.977, 5)
 
 
 def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
