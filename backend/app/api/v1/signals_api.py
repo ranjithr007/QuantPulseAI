@@ -1935,6 +1935,7 @@ def _watchlist_row(
         "entry": trade_plan.get("entry"),
         "stop_loss": trade_plan.get("stop_loss"),
         "target1": trade_plan.get("target1"),
+        "target2": trade_plan.get("target2"),
         "risk_reward": trade_plan.get("risk_reward"),
         "price_precision": trade_plan.get("price_precision"),
     }

@@ -30,6 +30,7 @@ from app.risk.risk_engine import RiskEngine
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.paper_trading.exit_policy import approval_target_for_policy
+from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
 from app.repositories.automation_settings_repository import DEFAULT_AUTOMATION_SETTINGS
@@ -1632,11 +1633,14 @@ def _build_phase2_evidence_checkpoint(db, checkpoint_date):
 
 
 def _paper_trade_payload(paper_trade, fill_profile=None):
+    exit_levels = _paper_trade_display_exit_levels(paper_trade)
     remaining_fraction = getattr(
         paper_trade,
         "remaining_position_fraction",
         None,
     )
+    if remaining_fraction is None:
+        remaining_fraction = exit_levels.get("remaining_position_fraction")
     sizing = build_inr_paper_sizing(
         paper_trade.confidence or 0,
         fee_bps=paper_trade.fee_bps or DEFAULT_FEE_BPS,
@@ -1682,9 +1686,9 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "symbol": paper_trade.symbol,
         "side": paper_trade.side,
         "entry_price": paper_trade.entry_price,
-        "stop_loss": paper_trade.stop_loss,
-        "target1": paper_trade.target1,
-        "target2": paper_trade.target2,
+        "stop_loss": exit_levels["stop_loss"],
+        "target1": exit_levels["target1"],
+        "target2": exit_levels["target2"],
         "position_size": paper_trade.position_size,
         "risk_reward": paper_trade.risk_reward,
         "risk_percent": paper_trade.risk_percent,
@@ -1694,11 +1698,12 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "timeframe_stack": paper_trade.timeframe_stack,
         "regime": paper_trade.regime,
         "data_generation_id": getattr(paper_trade, "data_generation_id", None),
-        "exit_policy": getattr(paper_trade, "exit_policy", None),
-        "initial_stop_loss": getattr(paper_trade, "initial_stop_loss", None),
-        "target1_fraction": getattr(paper_trade, "target1_fraction", None),
+        "exit_policy": exit_levels["exit_policy"],
+        "exit_levels_source": exit_levels["source"],
+        "initial_stop_loss": exit_levels["initial_stop_loss"],
+        "target1_fraction": exit_levels["target1_fraction"],
         "remaining_position_fraction": remaining_fraction,
-        "max_hold_hours": getattr(paper_trade, "max_hold_hours", None),
+        "max_hold_hours": exit_levels["max_hold_hours"],
         "target1_hit_at": getattr(paper_trade, "target1_hit_at", None),
         "target1_exit_price": getattr(paper_trade, "target1_exit_price", None),
         "exit_monitor_timeframe": getattr(
@@ -1785,6 +1790,77 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         payload["fill_profile"] = fill_profile
 
     return payload
+
+
+def _paper_trade_display_exit_levels(paper_trade):
+    """Return complete display levels for official open paper positions.
+
+    The monitor persists the staged-exit policy before evaluating a trade. This
+    read-side fallback keeps older open rows understandable during the short
+    window before that repair runs, without changing closed-trade evidence.
+    """
+    persisted = {
+        "stop_loss": getattr(paper_trade, "stop_loss", None),
+        "target1": getattr(paper_trade, "target1", None),
+        "target2": getattr(paper_trade, "target2", None),
+        "exit_policy": getattr(paper_trade, "exit_policy", None),
+        "initial_stop_loss": getattr(paper_trade, "initial_stop_loss", None),
+        "target1_fraction": getattr(paper_trade, "target1_fraction", None),
+        "remaining_position_fraction": getattr(
+            paper_trade,
+            "remaining_position_fraction",
+            None,
+        ),
+        "max_hold_hours": getattr(paper_trade, "max_hold_hours", None),
+        "source": "PERSISTED",
+    }
+    required = ("stop_loss", "target1", "target2", "exit_policy", "max_hold_hours")
+    if str(getattr(paper_trade, "status", "") or "").upper() != "OPEN":
+        return persisted
+    if all(persisted[key] is not None for key in required):
+        return persisted
+
+    entry_price = getattr(paper_trade, "entry_price", None)
+    if entry_price is None:
+        return persisted
+    policy = build_policy_trade_levels(
+        getattr(paper_trade, "side", None),
+        entry_price,
+        symbol=getattr(paper_trade, "symbol", None),
+        timeframe=getattr(paper_trade, "entry_timeframe", None),
+        confidence=getattr(paper_trade, "confidence", None) or 0,
+        fee_bps=getattr(paper_trade, "fee_bps", None) or DEFAULT_FEE_BPS,
+        price_precision=_paper_trade_price_precision(entry_price),
+    )
+    if policy is None:
+        return persisted
+
+    target1_complete = getattr(paper_trade, "target1_hit_at", None) is not None
+    fallback = {
+        "stop_loss": float(entry_price) if target1_complete else policy["stop_loss"],
+        "target1": policy["target1"],
+        "target2": policy["target2"],
+        "exit_policy": policy["name"],
+        "initial_stop_loss": policy["stop_loss"],
+        "target1_fraction": policy["target1_fraction"],
+        "remaining_position_fraction": 0.5 if target1_complete else 1.0,
+        "max_hold_hours": policy["max_hold_hours"],
+    }
+    return {
+        key: persisted[key] if persisted.get(key) is not None else value
+        for key, value in fallback.items()
+    } | {"source": "POLICY_FALLBACK"}
+
+
+def _paper_trade_price_precision(price):
+    price = float(price)
+    if price < 1:
+        return 6
+    if price < 10:
+        return 5
+    if price < 100:
+        return 4
+    return 2
 
 
 def _summarize_paper_trades(records):

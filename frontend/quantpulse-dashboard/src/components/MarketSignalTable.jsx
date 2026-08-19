@@ -276,6 +276,10 @@ export function selectWatchlistSignal(row, watchRow) {
   const side = normalizeTradeSide(watchRow?.side);
   if (status !== "READY" || !["LONG", "SHORT"].includes(side)) return row;
 
+  const watchTargets = [watchRow.target1, watchRow.target2].filter(
+    (value) => value !== null && value !== undefined
+  );
+
   return {
     ...row,
     timeframe: watchRow.entry_timeframe || row.timeframe,
@@ -284,6 +288,10 @@ export function selectWatchlistSignal(row, watchRow) {
     signalScore: numberFrom(watchRow.entry_score, row.signalScore),
     signalBias: watchRow.entry_bias || row.signalBias,
     regime: watchRow.entry_bias || watchRow.overall_bias || row.regime,
+    entry: nullableNumberFrom(watchRow.entry, row.entry),
+    stopLoss: nullableNumberFrom(watchRow.stop_loss, row.stopLoss),
+    targets: watchTargets.length ? watchTargets : row.targets,
+    riskReward: nullableNumberFrom(watchRow.risk_reward, row.riskReward),
     selectedFromWatchlist: true,
   };
 }
