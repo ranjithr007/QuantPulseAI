@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -38,12 +38,24 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
     def setUpClass(cls):
         get_settings.cache_clear()
         cls._original_session_local = paper_trade_api.SessionLocal
+        cls._original_current_paper_entry_mark = (
+            paper_trade_api._current_paper_entry_mark
+        )
         paper_trade_api.SessionLocal = TestSessionLocal
+        paper_trade_api._current_paper_entry_mark = lambda symbol: {
+            "symbol": symbol,
+            "mark_price": 100.0,
+            "observed_at": datetime.now(timezone.utc),
+            "source": "TEST_MARK",
+        }
         cls.client = TestClient(app)
 
     @classmethod
     def tearDownClass(cls):
         paper_trade_api.SessionLocal = cls._original_session_local
+        paper_trade_api._current_paper_entry_mark = (
+            cls._original_current_paper_entry_mark
+        )
         cls.client.close()
         TEST_ENGINE.dispose()
         if TEST_DB_PATH.exists():
@@ -130,8 +142,8 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(execution["executed_count"], 1)
         self.assertEqual(execution["skipped_count"], 0)
         self.assertEqual(execution["executed"][0]["status"], "OPEN")
-        self.assertEqual(execution["executed"][0]["fill_profile"]["entry_fill_price"], 100.14)
-        self.assertEqual(execution["executed"][0]["entry_price"], 100.14)
+        self.assertEqual(execution["executed"][0]["fill_profile"]["entry_fill_price"], 100.06)
+        self.assertEqual(execution["executed"][0]["entry_price"], 100.06)
 
         open_trades = self.client.get("/paper-trade/trades?status=OPEN&symbol=BTCUSDT")
         self.assertEqual(open_trades.status_code, 200)
@@ -140,7 +152,7 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(open_payload["count"], 1)
         self.assertEqual(open_payload["summary"]["open"], 1)
         self.assertEqual(open_payload["summary"]["closed"], 0)
-        self.assertEqual(open_payload["records"][0]["entry_price"], 100.14)
+        self.assertEqual(open_payload["records"][0]["entry_price"], 100.06)
 
         performance = self.client.get("/paper-trade/performance?symbol=BTCUSDT")
         self.assertEqual(performance.status_code, 200)
