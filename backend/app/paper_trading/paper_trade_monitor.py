@@ -19,7 +19,11 @@ def evaluate_paper_trade_exit(trade, candle):
         target_hit = low <= trade.target1
 
     if stop_hit:
-        exit_fill = simulate_exit_fill(trade, trade.stop_loss, trigger_type="STOP")
+        exit_fill = simulate_exit_fill(
+            trade,
+            _stop_trigger_price(trade, candle, high, low),
+            trigger_type="STOP",
+        )
         return _exit_decision(
             trade,
             candle,
@@ -61,15 +65,23 @@ def _evaluate_staged_exit(trade, candle, high, low):
         return _time_exit_decision(trade, candle)
 
     if trade.side == "LONG":
+        # Inclusive safety boundary: a LONG exits when the observed price is
+        # equal to or below its active stop (including break-even after T1).
         stop_hit = low <= trade.stop_loss
         target_hit = high >= target_price
     else:
+        # Inclusive inverse boundary: a SHORT exits when the observed price is
+        # equal to or above its active stop (including break-even after T1).
         stop_hit = high >= trade.stop_loss
         target_hit = low <= target_price
 
     # A candle with both levels touched is resolved conservatively at the stop.
     if stop_hit:
-        exit_fill = simulate_exit_fill(trade, trade.stop_loss, trigger_type="STOP")
+        exit_fill = simulate_exit_fill(
+            trade,
+            _stop_trigger_price(trade, candle, high, low),
+            trigger_type="STOP",
+        )
         return _exit_decision(
             trade,
             candle,
@@ -120,6 +132,17 @@ def _evaluate_staged_exit(trade, candle, high, low):
         "low_price": low,
         "target1_complete": target1_complete,
     }
+
+
+def _stop_trigger_price(trade, candle, high, low):
+    """Use the observed mark when it has already crossed through the stop."""
+
+    stop_loss = float(trade.stop_loss)
+    if not getattr(candle, "live_mark", False):
+        return stop_loss
+    if trade.side == "LONG":
+        return min(stop_loss, low)
+    return max(stop_loss, high)
 
 
 def _maximum_hold_reached(trade, candle):

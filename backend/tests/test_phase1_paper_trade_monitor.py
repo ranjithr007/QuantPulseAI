@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from app.jobs.paper_trade_monitor_job import _current_mark_candle
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
 from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
 from app.scheduler.registry import get_job_definition
@@ -180,6 +181,110 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
             low_price=98.0,
             close_price=99.5,
             candle_time=datetime(2026, 8, 10, 5, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["result"], "WIN")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "STOP")
+
+    def test_long_live_mark_equal_to_or_below_stop_closes_position(self):
+        trade = self._staged_trade(
+            side="LONG",
+            entry_price=100.0,
+            stop_loss=99.25,
+            target1=101.5,
+            target2=102.3,
+        )
+
+        exit_prices = []
+        for mark_price in (99.25, 99.0):
+            with self.subTest(mark_price=mark_price):
+                collector = Mock()
+                collector.get_current_mark_price.return_value = {
+                    "mark_price": mark_price,
+                    "observed_at": datetime(2026, 8, 10, 1, 0),
+                    "source": "TEST_CURRENT_MARK",
+                }
+                candle = _current_mark_candle(trade, collector=collector)
+
+                result = evaluate_paper_trade_exit(trade, candle)
+
+                self.assertEqual(result["action"], "CLOSE")
+                self.assertEqual(result["result"], "LOSS")
+                self.assertEqual(result["fill_profile"]["trigger_type"], "STOP")
+                exit_prices.append(result["exit_price"])
+
+        self.assertLess(exit_prices[1], exit_prices[0])
+
+    def test_long_break_even_stop_equality_closes_remainder_after_target1(self):
+        trade = self._staged_trade(
+            side="LONG",
+            entry_price=100.0,
+            stop_loss=100.0,
+            target1=101.5,
+            target2=102.3,
+            target1_hit_at=datetime(2026, 8, 10, 0, 30),
+        )
+        candle = SimpleNamespace(
+            high_price=100.0,
+            low_price=100.0,
+            close_price=100.0,
+            candle_time=datetime(2026, 8, 10, 1, 0),
+            live_mark=True,
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual(result["action"], "CLOSE")
+        self.assertEqual(result["result"], "WIN")
+        self.assertEqual(result["fill_profile"]["trigger_type"], "STOP")
+
+    def test_short_live_mark_equal_to_or_above_stop_closes_position(self):
+        trade = self._staged_trade(
+            side="SHORT",
+            entry_price=100.0,
+            stop_loss=100.75,
+            target1=98.5,
+            target2=97.7,
+        )
+
+        exit_prices = []
+        for mark_price in (100.75, 101.0):
+            with self.subTest(mark_price=mark_price):
+                collector = Mock()
+                collector.get_current_mark_price.return_value = {
+                    "mark_price": mark_price,
+                    "observed_at": datetime(2026, 8, 10, 1, 0),
+                    "source": "TEST_CURRENT_MARK",
+                }
+                candle = _current_mark_candle(trade, collector=collector)
+
+                result = evaluate_paper_trade_exit(trade, candle)
+
+                self.assertEqual(result["action"], "CLOSE")
+                self.assertEqual(result["result"], "LOSS")
+                self.assertEqual(result["fill_profile"]["trigger_type"], "STOP")
+                exit_prices.append(result["exit_price"])
+
+        self.assertGreater(exit_prices[1], exit_prices[0])
+
+    def test_short_break_even_stop_equality_closes_remainder_after_target1(self):
+        trade = self._staged_trade(
+            side="SHORT",
+            entry_price=100.0,
+            stop_loss=100.0,
+            target1=98.5,
+            target2=97.7,
+            target1_hit_at=datetime(2026, 8, 10, 0, 30),
+        )
+        candle = SimpleNamespace(
+            high_price=100.0,
+            low_price=100.0,
+            close_price=100.0,
+            candle_time=datetime(2026, 8, 10, 1, 0),
+            live_mark=True,
         )
 
         result = evaluate_paper_trade_exit(trade, candle)
