@@ -142,3 +142,42 @@ def test_missing_core_fred_series_cannot_be_marked_verified():
     assert result["status"] == "DEGRADED"
     assert result["errors"]["DGS2"] == "TimeoutError"
     assert result["advisory_only"] is True
+
+
+def test_dollar_index_allows_one_publication_weekend_but_not_two():
+    FredMacroCollector.clear_cache()
+
+    def fake_get(_url, *, params, timeout):
+        series_id = params["series_id"]
+        response = Mock()
+        response.raise_for_status.return_value = None
+        latest_date = "2026-08-14" if series_id == "DTWEXBGS" else "2026-08-20"
+        previous_date = "2026-08-13" if series_id == "DTWEXBGS" else "2026-08-19"
+        response.json.return_value = {
+            "observations": [
+                {"date": latest_date, "value": str(LATEST_VALUES[series_id])},
+                {"date": previous_date, "value": str(PREVIOUS_VALUES[series_id])},
+            ]
+        }
+        return response
+
+    collector = FredMacroCollector("test-key", cache_seconds=0)
+    with patch(
+        "app.collectors.fred_macro_collector.requests.get",
+        side_effect=fake_get,
+    ):
+        weekend = collector.collect(
+            force_refresh=True,
+            now=datetime(2026, 8, 22, tzinfo=timezone.utc),
+        )
+        missed_cycle = collector.collect(
+            force_refresh=True,
+            now=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        )
+
+    assert weekend["status"] == "VERIFIED"
+    assert weekend["series"]["DTWEXBGS"]["age_days"] == 8
+    assert weekend["series"]["DTWEXBGS"]["is_stale"] is False
+    assert missed_cycle["status"] == "DEGRADED"
+    assert missed_cycle["series"]["DTWEXBGS"]["age_days"] == 11
+    assert missed_cycle["series"]["DTWEXBGS"]["is_stale"] is True

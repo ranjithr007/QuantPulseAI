@@ -55,6 +55,9 @@
   --rose: #e11d48;
   --navy: #0a192d;
   --navy-2: #10243e;
+  --scrollbar-thumb: #aebdce;
+  --scrollbar-thumb-hover: #8297ae;
+  --scrollbar-thumb-active: #07859b;
   --shadow-sm: 0 1px 2px rgba(15, 31, 52, 0.05), 0 8px 24px rgba(15, 31, 52, 0.04);
   --shadow-md: 0 18px 45px rgba(15, 31, 52, 0.1);
 }
@@ -85,6 +88,45 @@ body {
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+/* A quiet, consistent scrollbar keeps dense tables usable without bringing
+   the browser's heavy default chrome into the workspace. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 40px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Grid items default to min-width:auto, which lets dense dashboard cards use
@@ -101,7 +143,12 @@ main .grid > * {
 
 main .overflow-x-auto {
   overscroll-behavior-inline: contain;
+  scrollbar-color: #9bacc0 transparent;
   -webkit-overflow-scrolling: touch;
+}
+
+main .overflow-x-auto::-webkit-scrollbar {
+  height: 8px;
 }
 
 main p,
@@ -143,6 +190,25 @@ select:focus-visible {
     linear-gradient(180deg, var(--navy-2) 0%, var(--navy) 100%);
   border-color: rgba(148, 163, 184, 0.15);
   box-shadow: 10px 0 35px rgba(8, 24, 43, 0.08);
+}
+
+.qp-sidebar nav {
+  scrollbar-color: rgba(179, 201, 221, 0.58) transparent;
+  scrollbar-gutter: stable;
+}
+
+.qp-sidebar nav::-webkit-scrollbar {
+  width: 8px;
+}
+
+.qp-sidebar nav::-webkit-scrollbar-thumb {
+  background: rgba(179, 201, 221, 0.58);
+  background-clip: padding-box;
+}
+
+.qp-sidebar nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(98, 210, 226, 0.78);
+  background-clip: padding-box;
 }
 
 .qp-topbar {
@@ -217,7 +283,7 @@ select:focus-visible {
 }
 
 .scrollbar-none {
-  scrollbar-width: none;
+  scrollbar-width: none !important;
   -ms-overflow-style: none;
 }
 

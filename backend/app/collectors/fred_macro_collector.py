@@ -34,7 +34,10 @@ SERIES_SPECS = {
         "kind": "percent_inverse",
         "multiplier": 20,
         "maximum": 20,
-        "max_age_days": 7,
+        # FRED labels this series daily, but H.10 observations can arrive in
+        # a weekly batch. Allow the publication weekend without accepting a
+        # dollar index that has missed the following release cycle.
+        "max_age_days": 10,
         "positive_reason": "Broad US dollar index is weakening",
         "negative_reason": "Broad US dollar index is strengthening",
     },
