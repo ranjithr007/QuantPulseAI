@@ -1,4 +1,8 @@
+from app.paper_trading.evidence_scope import production_paper_trade_records
+
+
 def paper_trade_performance(trades):
+    trades = production_paper_trade_records(trades)
     total = len(trades)
     open_trades = [
         trade

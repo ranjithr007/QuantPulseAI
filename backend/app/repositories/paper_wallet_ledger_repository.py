@@ -1,4 +1,7 @@
+from sqlalchemy import func, or_
+
 from app.database.models.paper_wallet_ledger import PaperWalletLedgerEntry
+from app.paper_trading.evidence_scope import QA_PAPER_SYMBOL_PREFIX
 from app.repositories._db_utils import flush_or_rollback
 
 
@@ -8,9 +11,18 @@ class PaperWalletLedgerRepository:
         if getattr(getattr(bind, "dialect", None), "name", None) == "sqlite":
             PaperWalletLedgerEntry.__table__.create(bind=bind, checkfirst=True)
 
-    def list_entries(self, db, paper_trade_id=None):
+    def list_entries(self, db, paper_trade_id=None, include_quarantined=False):
         self.ensure_table(db)
         query = db.query(PaperWalletLedgerEntry)
+        if not include_quarantined:
+            query = query.filter(
+                or_(
+                    PaperWalletLedgerEntry.symbol.is_(None),
+                    ~func.upper(PaperWalletLedgerEntry.symbol).like(
+                        f"{QA_PAPER_SYMBOL_PREFIX}%"
+                    ),
+                )
+            )
         if paper_trade_id is not None:
             query = query.filter(
                 PaperWalletLedgerEntry.paper_trade_id == paper_trade_id

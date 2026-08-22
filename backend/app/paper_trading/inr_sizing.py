@@ -1,6 +1,7 @@
 from math import isfinite
 
 from app.governance.evidence_policy import FULL_SIZE_ENTRY_CONFIDENCE
+from app.paper_trading.evidence_scope import production_paper_trade_records
 
 
 PAPER_CAPITAL_INR = 100_000.0
@@ -98,6 +99,9 @@ def build_inr_paper_wallet(
     require_open_prices=False,
     leverage=DEFAULT_PAPER_LEVERAGE,
 ):
+    trades = production_paper_trade_records(trades)
+    if ledger_entries is not None:
+        ledger_entries = production_paper_trade_records(ledger_entries)
     positions = []
     missing_price_symbols = []
     current_prices = {

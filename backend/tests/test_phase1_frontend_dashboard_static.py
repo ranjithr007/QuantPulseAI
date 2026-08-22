@@ -148,6 +148,8 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('"PAPER_STAGED_EXIT_V2"', pnl_section)
         self.assertIn('"BTC_1H_STAGED_V1"', pnl_section)
         self.assertIn('rawRemaining === null', pnl_section)
+        self.assertIn("QA evidence quarantined", pnl_section)
+        self.assertIn("ledgerScope.quarantined_records", pnl_section)
         self.assertIn('T1 closes 75% / protected stop / T2 closes 25%', pnl_section)
         self.assertIn("Deadline (IST)", pnl_section)
         self.assertIn("Closed (IST)", pnl_section)
@@ -190,6 +192,7 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("currentTimeframe", dashboard_data)
         self.assertIn("currentMode", dashboard_data)
         self.assertIn("const seenIds = new Set()", dashboard_data)
+        self.assertIn('.startsWith("QA")', dashboard_data)
 
     def test_dashboard_layout_receives_paper_wallet_before_rendering_pnl_routes(self):
         source = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")

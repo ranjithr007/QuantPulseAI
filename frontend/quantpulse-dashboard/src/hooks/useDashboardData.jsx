@@ -34,6 +34,7 @@ function createInitialDashboardData() {
     performance: null,
     accountRisk: null,
     paperWallet: null,
+    ledgerScope: null,
     openTrades: [],
     closedTrades: [],
     selected: {
@@ -175,6 +176,7 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
     performance: officialPerformance || current.performance,
     accountRisk: paperTradeBundle.accountRisk || current.accountRisk,
     paperWallet: paperTradeBundle.paperWallet || current.paperWallet,
+    ledgerScope: paperTradeBundle.ledgerScope || current.ledgerScope,
     openTrades: hasPaperTradePayload ? officialOpenTrades : current.openTrades,
     closedTrades: hasPaperTradePayload ? officialClosedTrades : current.closedTrades,
     selected: {
@@ -203,6 +205,9 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
 function scopePaperTrades(records) {
   const seenIds = new Set();
   return (records || []).filter((trade) => {
+    if (String(trade?.symbol || "").trim().toUpperCase().startsWith("QA")) {
+      return false;
+    }
     if (!OFFICIAL_PAPER_ENTRY_TIMEFRAMES.has(String(trade?.entry_timeframe || "").trim())) {
       return false;
     }
@@ -608,6 +613,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const performance = data.performance || {};
   const accountRisk = data.accountRisk || null;
   const paperWallet = data.paperWallet || null;
+  const ledgerScope = data.ledgerScope || null;
   const openTrades = data.openTrades || [];
   const closedTrades = data.closedTrades || [];
 
@@ -804,6 +810,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     autoDecision,
     openTrades,
     paperWallet,
+    ledgerScope,
     candleSeries,
     volumeSeries,
     selectedRisk,

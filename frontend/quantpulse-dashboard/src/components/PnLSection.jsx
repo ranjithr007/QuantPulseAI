@@ -45,6 +45,7 @@ export default function PnLSection({
   tradeHistory,
   openPositions,
   paperWallet,
+  ledgerScope,
   pnlBySymbol,
   pnlBySide,
   equitySeries,
@@ -90,6 +91,13 @@ export default function PnLSection({
             <div className="mt-1 text-xs text-slate-500">Futures paper evidence · official entry stack 1h / 2h / 4h / 1d</div>
           </div>
         </div>
+
+        {Number(ledgerScope?.quarantined_records || 0) > 0 ? (
+          <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2.5 text-sm text-cyan-100">
+            <span className="font-medium">QA evidence quarantined:</span>{" "}
+            {ledgerScope.quarantined_records} synthetic record(s) are preserved for audit but excluded from PNL, wallet, risk limits, and execution capacity.
+          </div>
+        ) : null}
 
         <PaperWalletStrip wallet={paperWallet} openPositions={openPositions} />
 

@@ -11,7 +11,6 @@ from app.contracts.control import PaperTradeExecutionResponse
 from app.api.v1.derivatives_api import build_derivatives_payload
 from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.backtesting.walk_forward_validator import PHASE2_VALIDATION_CONTRACT_VERSION
-from app.backtesting.walk_forward_validator import is_phase2_official_timeframe
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
@@ -25,6 +24,7 @@ from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.paper_trade_performance import paper_trade_performance
+from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.reentry_policy import PAPER_STOP_REENTRY_COOLDOWN_MINUTES
 from app.paper_trading.reentry_policy import same_side_stop_reentry_cooldown
 from app.paper_trading.validation_policy import build_architecture_paper_gate
@@ -77,6 +77,11 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     repo = PaperTradeRepository()
 
     trades = repo.all_trades(db, symbol=normalized_symbol)
+    auditable_trades = repo.all_trades(
+        db,
+        symbol=normalized_symbol,
+        include_quarantined=True,
+    )
     open_trades = [
         _paper_trade_payload(trade)
         for trade in repo.list_trades(db, status="OPEN", symbol=normalized_symbol, limit=open_limit)
@@ -103,6 +108,13 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
         "marketContext": _market_context_payload(normalized_symbol),
         "accountRisk": account_risk,
         "paperWallet": paper_wallet,
+        "ledgerScope": {
+            "scope": "PAPER_PRODUCTION",
+            "policy": "QA_SYMBOL_QUARANTINE_V1",
+            "visible_records": len(trades),
+            "quarantined_records": len(auditable_trades) - len(trades),
+            "auditable_records": len(auditable_trades),
+        },
         "performance": {
             **paper_trade_performance(trades),
             "total_trades": len(trades),
@@ -1366,11 +1378,10 @@ def build_paper_trade_candidates(
 
 
 def _official_timeframe_records(records):
-    return [
-        record
-        for record in (records or [])
-        if is_phase2_official_timeframe(getattr(record, "entry_timeframe", None))
-    ]
+    return production_paper_trade_records(
+        records,
+        require_official_timeframe=True,
+    )
 
 
 def _phase2_evidence_scope():

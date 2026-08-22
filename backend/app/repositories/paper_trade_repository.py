@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import inspect, text
+from sqlalchemy import func, inspect, or_, text
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.paper_trade import PaperTrade
@@ -12,6 +12,8 @@ from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
 from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
+from app.paper_trading.evidence_scope import QA_PAPER_SYMBOL_PREFIX
+from app.paper_trading.evidence_scope import is_quarantined_paper_symbol
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 from app.repositories.trade_thesis_repository import TradeThesisRepository
@@ -107,10 +109,11 @@ class PaperTradeRepository:
         )
         db.commit()
 
-    def get_open_trades(self, db):
+    def get_open_trades(self, db, include_quarantined=False):
         self.ensure_table(db)
-
-        return db.query(PaperTrade).filter(PaperTrade.status == "OPEN").all()
+        query = db.query(PaperTrade).filter(PaperTrade.status == "OPEN")
+        query = _apply_production_ledger_scope(query, include_quarantined)
+        return query.all()
 
     def ensure_staged_exit_policy(self, db, trade):
         """Apply the official staged policy to an existing open paper trade."""
@@ -205,9 +208,17 @@ class PaperTradeRepository:
         db.refresh(trade)
         return True
 
-    def list_trades(self, db, status=None, symbol=None, limit=50):
+    def list_trades(
+        self,
+        db,
+        status=None,
+        symbol=None,
+        limit=50,
+        include_quarantined=False,
+    ):
         self.ensure_table(db)
         query = db.query(PaperTrade)
+        query = _apply_production_ledger_scope(query, include_quarantined)
 
         if status:
             query = query.filter(PaperTrade.status == status)
@@ -221,9 +232,10 @@ class PaperTradeRepository:
 
         return query.all()
 
-    def all_trades(self, db, symbol=None):
+    def all_trades(self, db, symbol=None, include_quarantined=False):
         self.ensure_table(db)
         query = db.query(PaperTrade)
+        query = _apply_production_ledger_scope(query, include_quarantined)
 
         if symbol:
             query = query.filter(PaperTrade.symbol == symbol)
@@ -238,6 +250,9 @@ class PaperTradeRepository:
         across every timeframe and direction.
         """
         self.ensure_table(db)
+
+        if is_quarantined_paper_symbol(symbol):
+            return False
 
         return (
             db.query(PaperTrade)
@@ -634,6 +649,19 @@ def _price_precision(price):
     if price < 100:
         return 4
     return 2
+
+
+def _apply_production_ledger_scope(query, include_quarantined):
+    if include_quarantined:
+        return query
+    return query.filter(
+        or_(
+            PaperTrade.symbol.is_(None),
+            ~func.upper(PaperTrade.symbol).like(
+                f"{QA_PAPER_SYMBOL_PREFIX}%"
+            ),
+        )
+    )
 
 
 def _same_policy_value(current, desired):

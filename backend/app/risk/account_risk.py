@@ -4,6 +4,7 @@ from datetime import timezone
 
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
+from app.paper_trading.evidence_scope import production_paper_trade_records
 
 
 DEFAULT_DAILY_LOSS_LIMIT_PERCENT = 4.0
@@ -39,7 +40,7 @@ def build_account_daily_pnl_snapshot(
     open_trade_count = 0
     closed_window_trade_count = 0
 
-    for trade in trades or []:
+    for trade in production_paper_trade_records(trades):
         status = str(_value(trade, "status") or "").upper()
         persisted_account_pnl_percent = None
         if status == "CLOSED":

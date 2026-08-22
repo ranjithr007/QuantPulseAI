@@ -6,6 +6,7 @@ from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.database.models.risk_decision import RiskDecision
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.paper_trade_performance import paper_trade_performance
+from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
 from app.observability.performance_budget import LatencyBudget
@@ -231,12 +232,10 @@ def _official_trade_plans(trades):
 
 
 def _official_paper_trades(trades):
-    return [
-        trade
-        for trade in (trades or [])
-        if str(getattr(trade, "entry_timeframe", "") or "").strip()
-        in PHASE2_OFFICIAL_TIMEFRAMES
-    ]
+    return production_paper_trade_records(
+        trades,
+        require_official_timeframe=True,
+    )
 
 
 def _paper_evidence_scope():

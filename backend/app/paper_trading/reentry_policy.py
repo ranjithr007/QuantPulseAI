@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.utils.freshness import normalize_timestamp_to_utc
+from app.paper_trading.evidence_scope import production_paper_trade_records
 
 
 PAPER_STOP_REENTRY_COOLDOWN_MINUTES = 30
@@ -13,7 +14,7 @@ def same_side_stop_reentry_cooldown(trades, symbol, side, now=None):
     current_time = normalize_timestamp_to_utc(now or datetime.now(timezone.utc))
 
     stopped_trades = []
-    for trade in trades or []:
+    for trade in production_paper_trade_records(trades):
         if str(_value(trade, "symbol") or "").strip().upper() != normalized_symbol:
             continue
         if str(_value(trade, "side") or "").strip().upper() != normalized_side:

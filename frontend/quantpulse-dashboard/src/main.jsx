@@ -185,6 +185,7 @@ function DashboardApp({ username, onLogout }) {
     autoDecision,
     openTrades,
     paperWallet,
+    ledgerScope,
     candleSeries,
     volumeSeries,
     selectedRisk,
@@ -370,6 +371,7 @@ function DashboardApp({ username, onLogout }) {
       onExecutePaperTrades={handleExecutePaperTrades}
       openTrades={openTrades}
       paperWallet={paperWallet}
+      ledgerScope={ledgerScope}
       candleSeries={candleSeries}
       volumeSeries={volumeSeries}
       selectedRisk={selectedRisk}
@@ -420,6 +422,7 @@ function DashboardLayout({
   onExecutePaperTrades,
   openTrades,
   paperWallet,
+  ledgerScope,
   candleSeries,
   volumeSeries,
   selectedRisk,
@@ -649,6 +652,7 @@ function DashboardLayout({
                   tradeHistory={tradeHistory}
                   openPositions={openPositions}
                   paperWallet={paperWallet}
+                  ledgerScope={ledgerScope}
                   pnlBySymbol={pnlBySymbol}
                   pnlBySide={pnlBySide}
                   equitySeries={equitySeries}
