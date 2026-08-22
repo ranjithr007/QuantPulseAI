@@ -60,15 +60,15 @@ export default function DashboardHeader({
 }) {
   return (
     <>
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 flex-col border-r border-white/10 bg-slate-900 lg:flex">
-        <div className="border-b border-white/10 px-4 py-4">
+      <aside className="qp-sidebar fixed inset-y-0 left-0 z-40 hidden w-72 flex-col border-r lg:flex">
+        <div className="border-b border-[rgba(255,255,255,0.1)] px-4 py-4">
           <Link to={getPageHref("dashboard")} className="flex min-w-0 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
               <Sparkles className="h-5 w-5" />
             </div>
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-white">QuantPulseAI</div>
-              <div className="truncate text-xs text-slate-500">Trading intelligence</div>
+              <div className="truncate text-sm font-semibold text-[#f8fafc]">QuantPulseAI</div>
+              <div className="truncate text-xs text-[#94a3b8]">Trading intelligence</div>
             </div>
           </Link>
         </div>
@@ -79,18 +79,18 @@ export default function DashboardHeader({
           ))}
         </nav>
 
-        <div className="border-t border-white/10 p-4">
-          <div className="rounded-lg border border-white/10 bg-slate-950/65 p-3">
-            <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Workspace</div>
-            <div className="mt-1.5 text-sm font-medium text-white">{view.symbol}</div>
-            <div className="mt-1 text-xs text-slate-400">
+        <div className="border-t border-[rgba(255,255,255,0.1)] p-4">
+          <div className="rounded-xl border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.05)] p-3">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-[#94a3b8]">Workspace</div>
+            <div className="mt-1.5 text-sm font-medium text-[#f8fafc]">{view.symbol}</div>
+            <div className="mt-1 text-xs text-[#b7c3d4]">
               {view.timeframe} / {view.mode}
             </div>
           </div>
         </div>
       </aside>
 
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-slate-950/95 backdrop-blur-xl lg:ml-72">
+      <header className="qp-topbar sticky top-0 z-30 border-b backdrop-blur-xl lg:ml-72">
         <div className="px-3 py-2 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div className="min-w-0 shrink">
@@ -190,10 +190,10 @@ function ShellLink({ item, href, active }) {
       to={href}
       className={clsx(
         "flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition",
-        active ? "bg-cyan-500/15 text-cyan-100" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
+        active ? "bg-cyan-400/15 text-[#dff9ff] shadow-sm" : "text-[#b7c3d4] hover:bg-white/5 hover:text-[#f8fafc]"
       )}
     >
-      <Icon className={clsx("h-4 w-4", active ? "text-cyan-200" : "text-slate-500")} />
+      <Icon className={clsx("h-4 w-4", active ? "text-[#6dd7e8]" : "text-[#8292a8]")} />
       <span className="truncate">{item.label}</span>
     </NavLink>
   );

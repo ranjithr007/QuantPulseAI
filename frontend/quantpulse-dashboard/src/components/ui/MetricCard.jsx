@@ -3,7 +3,7 @@ import { accentClass } from "../../utils/toneClasses";
 
 export default function MetricCard({ label, value, note, icon: Icon, accent = "cyan", compact = false, className }) {
   return (
-    <div className={clsx("min-w-0 rounded-lg border border-white/10 bg-slate-950/70 p-3 shadow-lg shadow-slate-950/10 sm:p-4", compact && "p-3", className)}>
+    <div className={clsx("qp-metric-card min-w-0 rounded-xl border border-white/10 bg-slate-950/70 p-3 sm:p-4", compact && "p-3", className)}>
       <div className="flex items-start justify-between gap-2 sm:gap-3">
         <div className="min-w-0">
           <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{label}</div>

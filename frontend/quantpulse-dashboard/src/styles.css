@@ -1,22 +1,25 @@
 @import "tailwindcss";
 
-/* QuantPulseAI uses one shared palette across every dashboard surface. The
-   JSX keeps semantic utility names while this theme maps the former dark
-   surfaces and light foregrounds to an accessible light presentation. */
+/* QuantPulseAI keeps semantic utility names in JSX while this palette turns
+   the data workspace into a deliberate, high-contrast light fintech theme. */
 @theme {
-  --color-white: #0f172a;
+  --color-white: #10213a;
 
-  --color-slate-950: #f8fafc;
+  --color-slate-950: #f4f7fb;
   --color-slate-900: #ffffff;
-  --color-slate-800: #e2e8f0;
-  --color-slate-300: #334155;
-  --color-slate-200: #1e293b;
-  --color-slate-100: #0f172a;
+  --color-slate-800: #e7edf5;
+  --color-slate-700: #c8d3e1;
+  --color-slate-600: #8190a5;
+  --color-slate-500: #6b7a90;
+  --color-slate-400: #5a6b82;
+  --color-slate-300: #40516a;
+  --color-slate-200: #253750;
+  --color-slate-100: #10213a;
 
-  --color-cyan-400: #0891b2;
-  --color-cyan-300: #0e7490;
-  --color-cyan-200: #155e75;
-  --color-cyan-100: #164e63;
+  --color-cyan-400: #07859b;
+  --color-cyan-300: #08778c;
+  --color-cyan-200: #0c6576;
+  --color-cyan-100: #114e5c;
 
   --color-emerald-400: #059669;
   --color-emerald-300: #047857;
@@ -40,16 +43,20 @@
 
 :root {
   color-scheme: light;
-  --bg: #f1f5f9;
+  --bg: #eef3f8;
   --panel: #ffffff;
-  --panel-2: #f8fafc;
-  --line: rgba(15, 23, 42, 0.12);
-  --text: #0f172a;
-  --muted: #64748b;
-  --cyan: #0891b2;
+  --panel-2: #f6f8fb;
+  --line: #dfe6ef;
+  --text: #10213a;
+  --muted: #6b7a90;
+  --cyan: #07859b;
   --emerald: #059669;
   --amber: #d97706;
   --rose: #e11d48;
+  --navy: #0a192d;
+  --navy-2: #10243e;
+  --shadow-sm: 0 1px 2px rgba(15, 31, 52, 0.05), 0 8px 24px rgba(15, 31, 52, 0.04);
+  --shadow-md: 0 18px 45px rgba(15, 31, 52, 0.1);
 }
 
 html,
@@ -70,10 +77,10 @@ body {
     "Segoe UI",
     sans-serif;
   background:
-    radial-gradient(circle at top, rgba(8, 145, 178, 0.1), transparent 30%),
-    radial-gradient(circle at 75% 0%, rgba(5, 150, 105, 0.07), transparent 26%),
-    linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+    radial-gradient(circle at 72% -10%, rgba(7, 133, 155, 0.07), transparent 30%),
+    linear-gradient(180deg, #f6f8fb 0%, #edf2f7 100%);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -115,9 +122,98 @@ select {
   font: inherit;
 }
 
+button,
+a,
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgba(7, 133, 155, 0.5);
+  outline-offset: 2px;
+}
+
+.qp-sidebar {
+  background:
+    radial-gradient(circle at 15% 0%, rgba(28, 164, 187, 0.16), transparent 26%),
+    linear-gradient(180deg, var(--navy-2) 0%, var(--navy) 100%);
+  border-color: rgba(148, 163, 184, 0.15);
+  box-shadow: 10px 0 35px rgba(8, 24, 43, 0.08);
+}
+
+.qp-topbar {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: #dfe6ef;
+  box-shadow: 0 8px 30px rgba(15, 31, 52, 0.055);
+}
+
+.qp-main {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(7, 133, 155, 0.045), transparent 24%),
+    #f4f7fb;
+}
+
+.qp-main section {
+  border-color: #e4eaf2;
+}
+
+.qp-main .rounded-lg.border:not(button):not(input):not(select),
+.qp-metric-card {
+  border-color: #e0e7f0;
+}
+
+.qp-metric-card {
+  background: linear-gradient(145deg, #ffffff 0%, #fbfcfe 100%);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.qp-metric-card:hover {
+  border-color: #cad6e4;
+  box-shadow: 0 12px 32px rgba(15, 31, 52, 0.08);
+  transform: translateY(-1px);
+}
+
+.qp-auth-shell {
+  background:
+    radial-gradient(circle at 20% 12%, rgba(23, 172, 196, 0.25), transparent 22%),
+    linear-gradient(118deg, #0a192d 0%, #102a43 39%, #edf3f8 39%, #f8fafc 100%);
+}
+
+.qp-auth-card {
+  border-color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 28px 80px rgba(10, 25, 45, 0.22);
+}
+
+.qp-input {
+  border-color: #d6e0eb;
+  background: #f7f9fc;
+  box-shadow: inset 0 1px 2px rgba(15, 31, 52, 0.03);
+}
+
+.qp-input:hover {
+  border-color: #bdcad9;
+}
+
+.qp-primary-button {
+  background: linear-gradient(135deg, #07859b 0%, #0b7188 100%);
+  box-shadow: 0 10px 24px rgba(7, 133, 155, 0.22);
+}
+
+.qp-primary-button:hover {
+  background: linear-gradient(135deg, #08778c 0%, #0a6478 100%);
+  box-shadow: 0 12px 28px rgba(7, 133, 155, 0.3);
+}
+
 ::selection {
-  background: rgba(8, 145, 178, 0.24);
-  color: #0f172a;
+  background: rgba(7, 133, 155, 0.2);
+  color: #10213a;
 }
 
 .scrollbar-none {
@@ -141,6 +237,12 @@ select {
 }
 
 @media (max-width: 639px) {
+  .qp-auth-shell {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(23, 172, 196, 0.22), transparent 28%),
+      linear-gradient(180deg, #0a192d 0%, #102a43 32%, #f4f7fb 32%, #f8fafc 100%);
+  }
+
   main > section > div,
   main > div {
     min-width: 0;

@@ -56,8 +56,8 @@ export default function RsRankingPage({ signalRows, watchlist, activeSymbol, aut
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={rankedRows}>
                 <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
-                <XAxis dataKey="symbol" tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
-                <YAxis tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                <XAxis dataKey="symbol" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
+                <YAxis tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle()} formatter={(value) => [formatSigned(value, 0), "RS"]} />
                 <Bar dataKey="rsScore" radius={[6, 6, 0, 0]}>
                   {rankedRows.map((row) => (

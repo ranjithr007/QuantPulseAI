@@ -69,8 +69,8 @@ export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol,
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={groups}>
                 <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
-                <XAxis dataKey="stage" tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
-                <YAxis tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                <XAxis dataKey="stage" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
+                <YAxis tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle()} formatter={(value) => [formatSigned(value, 0), "Avg RS"]} />
                 <Bar dataKey="avgRs" radius={[6, 6, 0, 0]}>
                   {groups.map((group) => (

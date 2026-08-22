@@ -462,7 +462,7 @@ function DashboardLayout({
         onLogout={onLogout}
       />
 
-      <main className="space-y-6 pb-24 lg:ml-72 lg:pb-8">
+      <main className="qp-main space-y-6 pb-24 lg:ml-72 lg:pb-8">
         {error ? (
           <div className={`${SECTION} pt-4`}>
             <div className="rounded-lg border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">

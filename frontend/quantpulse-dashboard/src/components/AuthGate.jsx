@@ -63,9 +63,9 @@ function LoginScreen({ onAuthenticated }) {
   };
 
   return (
-    <main className="relative grid min-h-screen place-items-center overflow-hidden bg-slate-950 px-4 py-10 text-slate-100">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(6,182,212,0.16),transparent_42%)]" />
-      <form onSubmit={submit} className="relative w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/85 p-6 shadow-2xl shadow-cyan-950/30 backdrop-blur sm:p-8">
+    <main className="qp-auth-shell relative grid min-h-screen place-items-center overflow-hidden px-4 py-10 text-slate-100">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,rgba(255,255,255,0.03),transparent_45%)]" />
+      <form onSubmit={submit} className="qp-auth-card relative w-full max-w-md rounded-2xl border p-6 backdrop-blur sm:p-8">
         <div className="mb-7 flex items-center gap-3">
           <div className="grid h-11 w-11 place-items-center rounded-xl border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
             <Sparkles className="h-5 w-5" />
@@ -83,16 +83,16 @@ function LoginScreen({ onAuthenticated }) {
 
         <label className="block text-sm text-slate-300">
           Username
-          <input autoComplete="username" required value={username} onChange={(event) => setUsername(event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 text-white outline-none transition focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/10" />
+          <input autoComplete="username" required value={username} onChange={(event) => setUsername(event.target.value)} className="qp-input mt-2 h-11 w-full rounded-lg border px-3 text-white outline-none transition focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/10" />
         </label>
         <label className="mt-4 block text-sm text-slate-300">
           Password
-          <input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 text-white outline-none transition focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/10" />
+          <input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} className="qp-input mt-2 h-11 w-full rounded-lg border px-3 text-white outline-none transition focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/10" />
         </label>
 
         {error ? <div role="alert" className="mt-4 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div> : null}
 
-        <button type="submit" disabled={submitting} className="mt-6 h-11 w-full rounded-lg bg-cyan-400 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
+        <button type="submit" disabled={submitting} className="qp-primary-button mt-6 h-11 w-full rounded-lg font-semibold text-[#f8fafc] transition disabled:cursor-wait disabled:opacity-60">
           {submitting ? "Signing in…" : "Sign in"}
         </button>
       </form>

@@ -76,8 +76,8 @@ export default function RotationPage({ signalRows, watchlist, auto, getSymbolHre
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={leadership}>
                 <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
-                <XAxis dataKey="symbol" tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
-                <YAxis tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                <XAxis dataKey="symbol" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
+                <YAxis tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle()} formatter={(value) => [formatPercent(value, 0), "Confidence"]} />
                 <Bar dataKey="confidence" radius={[6, 6, 0, 0]}>
                   {leadership.map((row) => (
