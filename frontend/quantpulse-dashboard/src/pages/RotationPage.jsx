@@ -4,7 +4,7 @@ import { enrichRow } from "../components/MarketSignalTable";
 import MetricCard from "../components/ui/MetricCard";
 import Pill from "../components/ui/Pill";
 import { Activity, ArrowRight, Gauge, RadioTower, TrendingDown, TrendingUp } from "lucide-react";
-import { formatPercent, formatSigned, tooltipStyle } from "../utils/formatters";
+import { formatPercent, tooltipStyle } from "../utils/formatters";
 
 const COLORS = ["#34d399", "#fb7185", "#94a3b8"];
 
@@ -14,11 +14,11 @@ export default function RotationPage({ signalRows, watchlist, auto, getSymbolHre
   const shortRows = rows.filter((row) => row.type === "SELL");
   const waitRows = rows.filter((row) => row.type === "WAIT");
   const rotation = rotationState(longRows, shortRows, waitRows);
-  const leadership = [...rows].sort((a, b) => b.rsScore - a.rsScore).slice(0, 6);
-  const leaders = longRows.slice().sort((a, b) => b.rsScore - a.rsScore).slice(0, 3);
-  const laggards = shortRows.slice().sort((a, b) => a.rsScore - b.rsScore).slice(0, 3);
-  const longAvg = average(longRows.map((row) => row.rsScore));
-  const shortAvg = average(shortRows.map((row) => row.rsScore));
+  const leadership = [...rows].sort((a, b) => b.confidence - a.confidence).slice(0, 6);
+  const leaders = longRows.slice().sort((a, b) => b.confidence - a.confidence).slice(0, 3);
+  const laggards = shortRows.slice().sort((a, b) => b.confidence - a.confidence).slice(0, 3);
+  const longAvg = average(longRows.map((row) => row.confidence));
+  const shortAvg = average(shortRows.map((row) => row.confidence));
   const rotationSpread = longAvg - shortAvg;
 
   return (
@@ -36,15 +36,15 @@ export default function RotationPage({ signalRows, watchlist, auto, getSymbolHre
           <MetricCard label="Rotation state" value={rotation.label} note={rotation.note} icon={RadioTower} accent={rotation.tone} />
           <MetricCard label="Long leaders" value={longRows.length} note="AI BUY symbols" icon={TrendingUp} accent="emerald" />
           <MetricCard label="Short leaders" value={shortRows.length} note="AI SELL symbols" icon={TrendingDown} accent="rose" />
-          <MetricCard label="Rotation spread" value={formatSigned(rotationSpread, 0)} note="Avg long RS minus avg short RS" icon={Gauge} accent={rotationSpread >= 0 ? "emerald" : "rose"} />
+          <MetricCard label="Confidence spread" value={formatPercent(rotationSpread, 0)} note="Avg BUY minus SELL confidence" icon={Gauge} accent={rotationSpread >= 0 ? "emerald" : "rose"} />
         </div>
 
         <div className="mt-3 grid gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
           <MetricCard label="BUY breadth" value={longRows.length} note={`${formatPercent((longRows.length / Math.max(rows.length, 1)) * 100, 0)} of universe`} icon={TrendingUp} accent="emerald" compact />
           <MetricCard label="SELL breadth" value={shortRows.length} note={`${formatPercent((shortRows.length / Math.max(rows.length, 1)) * 100, 0)} of universe`} icon={TrendingDown} accent="rose" compact />
           <MetricCard label="WAIT breadth" value={waitRows.length} note={`${formatPercent((waitRows.length / Math.max(rows.length, 1)) * 100, 0)} of universe`} icon={Activity} accent="amber" compact />
-          <MetricCard label="Top long RS" value={formatSigned(longAvg, 0, "-")} note="BUY subset average" icon={Gauge} accent="emerald" compact />
-          <MetricCard label="Top short RS" value={formatSigned(shortAvg, 0, "-")} note="SELL subset average" icon={Gauge} accent="rose" compact />
+          <MetricCard label="BUY avg confidence" value={formatPercent(longAvg, 0, "-")} note="BUY subset average" icon={Gauge} accent="emerald" compact />
+          <MetricCard label="SELL avg confidence" value={formatPercent(shortAvg, 0, "-")} note="SELL subset average" icon={Gauge} accent="rose" compact />
           <MetricCard label="Universe" value={rows.length} note="Tracked symbols" icon={RadioTower} accent="cyan" compact />
         </div>
 
@@ -72,16 +72,16 @@ export default function RotationPage({ signalRows, watchlist, auto, getSymbolHre
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Rotation leadership" subtitle="Ranked relative strength score">
+          <ChartCard title="Directional confidence" subtitle="Strongest signal confidence by symbol">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={leadership}>
                 <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
                 <XAxis dataKey="symbol" tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
                 <YAxis tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
-                <Tooltip contentStyle={tooltipStyle()} formatter={(value) => [formatSigned(value, 0), "RS"]} />
-                <Bar dataKey="rsScore" radius={[6, 6, 0, 0]}>
+                <Tooltip contentStyle={tooltipStyle()} formatter={(value) => [formatPercent(value, 0), "Confidence"]} />
+                <Bar dataKey="confidence" radius={[6, 6, 0, 0]}>
                   {leadership.map((row) => (
-                    <Cell key={row.symbol} fill={row.rsScore >= 0 ? "#34d399" : "#fb7185"} />
+                    <Cell key={row.symbol} fill={row.type === "BUY" ? "#34d399" : row.type === "SELL" ? "#fb7185" : "#94a3b8"} />
                   ))}
                 </Bar>
               </BarChart>
@@ -115,8 +115,8 @@ function RotationCard({ row, href }) {
         <Pill tone={row.type === "BUY" ? "emerald" : row.type === "SELL" ? "rose" : "slate"}>{row.type}</Pill>
       </div>
       <div className="mt-2.5 grid grid-cols-2 gap-2.5 text-sm">
-        <MiniStat label="RS" value={formatSigned(row.rsScore, 0)} />
         <MiniStat label="Confidence" value={formatPercent(row.confidence, 0)} />
+        <MiniStat label="Risk" value={row.riskLabel} />
       </div>
       <div className="mt-2.5">
         <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
@@ -174,8 +174,8 @@ function LeadList({ title, rows, tone, getSymbolHref }) {
               {row.riskNote ? <div className="mt-1 text-[11px] text-slate-500">{row.riskNote}</div> : null}
             </div>
             <div className="text-right">
-              <div className="text-sm font-semibold text-white">{formatSigned(row.rsScore, 0)}</div>
-              <div className="text-[11px] text-slate-400">{formatPercent(row.confidence, 0)}</div>
+              <div className="text-sm font-semibold text-white">{formatPercent(row.confidence, 0)}</div>
+              <div className="text-[11px] text-slate-400">{row.riskLabel}</div>
             </div>
           </Link>
         ))}

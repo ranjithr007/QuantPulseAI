@@ -3,8 +3,8 @@ import { AlertTriangle, Gauge, PauseCircle, ShieldAlert, ShieldCheck, SlidersHor
 import MetricCard from "../components/ui/MetricCard";
 import Pill from "../components/ui/Pill";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
-import { formatDate, formatInr, formatNumber, formatPercent, safeNumber } from "../utils/formatters";
-import { buildRiskBlockPills, dedupeReasonList } from "../utils/reasonDisplay";
+import { formatInr, formatNumber, formatPercent, safeNumber } from "../utils/formatters";
+import { buildRiskBlockPills } from "../utils/reasonDisplay";
 import { humanizeMachineStatus } from "../utils/text";
 
 export default function RiskControlsPage({
@@ -15,11 +15,10 @@ export default function RiskControlsPage({
   autoDecision,
   selectedDetail,
   selectedRisk,
-  selectedPaperTradeCandidate,
   openTrades,
 }) {
   const state = riskControlState({ auto, autoDecision, selectedDetail, selectedRisk, openTrades });
-  const executor = executorRiskState(selectedPaperTradeCandidate);
+  const riskReasons = autoDecision.reasons || [];
 
   return (
     <section className="border-b border-white/5">
@@ -59,13 +58,6 @@ export default function RiskControlsPage({
             icon={ShieldCheck}
             accent={selectedRisk?.is_usable === false ? "rose" : "cyan"}
           />
-          <MetricCard
-            label="Executor verdict"
-            value={executor.label}
-            note={executor.note}
-            icon={executor.icon}
-            accent={executor.tone}
-          />
         </div>
 
         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-2">
@@ -76,33 +68,10 @@ export default function RiskControlsPage({
             tone={selectedRisk?.is_usable === false ? "rose" : "cyan"}
           />
           <DiagnosticStrip
-            label="Executor truth"
-            value={executor.label}
-            note={executor.note}
-            tone={executor.tone}
-          />
-          <DiagnosticStrip
-            label="Top block"
-            value={topReasonLabel(autoDecision.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
-            note={topReasonNote(autoDecision.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
-            tone={topReasonTone(autoDecision.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
-          />
-          <DiagnosticStrip
-            label="Timing stack"
-            value={humanizeMachineStatus(selectedDetail.timing?.trigger?.status || selectedDetail.entryTrigger?.trigger?.status || selectedDetail.entryTrigger?.status, "Unknown")}
-            note={selectedDetail.timing?.trigger?.reason || selectedDetail.entryTrigger?.trigger?.reason || "No timing explanation available"}
-            tone={timingTone(selectedDetail.timing?.trigger?.status || selectedDetail.entryTrigger?.trigger?.status || selectedDetail.entryTrigger?.status)}
-          />
-        </div>
-
-        <div className="mt-3">
-          <LifecyclePanel
-            stages={paperTradeLifecycle({
-              symbol: view.symbol,
-              eligibilityState: state,
-              selectedPaperTradeCandidate,
-              openTrades,
-            })}
+            label="Top risk block"
+            value={riskReasons[0] || "No active risk blocks"}
+            note={riskReasons.length ? `Risk gate reports ${riskReasons.length} active block(s)` : "Current risk rules report no active blocks"}
+            tone={riskReasons.length ? "rose" : "emerald"}
           />
         </div>
 
@@ -146,17 +115,15 @@ export default function RiskControlsPage({
           </div>
 
           <div className="grid self-start gap-3">
-            <RiskDecisionPanel auto={auto} autoDecision={autoDecision} selectedRisk={selectedRisk} selectedDetail={selectedDetail} symbol={view.symbol} openTrades={openTrades} selectedPaperTradeCandidate={selectedPaperTradeCandidate} />
+            <RiskDecisionPanel auto={auto} autoDecision={autoDecision} selectedRisk={selectedRisk} selectedDetail={selectedDetail} symbol={view.symbol} openTrades={openTrades} />
           </div>
         </div>
       </div>
     </section>
   );
 }
-
-function RiskDecisionPanel({ auto, autoDecision, selectedRisk, selectedDetail, symbol, openTrades, selectedPaperTradeCandidate }) {
+function RiskDecisionPanel({ auto, autoDecision, selectedRisk, selectedDetail, symbol, openTrades }) {
   const state = deriveSelectedEligibilityState({ auto, autoDecision, selectedDetail, selectedRisk, openTrades });
-  const executor = executorRiskState(selectedPaperTradeCandidate);
   const validationErrors = selectedRisk?.validation_errors || [];
   const ignoredReasons = selectedRisk?.ignored_reasons || [];
   const blockPills = buildRiskBlockPills({
@@ -164,17 +131,6 @@ function RiskDecisionPanel({ auto, autoDecision, selectedRisk, selectedDetail, s
     validationErrors,
     ignoredReasons,
   });
-  const executorBlockedReasons = dedupeReasonList(selectedPaperTradeCandidate?.blocked_reasons || []);
-  const entryBand = selectedDetail.timing?.trigger?.confidence_window || selectedDetail.entryTrigger?.trigger?.confidence_window || selectedDetail.prediction?.setup?.confidence_window || selectedDetail.tradeSetup?.setup?.confidence_window || null;
-  const stackConfidence = selectedDetail.timing?.trigger?.stack_confidence ?? selectedDetail.entryTrigger?.trigger?.stack_confidence ?? selectedDetail.multiTimeframe?.confirmation?.stack_confidence ?? null;
-  const predictionStack = selectedDetail.predictionStack?.length ? selectedDetail.predictionStack.join(" / ") : selectedDetail.predictionContext?.prediction_stack?.join(" / ") || selectedDetail.multiTimeframe?.prediction_stack?.join(" / ") || "1h / 2h / 4h / 1d";
-  const timingStack = selectedDetail.timingStack?.length
-    ? selectedDetail.timingStack.join(" / ")
-    : selectedDetail.timing?.trigger?.timing_stack?.join(" / ")
-      || selectedDetail.entryTrigger?.trigger?.timing_stack?.join(" / ")
-      || selectedDetail.multiTimeframe?.timing_stack?.join(" / ")
-      || selectedDetail.multiTimeframe?.entry_stack?.join(" / ")
-      || "No lower-timeframe timing layer";
 
   return (
     <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2">
@@ -192,56 +148,6 @@ function RiskDecisionPanel({ auto, autoDecision, selectedRisk, selectedDetail, s
         <StatusBox label="Size tier" value={humanizeMachineStatus(selectedRisk?.position_tier, "-")} />
         <StatusBox label="Risk %" value={formatPercent(selectedRisk?.risk_percent, 1, "-")} />
         <StatusBox label="Position" value={formatNumber(selectedRisk?.position_size, 2, "-")} />
-      </div>
-
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <StatusBox label="Prediction" value={humanizeMachineStatus(selectedDetail.prediction?.setup?.status || selectedDetail.tradeSetup?.setup?.status, "Unknown")} />
-        <StatusBox label="Timing" value={humanizeMachineStatus(selectedDetail.timing?.trigger?.status || selectedDetail.entryTrigger?.trigger?.status || selectedDetail.entryTrigger?.status, "Unknown")} />
-      </div>
-
-      {entryBand ? (
-        <div className="mt-2 rounded-lg border border-white/10 bg-slate-950/70 p-2">
-          <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Entry band</div>
-          <div className="mt-1.5 text-sm font-medium text-white">
-            {entryBand.min}% - {entryBand.max}% confidence
-          </div>
-          <div className="mt-1 text-xs text-slate-400">Preferred sweet spot {entryBand.preferred}%</div>
-          {stackConfidence !== null && stackConfidence !== undefined ? (
-            <div className="mt-1 text-xs text-slate-400">Stack confidence {Number(stackConfidence).toFixed(2)}%</div>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <StatusBox label="Prediction stack" value={predictionStack} />
-        <StatusBox label="Timing stack" value={timingStack} />
-      </div>
-
-      <div className="mt-2 rounded-lg border border-white/10 bg-slate-950/70 p-2">
-        <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Execution readiness</div>
-        <div className="mt-1.5 text-sm leading-5 text-slate-200">
-          {selectedDetail.timing?.trigger?.reason || selectedDetail.entryTrigger?.trigger?.reason || selectedDetail.prediction?.setup?.reason || selectedDetail.tradeSetup?.setup?.reason || "No execution reason available"}
-        </div>
-      </div>
-
-      <div className="mt-2 rounded-lg border border-white/10 bg-slate-950/70 p-2">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Executor truth</div>
-          <Pill tone={executor.tone}>{executor.label}</Pill>
-        </div>
-        <div className="mt-1.5 text-sm leading-5 text-slate-200">{executor.note}</div>
-        {executorBlockedReasons.length ? (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {executorBlockedReasons.map((reason) => (
-              <Pill key={reason} tone="rose">{reason}</Pill>
-            ))}
-          </div>
-        ) : selectedPaperTradeCandidate ? (
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Pill tone="emerald">No executor blocks</Pill>
-            <Pill tone="cyan">{selectedPaperTradeCandidate.side}</Pill>
-          </div>
-        ) : null}
       </div>
 
       <div className="mt-2 rounded-lg border border-white/10 bg-slate-950/70 p-2">
@@ -285,31 +191,6 @@ function DiagnosticStrip({ label, value, note, tone = "slate" }) {
         <Pill tone={tone}>{value ?? "-"}</Pill>
       </div>
       <div className="mt-1.5 line-clamp-3 text-xs leading-5 text-slate-400" title={note || "-"}>{note || "-"}</div>
-    </div>
-  );
-}
-
-function LifecyclePanel({ stages = [] }) {
-  return (
-    <div className="rounded-lg border border-white/10 bg-slate-900/70 p-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium text-white">Paper-trade lifecycle</div>
-          <div className="text-xs text-slate-500">Where the selected setup sits in the execution pipeline</div>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3">
-        {stages.map((stage) => (
-          <div key={stage.key} className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{stage.label}</div>
-              <Pill tone={stage.tone}>{stage.state}</Pill>
-            </div>
-            <div className="mt-1.5 line-clamp-3 text-xs leading-5 text-slate-400" title={stage.note}>{stage.note}</div>
-            {stage.when ? <div className="mt-1 text-[11px] text-slate-500">{stage.when}</div> : null}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -358,139 +239,4 @@ function riskControlState({ auto, autoDecision, selectedDetail, selectedRisk, op
   if (state.label === "Blocked by confidence") return { ...state, note: `Needs ${auto.minConfidence}% minimum`, icon: Gauge };
   if (state.label === "Eligible" || state.label === "Ready to execute") return { ...state, note: "Risk gates pass", icon: ShieldCheck };
   return { ...state, icon: SlidersHorizontal };
-}
-
-function executorRiskState(candidate) {
-  if (!candidate) {
-    return {
-      label: "No queued plan",
-      note: "No OPEN trade plan is currently queued for the executor on this symbol.",
-      tone: "amber",
-      icon: AlertTriangle,
-    };
-  }
-
-  if (candidate.eligible) {
-    return {
-      label: "Executor ready",
-      note: "Queued OPEN trade plan matches current backend checks.",
-      tone: "emerald",
-      icon: ShieldCheck,
-    };
-  }
-
-  return {
-    label: "Executor blocked",
-    note: candidate.blocked_reasons?.[0] || "Queued OPEN trade plan is blocked.",
-    tone: "rose",
-    icon: ShieldAlert,
-  };
-}
-
-function topReasonLabel(riskReasons = [], executorReasons = []) {
-  const reason = (riskReasons && riskReasons[0]) || (executorReasons && executorReasons[0]);
-  return reason || "No active blocks";
-}
-
-function topReasonNote(riskReasons = [], executorReasons = []) {
-  if (riskReasons?.length) return `Risk gate reports ${riskReasons.length} active block(s)`;
-  if (executorReasons?.length) return `Executor reports ${executorReasons.length} active block(s)`;
-  return "No active risk or executor blocks";
-}
-
-function topReasonTone(riskReasons = [], executorReasons = []) {
-  if (riskReasons?.length || executorReasons?.length) return "rose";
-  return "emerald";
-}
-
-function timingTone(status) {
-  const value = String(status || "").toUpperCase();
-  if (value === "READY" || value === "TRIGGERED" || value === "ACTIVE") return "emerald";
-  if (value === "WAIT") return "amber";
-  return "slate";
-}
-
-function paperTradeLifecycle({ symbol, eligibilityState, selectedPaperTradeCandidate, openTrades = [] }) {
-  const selectedOpenTrade = openTrades.find((trade) => String(trade?.symbol || "").toUpperCase() === String(symbol || "").toUpperCase());
-  const eligible = ["Eligible", "Ready to execute"].includes(String(eligibilityState?.label || ""));
-  const candidateExists = Boolean(selectedPaperTradeCandidate);
-  const executorReady = Boolean(selectedPaperTradeCandidate?.eligible);
-  const openNow = Boolean(selectedOpenTrade);
-  const queuedAt = selectedPaperTradeCandidate?.trade_plan?.created_at || null;
-  const executorCheckedAt = selectedPaperTradeCandidate?.risk_decision?.created_at || queuedAt || null;
-  const openedAt = selectedOpenTrade?.opened_at || selectedOpenTrade?.created_at || null;
-  const riskFreshness = selectedPaperTradeCandidate?.risk_decision?.freshness || null;
-  const riskStale = Boolean(riskFreshness?.is_stale);
-  const staleNote = staleFreshnessNote(riskFreshness, "Risk decision");
-
-  return [
-    {
-      key: "eligible",
-      label: "1. Eligible",
-      state: eligible ? (riskStale ? "Stale" : "Done") : "Blocked",
-      tone: eligible ? (riskStale ? "amber" : "emerald") : "rose",
-      note: eligible
-        ? (riskStale ? `Signal passed earlier, but ${staleNote}.` : "Signal passed the current auto/risk gate.")
-        : (eligibilityState?.note || "Signal has not passed the gate."),
-      when: stageTimestampLabel(executorCheckedAt || queuedAt),
-    },
-    {
-      key: "queued",
-      label: "2. Queued",
-      state: candidateExists ? (riskStale && !openNow ? "Stale" : "Done") : "Waiting",
-      tone: candidateExists ? (riskStale && !openNow ? "amber" : "emerald") : "amber",
-      note: candidateExists
-        ? (riskStale && !openNow ? `An OPEN paper-trade candidate exists, but ${staleNote}.` : "An OPEN paper-trade candidate exists for this symbol/side.")
-        : "No OPEN paper-trade candidate is queued yet.",
-      when: stageTimestampLabel(queuedAt),
-    },
-    {
-      key: "executor",
-      label: "3. Executor ready",
-      state: executorReady ? (riskStale ? "Stale risk" : "Done") : candidateExists ? (riskStale ? "Stale risk" : "Blocked") : "Waiting",
-      tone: executorReady ? (riskStale ? "amber" : "emerald") : candidateExists ? (riskStale ? "amber" : "rose") : "amber",
-      note: executorReady
-        ? (riskStale ? `Queued candidate would be ready, but ${staleNote}.` : "Queued candidate passes executor checks.")
-        : candidateExists
-          ? (riskStale ? "Executor needs a fresh risk decision before treating this candidate as ready." : (selectedPaperTradeCandidate?.blocked_reasons?.[0] || "Queued candidate is blocked by executor checks."))
-          : "Executor has nothing to evaluate yet.",
-      when: stageTimestampLabel(executorCheckedAt),
-    },
-    {
-      key: "opened",
-      label: "4. Opened",
-      state: openNow ? "Live" : "Waiting",
-      tone: openNow ? "cyan" : "amber",
-      note: openNow ? "A futures paper trade is currently open for this symbol." : "No open futures paper trade is active for this symbol.",
-      when: stageTimestampLabel(openedAt),
-    },
-    {
-      key: "closed",
-      label: "5. Closed",
-      state: "Track in PnL",
-      tone: "slate",
-      note: "Closed lifecycle outcomes appear in the PnL and trade history views.",
-    },
-  ];
-}
-
-function stageTimestampLabel(value) {
-  if (!value) return null;
-  return `Updated ${formatDate(value)}`;
-}
-
-function staleFreshnessNote(freshness, label) {
-  const ageSeconds = Number(freshness?.data_age_seconds);
-  if (Number.isFinite(ageSeconds) && ageSeconds > 0) {
-    return `${label.toLowerCase()} is stale (${formatAgeShort(ageSeconds)} old)`;
-  }
-  return `${label.toLowerCase()} is stale`;
-}
-
-function formatAgeShort(seconds) {
-  const total = Math.max(0, Number(seconds) || 0);
-  if (total < 60) return `${Math.round(total)}s`;
-  if (total < 3600) return `${Math.round(total / 60)}m`;
-  if (total < 86400) return `${Math.round(total / 3600)}h`;
-  return `${Math.round(total / 86400)}d`;
 }

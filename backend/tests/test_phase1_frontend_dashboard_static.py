@@ -46,10 +46,23 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         signal_table = (
             FRONTEND_ROOT / "src" / "components" / "MarketSignalTable.jsx"
         ).read_text(encoding="utf-8")
+        trading_view = (
+            FRONTEND_ROOT
+            / "src"
+            / "components"
+            / "signal-details"
+            / "AdvancedTradingViewPanel.jsx"
+        ).read_text(encoding="utf-8")
 
         self.assertIn('@import "tailwindcss"', styles)
         self.assertIn("--panel", styles)
-        self.assertIn("market-tape-track", styles)
+        self.assertIn("color-scheme: light", styles)
+        self.assertIn("--color-slate-950: #f8fafc", styles)
+        self.assertIn("--color-slate-900: #ffffff", styles)
+        self.assertIn("market-tape-viewport", styles)
+        self.assertNotIn("market-tape-track", styles)
+        self.assertIn('theme: "light"', trading_view)
+        self.assertIn('backgroundColor: "rgba(255, 255, 255, 1)"', trading_view)
         self.assertIn("xl:grid-cols", dashboard)
         self.assertIn("overflow-x-auto", signal_table)
         self.assertIn("<table", signal_table)
@@ -141,6 +154,38 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('const IST_TIME_ZONE = "Asia/Kolkata"', formatters)
         self.assertIn('`${raw}Z`', formatters)
         self.assertIn(')} IST`', formatters)
+        self.assertIn('background: "#ffffff"', formatters)
+
+    def test_redundant_views_and_repeated_rows_are_removed(self):
+        main = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
+        header = (
+            FRONTEND_ROOT / "src" / "components" / "DashboardHeader.jsx"
+        ).read_text(encoding="utf-8")
+        dashboard_api = (
+            FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js"
+        ).read_text(encoding="utf-8")
+        dashboard_data = (
+            FRONTEND_ROOT / "src" / "hooks" / "useDashboardData.jsx"
+        ).read_text(encoding="utf-8")
+        backtest = (
+            FRONTEND_ROOT / "src" / "pages" / "BacktestPage.jsx"
+        ).read_text(encoding="utf-8")
+        rotation = (
+            FRONTEND_ROOT / "src" / "pages" / "RotationPage.jsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn('label: "Trading Details"', header)
+        self.assertIn('path="/trading-details"', main)
+        self.assertIn('<Navigate to={buildPageUrl("auto-trading", view)} replace />', main)
+        self.assertIn('backtest: { signals: true }', dashboard_api)
+        self.assertIn("Paper-trading PNL is intentionally excluded", backtest)
+        self.assertNotIn("paperTradeHistory", backtest)
+        self.assertNotIn("[0, 1]", header)
+        self.assertNotIn('dataKey="rsScore"', rotation)
+        self.assertIn('dataKey="confidence"', rotation)
+        self.assertIn("currentTimeframe", dashboard_data)
+        self.assertIn("currentMode", dashboard_data)
+        self.assertIn("const seenIds = new Set()", dashboard_data)
 
     def test_dashboard_layout_receives_paper_wallet_before_rendering_pnl_routes(self):
         source = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
@@ -161,6 +206,9 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
 
     def test_risk_controls_expose_only_governed_account_limit_ranges(self):
         main = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
+        auto_trading = (
+            FRONTEND_ROOT / "src" / "pages" / "AutoTradingPage.jsx"
+        ).read_text(encoding="utf-8")
         automation = (
             FRONTEND_ROOT / "src" / "components" / "AutomationSection.jsx"
         ).read_text(encoding="utf-8")
@@ -174,6 +222,11 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertNotIn("max={20}", automation)
         self.assertNotIn("max={15}", risk_controls)
         self.assertNotIn("max={20}", risk_controls)
+        self.assertIn("Executor verdict", auto_trading)
+        self.assertIn("<LifecyclePanel", auto_trading)
+        self.assertNotIn("Executor verdict", risk_controls)
+        self.assertNotIn("<LifecyclePanel", risk_controls)
+        self.assertNotIn("Execution readiness", risk_controls)
 
 
 if __name__ == "__main__":

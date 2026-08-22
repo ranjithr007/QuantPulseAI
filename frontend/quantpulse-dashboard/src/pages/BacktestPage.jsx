@@ -33,16 +33,6 @@ const COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"
 export default function BacktestPage({
   view,
   selectedDetail,
-  tradeHistory,
-  equitySeries,
-  pnlBySymbol,
-  dailyPnl,
-  weeklyPnl,
-  monthlyPnl,
-  maxDrawdown,
-  winningTrades,
-  losingTrades,
-  winRate,
 }) {
   const [engineSummary, setEngineSummary] = useState(null);
   const [engineError, setEngineError] = useState("");
@@ -80,32 +70,31 @@ export default function BacktestPage({
   const phase2Report = phase2ReportSummary?.report || null;
   const engineTrades = engineResult?.trades || [];
   const displayTradeHistory = useMemo(() => {
-    if (!engineTrades.length) return tradeHistory;
     return [...engineTrades].sort((a, b) => tradeDateValue(b) - tradeDateValue(a));
-  }, [engineTrades, tradeHistory]);
-  const displayedDailyPnl = engineTrades.length ? sumTradesWithinDays(engineTrades, 1) : dailyPnl;
-  const displayedWeeklyPnl = engineTrades.length ? sumTradesWithinDays(engineTrades, 7) : weeklyPnl;
-  const displayedMonthlyPnl = engineTrades.length ? sumTradesWithinDays(engineTrades, 30) : monthlyPnl;
-  const displayedWinningTrades = engineResult?.wins ?? winningTrades;
-  const displayedLosingTrades = engineResult?.losses ?? losingTrades;
-  const displayedWinRate = engineResult?.win_rate ?? winRate;
-  const displayedMaxDrawdown = engineResult?.max_drawdown ?? maxDrawdown;
+  }, [engineTrades]);
+  const displayedDailyPnl = sumTradesWithinDays(engineTrades, 1);
+  const displayedWeeklyPnl = sumTradesWithinDays(engineTrades, 7);
+  const displayedMonthlyPnl = sumTradesWithinDays(engineTrades, 30);
+  const displayedWinningTrades = engineResult?.wins ?? 0;
+  const displayedLosingTrades = engineResult?.losses ?? 0;
+  const displayedWinRate = engineResult?.win_rate ?? 0;
+  const displayedMaxDrawdown = engineResult?.max_drawdown ?? 0;
   const displayedPnlBySymbol = useMemo(() => {
-    if (!engineTrades.length) return pnlBySymbol;
+    if (!engineTrades.length) return [];
     return [{
       name: view.symbol,
       value: Number(engineTrades.reduce((sum, trade) => sum + tradePnlValue(trade), 0).toFixed(2)),
     }];
-  }, [engineTrades, pnlBySymbol, view.symbol]);
+  }, [engineTrades, view.symbol]);
   const dailySeries = buildDailyPnlSeries(displayTradeHistory);
   const displayedEquitySeries = useMemo(() => {
     const engineSeries = engineResult?.equity_curve;
-    if (!engineSeries?.length) return equitySeries;
+    if (!engineSeries?.length) return [];
     return engineSeries.map((point) => ({
       label: formatDate(point.label, point.label),
       equity: safeNumber(point.equity, 0),
     }));
-  }, [engineResult, equitySeries]);
+  }, [engineResult]);
   const phase2ScopeTimeframeOptions = useMemo(() => {
     return Array.from(
       new Set((phase2ScopeSummary || []).map((item) => item?.scope?.timeframe).filter(Boolean))
@@ -147,7 +136,7 @@ export default function BacktestPage({
   ];
   const totalClosed = engineResult?.total_trades ?? displayTradeHistory.length;
   const expectancy = calculateExpectancy(displayTradeHistory);
-  const { signalSide, signalSideSource } = deriveBacktestSignalSide(selectedDetail?.signalType, view.symbol, tradeHistory);
+  const { signalSide, signalSideSource } = deriveBacktestSignalSide(selectedDetail?.signalType, view.symbol, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -365,10 +354,17 @@ export default function BacktestPage({
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Strategy replay and performance</h2>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Pill tone="violet">REPLAY ONLY</Pill>
             <Pill tone="cyan">{totalClosed} closed trades</Pill>
             <Pill tone={displayedWinRate >= 50 ? "emerald" : "amber"}>{formatPercent(displayedWinRate, 0)} win rate</Pill>
           </div>
         </div>
+
+        {!engineResult ? (
+          <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100">
+            No replay result is loaded. Paper-trading PNL is intentionally excluded from this page.
+          </div>
+        ) : null}
 
         <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
           <MetricCard label="Daily PNL" value={formatSigned(displayedDailyPnl)} note="Closed trades" icon={Activity} accent="cyan" />
@@ -1147,7 +1143,7 @@ export default function BacktestPage({
               <BarChart data={displayedPnlBySymbol} layout="vertical">
                 <CartesianGrid stroke="rgba(148,163,184,0.12)" horizontal={false} />
                 <XAxis type="number" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
-                <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#cbd5e1", fontSize: 11 }} width={80} />
+                <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#475569", fontSize: 11 }} width={80} />
                 <Tooltip contentStyle={tooltipStyle()} formatter={(value) => [formatSigned(value), "PNL"]} />
                 <Bar dataKey="value" radius={[0, 8, 8, 0]}>
                   {displayedPnlBySymbol.map((entry, index) => (

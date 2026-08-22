@@ -292,7 +292,7 @@ export default function PnLSection({
                 <BarChart data={pnlBySymbol} layout="vertical">
                   <CartesianGrid stroke="rgba(148,163,184,0.12)" horizontal={false} />
                   <XAxis type="number" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
-                  <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#cbd5e1", fontSize: 11 }} width={80} />
+                  <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#475569", fontSize: 11 }} width={80} />
                   <Tooltip formatter={(value) => [formatSigned(value), "PnL"]} contentStyle={tooltipStyle()} />
                   <Bar dataKey="value" radius={[0, 8, 8, 0]}>
                     {pnlBySymbol.map((entry, index) => (

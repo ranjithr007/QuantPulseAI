@@ -20,7 +20,6 @@ const importRotationPage = () => import("./pages/RotationPage");
 const importRsRankingPage = () => import("./pages/RsRankingPage");
 const importSignalsPage = () => import("./pages/SignalsPage");
 const importStageAnalysisPage = () => import("./pages/StageAnalysisPage");
-const importTradingDetailsPage = () => import("./pages/TradingDetailsPage");
 
 const AutoTradingPage = React.lazy(importAutoTradingPage);
 const BacktestPage = React.lazy(importBacktestPage);
@@ -35,7 +34,6 @@ const RotationPage = React.lazy(importRotationPage);
 const RsRankingPage = React.lazy(importRsRankingPage);
 const SignalsPage = React.lazy(importSignalsPage);
 const StageAnalysisPage = React.lazy(importStageAnalysisPage);
-const TradingDetailsPage = React.lazy(importTradingDetailsPage);
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
 // Entry scanning and active trading decisions use the higher-timeframe stack.
@@ -54,7 +52,6 @@ const PAGES = [
   "signals",
   "market-trend",
   "market-move",
-  "trading-details",
   "coin-details",
   "risk-controls",
   "auto-trading",
@@ -72,7 +69,6 @@ const ROUTE_PRELOADERS = [
   importMarketTrendPage,
   importMarketMovePage,
   importCoinDetailsPage,
-  importTradingDetailsPage,
   importRiskControlsPage,
   importAutoTradingPage,
   importPnlPage,
@@ -124,7 +120,7 @@ function getPageFromPath(pathname) {
   if (path.startsWith("/signals")) return "signals";
   if (path.startsWith("/market-trend")) return "market-trend";
   if (path.startsWith("/market-move")) return "market-move";
-  if (path.startsWith("/trading-details")) return "trading-details";
+  if (path.startsWith("/trading-details")) return "auto-trading";
   if (path.startsWith("/market-scan")) return "market-scan";
   return "dashboard";
 }
@@ -152,7 +148,6 @@ function buildPageUrl(page, view) {
   if (page === "signals") return `/signals?${params.toString()}`;
   if (page === "market-trend") return `/market-trend?${params.toString()}`;
   if (page === "market-move") return `/market-move?${params.toString()}`;
-  if (page === "trading-details") return `/trading-details?${params.toString()}`;
   return `/market-scan?${params.toString()}`;
 }
 
@@ -190,7 +185,6 @@ function DashboardApp({ username, onLogout }) {
     autoDecision,
     openTrades,
     paperWallet,
-    selectedPipeline,
     candleSeries,
     volumeSeries,
     selectedRisk,
@@ -376,7 +370,6 @@ function DashboardApp({ username, onLogout }) {
       onExecutePaperTrades={handleExecutePaperTrades}
       openTrades={openTrades}
       paperWallet={paperWallet}
-      selectedPipeline={selectedPipeline}
       candleSeries={candleSeries}
       volumeSeries={volumeSeries}
       selectedRisk={selectedRisk}
@@ -427,7 +420,6 @@ function DashboardLayout({
   onExecutePaperTrades,
   openTrades,
   paperWallet,
-  selectedPipeline,
   candleSeries,
   volumeSeries,
   selectedRisk,
@@ -606,38 +598,7 @@ function DashboardLayout({
             />
             <Route
               path="/trading-details"
-              element={
-                <TradingDetailsPage
-                  view={view}
-                  symbols={SYMBOLS}
-                  auto={auto}
-                  setAuto={setAuto}
-                  onEmergencyStop={onEmergencyStop}
-                  autoDecision={autoDecision}
-                  selectedDetail={selectedDetail}
-                  openTrades={openTrades}
-                  selectedRisk={selectedRisk}
-                  selectedPaperTradeCandidate={selectedPaperTradeCandidate}
-                  onExecutePaperTrades={onExecutePaperTrades}
-                  selectedPipeline={selectedPipeline}
-                  loading={loading}
-                  realizedPnl={realizedPnl}
-                  unrealizedPnl={unrealizedPnl}
-                  dailyPnl={dailyPnl}
-                  weeklyPnl={weeklyPnl}
-                  monthlyPnl={monthlyPnl}
-                  maxDrawdown={maxDrawdown}
-                  winningTrades={winningTrades}
-                  losingTrades={losingTrades}
-                  winRate={winRate}
-                  tradeHistory={tradeHistory}
-                  openPositions={openPositions}
-                  paperWallet={paperWallet}
-                  pnlBySymbol={pnlBySymbol}
-                  pnlBySide={pnlBySide}
-                  equitySeries={equitySeries}
-                />
-              }
+              element={<Navigate to={buildPageUrl("auto-trading", view)} replace />}
             />
             <Route
               path="/risk-controls"
@@ -650,7 +611,6 @@ function DashboardLayout({
                   autoDecision={autoDecision}
                   selectedDetail={selectedDetail}
                   selectedRisk={selectedRisk}
-                  selectedPaperTradeCandidate={selectedPaperTradeCandidate}
                   openTrades={openTrades}
                 />
               }
@@ -703,16 +663,6 @@ function DashboardLayout({
                 <BacktestPage
                   view={view}
                   selectedDetail={selectedDetail}
-                  tradeHistory={tradeHistory}
-                  equitySeries={equitySeries}
-                  pnlBySymbol={pnlBySymbol}
-                  dailyPnl={dailyPnl}
-                  weeklyPnl={weeklyPnl}
-                  monthlyPnl={monthlyPnl}
-                  maxDrawdown={maxDrawdown}
-                  winningTrades={winningTrades}
-                  losingTrades={losingTrades}
-                  winRate={winRate}
                 />
               }
             />

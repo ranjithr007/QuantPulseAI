@@ -30,7 +30,6 @@ const PAGE_ITEMS = [
   { id: "signals", label: "Signals", shortLabel: "Signals", icon: TrendingUp },
   { id: "market-trend", label: "Market Trend", shortLabel: "Trend", icon: RadioTower },
   { id: "market-move", label: "Market Move", shortLabel: "Move", icon: Zap },
-  { id: "trading-details", label: "Trading Details", shortLabel: "Trading", icon: ShieldCheck },
   { id: "coin-details", label: "Futures Details", shortLabel: "Futures", icon: Activity },
   { id: "risk-controls", label: "Risk Controls", shortLabel: "Risk", icon: ShieldCheck },
   { id: "auto-trading", label: "Auto Trading", shortLabel: "Auto", icon: Lock },
@@ -61,7 +60,7 @@ export default function DashboardHeader({
 }) {
   return (
     <>
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 flex-col border-r border-white/10 bg-[#07101f] lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 flex-col border-r border-white/10 bg-slate-900 lg:flex">
         <div className="border-b border-white/10 px-4 py-4">
           <Link to={getPageHref("dashboard")} className="flex min-w-0 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
@@ -291,35 +290,30 @@ function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
           <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-cyan-300 shadow-[0_0_0_3px_rgba(34,211,238,0.12)]" />
           Live Scan
         </div>
-        <div className="market-tape-viewport min-w-0 flex-1 overflow-hidden">
-          <div className="market-tape-track flex w-max items-center">
-            {[0, 1].map((group) => (
-              <div key={group} className="flex items-center gap-1.5 pr-1.5" aria-hidden={group === 1 ? "true" : undefined}>
-                {rows.map((row) => (
-                  <Link
-                    key={`${group}-${row.symbol}`}
-                    to={getPageHref("coin-details", { ...view, symbol: row.symbol })}
-                    tabIndex={group === 1 ? -1 : undefined}
-                    className="flex h-10 min-w-[110px] shrink-0 flex-col justify-center rounded-lg border border-white/5 bg-slate-950/70 px-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-w-[124px]"
+        <div className="market-tape-viewport min-w-0 flex-1 overflow-x-auto scrollbar-none">
+          <div className="flex w-max items-center gap-1.5 pr-1.5">
+            {rows.map((row) => (
+              <Link
+                key={row.symbol}
+                to={getPageHref("coin-details", { ...view, symbol: row.symbol })}
+                className="flex h-10 min-w-[110px] shrink-0 flex-col justify-center rounded-lg border border-white/5 bg-slate-950/70 px-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-w-[124px]"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-white">{row.symbol}</span>
+                  <span
+                    className={clsx(
+                      "text-[10px] font-semibold uppercase tracking-[0.14em]",
+                      row.type === "BUY" ? "text-emerald-300" : row.type === "SELL" ? "text-rose-300" : "text-slate-400"
+                    )}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold text-white">{row.symbol}</span>
-                      <span
-                        className={clsx(
-                          "text-[10px] font-semibold uppercase tracking-[0.14em]",
-                          row.type === "BUY" ? "text-emerald-300" : row.type === "SELL" ? "text-rose-300" : "text-slate-400"
-                        )}
-                      >
-                        {row.type}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px]">
-                      <span className="text-slate-400">{formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}</span>
-                      <span className="text-cyan-200">{formatPercent(row.confidence, 1, "-")}</span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
+                    {row.type}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px]">
+                  <span className="text-slate-400">{formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}</span>
+                  <span className="text-cyan-200">{formatPercent(row.confidence, 1, "-")}</span>
+                </div>
+              </Link>
             ))}
           </div>
         </div>

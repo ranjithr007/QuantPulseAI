@@ -43,7 +43,14 @@ def _risk_error_payload(operation, symbol, exc, stale_after_seconds=900):
     }
 
 
-def _build_computed_risk(signal, max_risk_per_trade, stale_after_seconds):
+def _build_computed_risk(
+    signal,
+    max_risk_per_trade,
+    stale_after_seconds,
+    *,
+    timeframe=None,
+    mode=None,
+):
     if not isinstance(signal, dict):
         return None
 
@@ -93,6 +100,8 @@ def _build_computed_risk(signal, max_risk_per_trade, stale_after_seconds):
 
     return {
         "symbol": result.get("symbol") or signal.get("symbol"),
+        "timeframe": timeframe or signal.get("timeframe"),
+        "mode": mode,
         "thesis_id": signal.get("thesis_id"),
         "source": "computed_current",
         "status": "current_valid" if approved else "current_invalid",
@@ -221,7 +230,13 @@ def get_risk_bundle(
     try:
         signal = build_signal_payload(db, symbol, timeframe=timeframe, stale_after_seconds=stale_after_seconds)
         risk = build_risk_payload(db, symbol, stale_after_seconds=stale_after_seconds)
-        computed_risk = _build_computed_risk(signal, max_risk_per_trade, stale_after_seconds)
+        computed_risk = _build_computed_risk(
+            signal,
+            max_risk_per_trade,
+            stale_after_seconds,
+            timeframe=timeframe,
+            mode=mode,
+        )
         multi_timeframe = build_multi_timeframe_signal_payload(
             db,
             symbol,

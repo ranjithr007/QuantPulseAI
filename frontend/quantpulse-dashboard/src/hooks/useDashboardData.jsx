@@ -58,13 +58,19 @@ function createInitialDashboardData() {
   };
 }
 
-function preferCurrentComputedRisk(currentRisk, incomingRisk, symbol) {
-  const normalizedSymbol = String(symbol || "").trim().toUpperCase();
+function preferCurrentComputedRisk(currentRisk, incomingRisk, view) {
+  const normalizedSymbol = String(view?.symbol || "").trim().toUpperCase();
+  const normalizedTimeframe = String(view?.timeframe || "").trim().toLowerCase();
+  const normalizedMode = String(view?.mode || "").trim().toLowerCase();
   const currentSymbol = String(currentRisk?.symbol || "").trim().toUpperCase();
+  const currentTimeframe = String(currentRisk?.timeframe || "").trim().toLowerCase();
+  const currentMode = String(currentRisk?.mode || "").trim().toLowerCase();
 
   if (
     currentRisk?.source === "computed_current" &&
-    currentSymbol === normalizedSymbol
+    currentSymbol === normalizedSymbol &&
+    currentTimeframe === normalizedTimeframe &&
+    currentMode === normalizedMode
   ) {
     return currentRisk;
   }
@@ -89,7 +95,7 @@ function mergeSelectedBundleData(current, view, bundle) {
       risk: preferCurrentComputedRisk(
         current.selected.risk,
         bundle?.risk,
-        view.symbol
+        view
       ),
       autoDecision: bundle?.autoDecision || null,
       aiScores: bundle?.aiScores || null,
@@ -195,9 +201,19 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
 }
 
 function scopePaperTrades(records) {
-  return (records || []).filter((trade) =>
-    OFFICIAL_PAPER_ENTRY_TIMEFRAMES.has(String(trade?.entry_timeframe || "").trim())
-  );
+  const seenIds = new Set();
+  return (records || []).filter((trade) => {
+    if (!OFFICIAL_PAPER_ENTRY_TIMEFRAMES.has(String(trade?.entry_timeframe || "").trim())) {
+      return false;
+    }
+
+    const id = trade?.id;
+    if (id === null || id === undefined) return true;
+    const identity = String(id);
+    if (seenIds.has(identity)) return false;
+    seenIds.add(identity);
+    return true;
+  });
 }
 
 function buildScopedPaperPerformance(performance, openTrades, closedTrades) {
@@ -588,7 +604,6 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const selectedAI = data.selected.aiScores || null;
   const selectedDerivatives = data.selected.derivatives || null;
   const selectedPaperTradeCandidates = data.selected.paperTradeCandidates || [];
-  const selectedPipeline = data.pipeline || null;
   const watchlist = data.watchlist;
   const performance = data.performance || {};
   const accountRisk = data.accountRisk || null;
@@ -789,7 +804,6 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     autoDecision,
     openTrades,
     paperWallet,
-    selectedPipeline,
     candleSeries,
     volumeSeries,
     selectedRisk,

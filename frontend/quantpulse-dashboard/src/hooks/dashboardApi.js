@@ -21,20 +21,17 @@ const PAGE_DATA_NEEDS = {
   "market-trend": { signals: true },
   "market-move": { signals: true },
   "coin-details": { signals: true },
-  "trading-details": { pipeline: true, paper: true, risk: true, signals: true },
   "risk-controls": { paper: true, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },
   pnl: { paper: true, signals: true },
-  backtest: { paper: true, signals: true },
+  backtest: { signals: true },
   rotation: { watchlist: true, signals: true },
   "rs-ranking": { watchlist: true, signals: true },
   "stage-analysis": { watchlist: true, signals: true },
 };
 const SYMBOL_SCOPED_PAPER_PAGES = new Set([
-  "trading-details",
   "risk-controls",
   "auto-trading",
-  "backtest",
 ]);
 
 export function liveMarketWebSocketUrl(symbols = []) {

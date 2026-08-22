@@ -1,17 +1,55 @@
 @import "tailwindcss";
 
+/* QuantPulseAI uses one shared palette across every dashboard surface. The
+   JSX keeps semantic utility names while this theme maps the former dark
+   surfaces and light foregrounds to an accessible light presentation. */
+@theme {
+  --color-white: #0f172a;
+
+  --color-slate-950: #f8fafc;
+  --color-slate-900: #ffffff;
+  --color-slate-800: #e2e8f0;
+  --color-slate-300: #334155;
+  --color-slate-200: #1e293b;
+  --color-slate-100: #0f172a;
+
+  --color-cyan-400: #0891b2;
+  --color-cyan-300: #0e7490;
+  --color-cyan-200: #155e75;
+  --color-cyan-100: #164e63;
+
+  --color-emerald-400: #059669;
+  --color-emerald-300: #047857;
+  --color-emerald-200: #047857;
+  --color-emerald-100: #065f46;
+
+  --color-amber-400: #d97706;
+  --color-amber-300: #b45309;
+  --color-amber-200: #92400e;
+  --color-amber-100: #78350f;
+
+  --color-rose-400: #e11d48;
+  --color-rose-300: #be123c;
+  --color-rose-200: #9f1239;
+  --color-rose-100: #881337;
+
+  --color-blue-200: #1d4ed8;
+  --color-violet-300: #6d28d9;
+  --color-violet-200: #6d28d9;
+}
+
 :root {
-  color-scheme: dark;
-  --bg: #050816;
-  --panel: #0b1220;
-  --panel-2: #11192a;
-  --line: rgba(148, 163, 184, 0.16);
-  --text: #e5eef8;
-  --muted: #8fa2bb;
-  --cyan: #22d3ee;
-  --emerald: #34d399;
-  --amber: #f59e0b;
-  --rose: #fb7185;
+  color-scheme: light;
+  --bg: #f1f5f9;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --line: rgba(15, 23, 42, 0.12);
+  --text: #0f172a;
+  --muted: #64748b;
+  --cyan: #0891b2;
+  --emerald: #059669;
+  --amber: #d97706;
+  --rose: #e11d48;
 }
 
 html,
@@ -32,9 +70,9 @@ body {
     "Segoe UI",
     sans-serif;
   background:
-    radial-gradient(circle at top, rgba(34, 211, 238, 0.12), transparent 28%),
-    radial-gradient(circle at 75% 0%, rgba(52, 211, 153, 0.08), transparent 24%),
-    linear-gradient(180deg, #020617 0%, #050816 100%);
+    radial-gradient(circle at top, rgba(8, 145, 178, 0.1), transparent 30%),
+    radial-gradient(circle at 75% 0%, rgba(5, 150, 105, 0.07), transparent 26%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
   color: var(--text);
 }
 
@@ -78,8 +116,8 @@ select {
 }
 
 ::selection {
-  background: rgba(34, 211, 238, 0.3);
-  color: #fff;
+  background: rgba(8, 145, 178, 0.24);
+  color: #0f172a;
 }
 
 .scrollbar-none {
@@ -92,43 +130,13 @@ select {
 }
 
 .market-tape-viewport {
-  mask-image: linear-gradient(90deg, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
-}
-
-.market-tape-track {
-  animation: market-tape-scroll 28s linear infinite;
-  will-change: transform;
-}
-
-.market-tape:hover .market-tape-track,
-.market-tape:focus-within .market-tape-track {
-  animation-play-state: paused;
-}
-
-@keyframes market-tape-scroll {
-  from {
-    transform: translateX(0);
-  }
-
-  to {
-    transform: translateX(-50%);
-  }
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .market-tape-viewport {
-    overflow-x: auto;
-    mask-image: none;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
   .market-tape-viewport::-webkit-scrollbar {
     display: none;
-  }
-
-  .market-tape-track {
-    animation: none;
   }
 }
 

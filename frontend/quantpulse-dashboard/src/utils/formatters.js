@@ -128,10 +128,11 @@ export function safeNumber(value, fallback = 0) {
 
 export function tooltipStyle() {
   return {
-    background: "#020617",
-    border: "1px solid rgba(255,255,255,0.1)",
+    background: "#ffffff",
+    border: "1px solid rgba(15,23,42,0.12)",
     borderRadius: 16,
-    color: "#e2e8f0",
+    color: "#0f172a",
+    boxShadow: "0 12px 30px rgba(15,23,42,0.12)",
   };
 }
 
