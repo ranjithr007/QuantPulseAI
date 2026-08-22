@@ -2,17 +2,24 @@ from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.trading.futures_cost_model import trade_cost_profile
 
 
-PAPER_STAGED_EXIT_POLICY = "PAPER_STAGED_EXIT_V1"
+PAPER_STAGED_EXIT_POLICY = "PAPER_STAGED_EXIT_V2"
 PAPER_EXIT_MONITOR_TIMEFRAME = "5m"
+LEGACY_PAPER_STAGED_EXIT_POLICY = "PAPER_STAGED_EXIT_V1"
 LEGACY_BTC_1H_STAGED_EXIT_POLICY = "BTC_1H_STAGED_V1"
 STAGED_EXIT_POLICIES = frozenset(
-    {PAPER_STAGED_EXIT_POLICY, LEGACY_BTC_1H_STAGED_EXIT_POLICY}
+    {
+        PAPER_STAGED_EXIT_POLICY,
+        LEGACY_PAPER_STAGED_EXIT_POLICY,
+        LEGACY_BTC_1H_STAGED_EXIT_POLICY,
+    }
 )
 PAPER_ENTRY_TIMEFRAMES = frozenset({"1h", "2h", "4h", "1d"})
 PAPER_STOP_LOSS_PERCENT = 0.75
 PAPER_TARGET1_PERCENT = 1.5
 PAPER_TARGET2_PERCENT = 2.3
-PAPER_TARGET1_FRACTION = 0.5
+PAPER_TARGET1_FRACTION = 0.75
+PAPER_TARGET1_STOP_PROGRESS_FRACTION = 0.5
+PAPER_TARGET2_TRAIL_TRIGGER_FRACTION = 0.75
 PAPER_MAX_HOLD_HOURS = 48
 
 # Backward-compatible names for callers and persisted BTC 1h trades created
@@ -37,6 +44,8 @@ def paper_exit_policy_for(symbol, timeframe):
         "target1_percent": PAPER_TARGET1_PERCENT,
         "target2_percent": PAPER_TARGET2_PERCENT,
         "target1_fraction": PAPER_TARGET1_FRACTION,
+        "target1_stop_progress_fraction": PAPER_TARGET1_STOP_PROGRESS_FRACTION,
+        "target2_trail_trigger_fraction": PAPER_TARGET2_TRAIL_TRIGGER_FRACTION,
         "max_hold_hours": PAPER_MAX_HOLD_HOURS,
     }
 
@@ -112,6 +121,26 @@ def approval_target_for_policy(exit_policy, target1, target2):
 
 def is_staged_exit_policy(exit_policy):
     return str(exit_policy or "").strip().upper() in STAGED_EXIT_POLICIES
+
+
+def target1_protection_stop(side, entry, target1, price_precision=None):
+    """Lock half of the entry-to-T1 move after the T1 partial exit."""
+    price = float(entry) + (
+        float(target1) - float(entry)
+    ) * PAPER_TARGET1_STOP_PROGRESS_FRACTION
+    if price_precision is None:
+        return price
+    return round(price, int(price_precision))
+
+
+def target2_trail_trigger(target1, target2, price_precision=None):
+    """Return the price 75% of the way from T1 to T2."""
+    price = float(target1) + (
+        float(target2) - float(target1)
+    ) * PAPER_TARGET2_TRAIL_TRIGGER_FRACTION
+    if price_precision is None:
+        return price
+    return round(price, int(price_precision))
 
 
 def _price_at_percent(entry, percent, precision):

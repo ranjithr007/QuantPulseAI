@@ -44,7 +44,7 @@ def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
             "stop_loss": 100.0 - direction * 0.75,
             "target1": 100.0 + direction * 1.5,
             "target2": 100.0 + direction * 2.3,
-            "exit_policy": "PAPER_STAGED_EXIT_V1",
+            "exit_policy": "PAPER_STAGED_EXIT_V2",
             "created_at": datetime(2026, 8, 11, plan_id, tzinfo=timezone.utc),
         },
         "risk_decision": {

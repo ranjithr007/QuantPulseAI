@@ -30,7 +30,7 @@ import { deriveSelectedEligibilityState } from "../utils/eligibility";
 import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
-const STAGED_EXIT_POLICIES = new Set(["PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
+const STAGED_EXIT_POLICIES = new Set(["PAPER_STAGED_EXIT_V2", "PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
 
 export default function PnLSection({
   realizedPnl,
@@ -567,7 +567,7 @@ function OpenPositionsTable({ openPositions }) {
                 <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.entry_price)}</td>
                 <td className="px-3 py-2.5 text-rose-200">
                   <div>{formatPrice(trade.stop_loss)}</div>
-                  {isBreakEvenProtected(trade) ? <div className="mt-0.5 text-[10px] uppercase tracking-wide text-emerald-300">Break-even</div> : null}
+                  {stopProtectionLabel(trade) ? <div className="mt-0.5 text-[10px] uppercase tracking-wide text-emerald-300">{stopProtectionLabel(trade)}</div> : null}
                 </td>
                 <td className={clsx("px-3 py-2.5", trade.target1_hit_at ? "text-emerald-300" : "text-slate-300")}>
                   <div>{formatPrice(trade.target1)}</div>
@@ -603,12 +603,17 @@ function OpenPositionsTable({ openPositions }) {
   );
 }
 
-function isBreakEvenProtected(trade) {
-  if (!trade?.target1_hit_at) return false;
+function stopProtectionLabel(trade) {
+  if (!trade?.target1_hit_at) return null;
   const entry = Number(trade.entry_price);
   const stop = Number(trade.stop_loss);
-  if (!Number.isFinite(entry) || !Number.isFinite(stop)) return false;
-  return Math.abs(entry - stop) <= Math.max(1e-8, Math.abs(entry) * 1e-8);
+  const target1 = Number(trade.target1);
+  if (!Number.isFinite(entry) || !Number.isFinite(stop)) return null;
+  const tolerance = Math.max(1e-8, Math.abs(entry) * 1e-8);
+  if (Number.isFinite(target1) && Math.abs(target1 - stop) <= tolerance) return "Target 1 protected";
+  if (Math.abs(entry - stop) <= tolerance) return "Break-even";
+  const profitProtected = trade.side === "LONG" ? stop > entry : stop < entry;
+  return profitProtected ? "Profit protected" : null;
 }
 
 function remainingPositionLabel(trade) {
@@ -629,7 +634,7 @@ function exitState(trade) {
 }
 
 function exitPolicyLabel(trade) {
-  if (isStagedExitPolicy(trade)) return "0.75% SL / 1.5% T1 / 2.3% T2";
+  if (isStagedExitPolicy(trade)) return "T1 closes 75% / protected stop / T2 closes 25%";
   return "Original trade policy";
 }
 

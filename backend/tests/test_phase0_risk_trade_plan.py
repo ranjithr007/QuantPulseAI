@@ -215,11 +215,11 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
             timeframe="1h",
         )
 
-        self.assertEqual(plan["exit_policy"], "PAPER_STAGED_EXIT_V1")
+        self.assertEqual(plan["exit_policy"], "PAPER_STAGED_EXIT_V2")
         self.assertEqual(plan["stop_loss"], 63521.77)
         self.assertEqual(plan["target1"], 62103.17)
         self.assertEqual(plan["target2"], 61598.78)
-        self.assertEqual(plan["target1_fraction"], 0.5)
+        self.assertEqual(plan["target1_fraction"], 0.75)
         self.assertEqual(plan["max_hold_hours"], 48)
         self.assertLess(plan["target1_net_risk_reward"], 2.0)
         self.assertGreaterEqual(plan["target2_net_risk_reward"], 2.0)
@@ -268,11 +268,11 @@ class Phase0RiskTradePlanTests(unittest.TestCase):
                     timeframe=timeframe,
                 )
 
-                self.assertEqual(plan["exit_policy"], "PAPER_STAGED_EXIT_V1")
+                self.assertEqual(plan["exit_policy"], "PAPER_STAGED_EXIT_V2")
                 self.assertEqual(plan["stop_loss"], 99.25)
                 self.assertEqual(plan["target1"], 101.5)
                 self.assertEqual(plan["target2"], 102.3)
-                self.assertEqual(plan["target1_fraction"], 0.5)
+                self.assertEqual(plan["target1_fraction"], 0.75)
                 self.assertEqual(plan["max_hold_hours"], 48)
 
     def test_non_entry_timeframe_keeps_default_exit_policy(self):

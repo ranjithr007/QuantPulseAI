@@ -8,7 +8,9 @@ from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
 from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
+from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
 from app.paper_trading.exit_policy import build_policy_trade_levels
+from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
@@ -125,19 +127,40 @@ class PaperTradeRepository:
             return False
 
         target1_complete = getattr(trade, "target1_hit_at", None) is not None
-        desired_stop = (
-            float(trade.entry_price)
-            if target1_complete
-            else levels["stop_loss"]
+        existing_fraction = getattr(trade, "target1_fraction", None)
+        desired_fraction = (
+            float(existing_fraction)
+            if target1_complete and existing_fraction is not None
+            else levels["target1_fraction"]
         )
-        desired_remaining = 0.5 if target1_complete else 1.0
+        existing_remaining = getattr(trade, "remaining_position_fraction", None)
+        desired_remaining = (
+            float(existing_remaining)
+            if target1_complete and existing_remaining is not None
+            else (1.0 - desired_fraction if target1_complete else 1.0)
+        )
+        if target1_complete:
+            midpoint_stop = target1_protection_stop(
+                trade.side,
+                trade.entry_price,
+                levels["target1"],
+                _price_precision(trade.entry_price),
+            )
+            current_stop = float(getattr(trade, "stop_loss", midpoint_stop))
+            desired_stop = (
+                max(midpoint_stop, current_stop)
+                if str(trade.side).upper() == "LONG"
+                else min(midpoint_stop, current_stop)
+            )
+        else:
+            desired_stop = levels["stop_loss"]
         values = {
             "exit_policy": PAPER_STAGED_EXIT_POLICY,
             "initial_stop_loss": levels["stop_loss"],
             "stop_loss": desired_stop,
             "target1": levels["target1"],
             "target2": levels["target2"],
-            "target1_fraction": levels["target1_fraction"],
+            "target1_fraction": desired_fraction,
             "remaining_position_fraction": desired_remaining,
             "max_hold_hours": levels["max_hold_hours"],
             "exit_monitor_timeframe": PAPER_EXIT_MONITOR_TIMEFRAME,
@@ -161,7 +184,7 @@ class PaperTradeRepository:
             "target2": levels["target2"],
             "risk_reward": levels["target2_net_risk_reward"],
             "exit_policy": PAPER_STAGED_EXIT_POLICY,
-            "target1_fraction": levels["target1_fraction"],
+            "target1_fraction": desired_fraction,
             "max_hold_hours": levels["max_hold_hours"],
         }
         plan_changed = linked_plan is not None and any(
@@ -374,13 +397,23 @@ class PaperTradeRepository:
         candle_time=None,
         evaluated_at=None,
     ):
-        """Record a partial paper exit and protect the remainder at entry."""
-        fraction = float(getattr(trade, "target1_fraction", None) or 0.5)
+        """Record the T1 partial exit and protect half of the achieved move."""
+        persisted_fraction = getattr(trade, "target1_fraction", None)
+        fraction = float(
+            PAPER_TARGET1_FRACTION
+            if persisted_fraction is None
+            else persisted_fraction
+        )
         trade.target1_fraction = fraction
         trade.remaining_position_fraction = max(0.0, 1.0 - fraction)
         trade.target1_hit_at = candle_time or datetime.utcnow()
         trade.target1_exit_price = float(exit_price)
-        trade.stop_loss = float(trade.entry_price)
+        trade.stop_loss = target1_protection_stop(
+            trade.side,
+            trade.entry_price,
+            trade.target1,
+            _price_precision(trade.entry_price),
+        )
         _ensure_trade_sizing_snapshot(trade)
         gross_leg_percent = _directional_pnl_percent(
             trade.side,
@@ -409,6 +442,26 @@ class PaperTradeRepository:
             pnl_percent=contribution_percent,
             created_at=trade.target1_hit_at,
         )
+        commit_or_rollback(db)
+        db.refresh(trade)
+        return trade
+
+    def move_stop_loss(self, db, trade, stop_loss, evaluated_at=None):
+        """Persist a strictly more protective stop for an open paper trade."""
+        current_stop = float(trade.stop_loss)
+        requested_stop = float(stop_loss)
+        side = str(trade.side or "").upper()
+        improves_protection = (
+            requested_stop > current_stop
+            if side == "LONG"
+            else requested_stop < current_stop
+        )
+        if not improves_protection:
+            return trade
+
+        trade.stop_loss = requested_stop
+        if evaluated_at is not None:
+            trade.last_exit_evaluated_at = evaluated_at
         commit_or_rollback(db)
         db.refresh(trade)
         return trade
@@ -533,8 +586,11 @@ class PaperTradeRepository:
         if target1_exit is None:
             return leg_pnl(exit_price)
 
+        persisted_fraction = getattr(trade, "target1_fraction", None)
         target1_fraction = float(
-            getattr(trade, "target1_fraction", None) or 0.5
+            PAPER_TARGET1_FRACTION
+            if persisted_fraction is None
+            else persisted_fraction
         )
         remaining_fraction = float(
             getattr(trade, "remaining_position_fraction", None)

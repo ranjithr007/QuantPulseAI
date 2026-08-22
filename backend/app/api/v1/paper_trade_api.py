@@ -34,6 +34,7 @@ from app.risk.confidence_sizing import confidence_sizing_profile
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.paper_trading.exit_policy import approval_target_for_policy
 from app.paper_trading.exit_policy import build_policy_trade_levels
+from app.paper_trading.exit_policy import target1_protection_stop
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
 from app.repositories.automation_settings_repository import DEFAULT_AUTOMATION_SETTINGS
@@ -2020,14 +2021,31 @@ def _paper_trade_display_exit_levels(paper_trade):
         return persisted
 
     target1_complete = getattr(paper_trade, "target1_hit_at", None) is not None
+    persisted_fraction = persisted.get("target1_fraction")
+    target1_fraction = (
+        float(persisted_fraction)
+        if target1_complete and persisted_fraction is not None
+        else policy["target1_fraction"]
+    )
     fallback = {
-        "stop_loss": float(entry_price) if target1_complete else policy["stop_loss"],
+        "stop_loss": (
+            target1_protection_stop(
+                getattr(paper_trade, "side", None),
+                entry_price,
+                policy["target1"],
+                _paper_trade_price_precision(entry_price),
+            )
+            if target1_complete
+            else policy["stop_loss"]
+        ),
         "target1": policy["target1"],
         "target2": policy["target2"],
         "exit_policy": policy["name"],
         "initial_stop_loss": policy["stop_loss"],
-        "target1_fraction": policy["target1_fraction"],
-        "remaining_position_fraction": 0.5 if target1_complete else 1.0,
+        "target1_fraction": target1_fraction,
+        "remaining_position_fraction": (
+            1.0 - target1_fraction if target1_complete else 1.0
+        ),
         "max_hold_hours": policy["max_hold_hours"],
     }
     return {

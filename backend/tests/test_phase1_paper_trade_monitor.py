@@ -28,8 +28,8 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
             "target2": 97.7,
             "confidence": 50,
             "risk_reward": 2.0,
-            "exit_policy": "PAPER_STAGED_EXIT_V1",
-            "target1_fraction": 0.5,
+            "exit_policy": "PAPER_STAGED_EXIT_V2",
+            "target1_fraction": 0.75,
             "target1_hit_at": None,
             "max_hold_hours": 48,
             "opened_at": datetime(2026, 8, 10, 0, 0),
@@ -135,8 +135,8 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "PARTIAL_CLOSE")
         self.assertEqual(result["result"], "OPEN")
-        self.assertEqual(result["remaining_position_fraction"], 0.5)
-        self.assertEqual(result["new_stop_loss"], 100.0)
+        self.assertEqual(result["remaining_position_fraction"], 0.25)
+        self.assertEqual(result["new_stop_loss"], 99.25)
         self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET1")
 
     def test_legacy_btc_policy_name_still_uses_staged_lifecycle(self):
@@ -151,7 +151,7 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         result = evaluate_paper_trade_exit(trade, candle)
 
         self.assertEqual(result["action"], "PARTIAL_CLOSE")
-        self.assertEqual(result["remaining_position_fraction"], 0.5)
+        self.assertEqual(result["remaining_position_fraction"], 0.25)
 
     def test_staged_trade_closes_remainder_at_target2(self):
         trade = self._staged_trade(
@@ -171,13 +171,119 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         self.assertEqual(result["result"], "WIN")
         self.assertEqual(result["fill_profile"]["trigger_type"], "TARGET2")
 
-    def test_staged_trade_closes_at_break_even_after_target1(self):
+    def test_long_moves_stop_to_target1_at_75_percent_of_t2_path(self):
         trade = self._staged_trade(
-            stop_loss=100.0,
+            side="LONG",
+            entry_price=100.0,
+            stop_loss=100.75,
+            target1=101.5,
+            target2=102.3,
             target1_hit_at=datetime(2026, 8, 10, 4, 0),
         )
         candle = SimpleNamespace(
-            high_price=100.1,
+            high_price=102.1,
+            low_price=100.8,
+            close_price=102.0,
+            candle_time=datetime(2026, 8, 10, 5, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual("MOVE_STOP", result["action"])
+        self.assertEqual(101.5, result["new_stop_loss"])
+        self.assertEqual(102.1, result["trail_trigger_price"])
+        self.assertEqual("TARGET2_75_PERCENT_PROGRESS", result["reason"])
+
+    def test_short_moves_stop_to_target1_at_75_percent_of_t2_path(self):
+        trade = self._staged_trade(
+            stop_loss=99.25,
+            target1_hit_at=datetime(2026, 8, 10, 4, 0),
+        )
+        candle = SimpleNamespace(
+            high_price=99.2,
+            low_price=97.9,
+            close_price=98.0,
+            candle_time=datetime(2026, 8, 10, 5, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual("MOVE_STOP", result["action"])
+        self.assertEqual(98.5, result["new_stop_loss"])
+        self.assertEqual(97.9, result["trail_trigger_price"])
+
+    def test_t2_trailing_stop_waits_until_75_percent_path_is_reached(self):
+        trade = self._staged_trade(
+            stop_loss=99.25,
+            target1_hit_at=datetime(2026, 8, 10, 4, 0),
+        )
+        candle = SimpleNamespace(
+            high_price=99.2,
+            low_price=97.91,
+            close_price=98.0,
+            candle_time=datetime(2026, 8, 10, 5, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual("HOLD", result["action"])
+
+    def test_monitor_persists_target1_stop_at_t2_progress_milestone(self):
+        trade = self._staged_trade(
+            stop_loss=99.25,
+            target1_hit_at=datetime(2026, 8, 10, 4, 0),
+            last_exit_evaluated_at=datetime(2026, 8, 10, 4, 0),
+            exit_monitor_timeframe="5m",
+        )
+        candle = SimpleNamespace(
+            high_price=99.2,
+            low_price=97.9,
+            close_price=98.0,
+            candle_time=datetime(2026, 8, 10, 5, 0),
+            open_time=datetime(2026, 8, 10, 4, 55),
+            close_time=datetime(2026, 8, 10, 5, 0),
+        )
+        fake_db = SimpleNamespace(close=Mock())
+
+        class FakeRepo:
+            def get_open_trades(self, db):
+                return [trade]
+
+            def ensure_staged_exit_policy(self, db, item):
+                return False
+
+            def move_stop_loss(self, db, item, stop_loss, **kwargs):
+                item.stop_loss = stop_loss
+                return item
+
+            def mark_exit_evaluated(self, db, item, evaluated_at):
+                item.last_exit_evaluated_at = evaluated_at
+                return item
+
+        with patch(
+            "app.jobs.paper_trade_monitor_job.SessionLocal",
+            return_value=fake_db,
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
+            return_value=FakeRepo(),
+        ), patch(
+            "app.jobs.paper_trade_monitor_job.get_final_candles_after",
+            return_value=[candle],
+        ):
+            summary = run_paper_trade_monitor_job()
+
+        self.assertEqual("OK", summary["status"])
+        self.assertEqual(1, summary["stop_moves"])
+        self.assertEqual(98.5, trade.stop_loss)
+        self.assertEqual("MOVE_STOP", summary["records"][0]["action"])
+
+    def test_staged_trade_closes_at_half_target1_profit_stop(self):
+        trade = self._staged_trade(
+            stop_loss=99.25,
+            target1_hit_at=datetime(2026, 8, 10, 4, 0),
+        )
+        candle = SimpleNamespace(
+            high_price=99.25,
             low_price=98.0,
             close_price=99.5,
             candle_time=datetime(2026, 8, 10, 5, 0),
@@ -218,19 +324,19 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertLess(exit_prices[1], exit_prices[0])
 
-    def test_long_break_even_stop_equality_closes_remainder_after_target1(self):
+    def test_long_midpoint_stop_equality_closes_remainder_after_target1(self):
         trade = self._staged_trade(
             side="LONG",
             entry_price=100.0,
-            stop_loss=100.0,
+            stop_loss=100.75,
             target1=101.5,
             target2=102.3,
             target1_hit_at=datetime(2026, 8, 10, 0, 30),
         )
         candle = SimpleNamespace(
-            high_price=100.0,
-            low_price=100.0,
-            close_price=100.0,
+            high_price=100.75,
+            low_price=100.75,
+            close_price=100.75,
             candle_time=datetime(2026, 8, 10, 1, 0),
             live_mark=True,
         )
@@ -270,19 +376,19 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertGreater(exit_prices[1], exit_prices[0])
 
-    def test_short_break_even_stop_equality_closes_remainder_after_target1(self):
+    def test_short_midpoint_stop_equality_closes_remainder_after_target1(self):
         trade = self._staged_trade(
             side="SHORT",
             entry_price=100.0,
-            stop_loss=100.0,
+            stop_loss=99.25,
             target1=98.5,
             target2=97.7,
             target1_hit_at=datetime(2026, 8, 10, 0, 30),
         )
         candle = SimpleNamespace(
-            high_price=100.0,
-            low_price=100.0,
-            close_price=100.0,
+            high_price=99.25,
+            low_price=99.25,
+            close_price=99.25,
             candle_time=datetime(2026, 8, 10, 1, 0),
             live_mark=True,
         )
@@ -461,8 +567,8 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
             def apply_target1(self, db, item, exit_price, **kwargs):
                 item.target1_hit_at = kwargs["candle_time"]
                 item.target1_exit_price = exit_price
-                item.remaining_position_fraction = 0.5
-                item.stop_loss = item.entry_price
+                item.remaining_position_fraction = 0.25
+                item.stop_loss = 99.25
                 item.last_exit_evaluated_at = kwargs["evaluated_at"]
                 return item
 
@@ -514,8 +620,8 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
             def apply_target1(self, db, item, exit_price, **kwargs):
                 item.target1_hit_at = kwargs["candle_time"]
                 item.target1_exit_price = exit_price
-                item.remaining_position_fraction = 0.5
-                item.stop_loss = item.entry_price
+                item.remaining_position_fraction = 0.25
+                item.stop_loss = 100.75
                 return item
 
             def close_trade(self, db, item, exit_price, result, **kwargs):

@@ -27,6 +27,7 @@ def run_paper_trade_monitor_job():
             "policy_updates": 0,
             "closed": 0,
             "partial_closes": 0,
+            "stop_moves": 0,
             "wins": 0,
             "losses": 0,
             "still_open": 0,
@@ -112,6 +113,23 @@ def run_paper_trade_monitor_job():
                     if decision["action"] == "HOLD":
                         continue
 
+                    if decision["action"] == "MOVE_STOP":
+                        updated_trade = repo.move_stop_loss(
+                            db,
+                            trade,
+                            decision["new_stop_loss"],
+                            evaluated_at=last_evaluated_at,
+                        )
+                        summary["stop_moves"] += 1
+                        summary["records"].append(
+                            {
+                                **decision,
+                                "paper_trade_id": updated_trade.id,
+                                "stop_loss": updated_trade.stop_loss,
+                            }
+                        )
+                        continue
+
                     if decision["action"] == "PARTIAL_CLOSE":
                         updated_trade = repo.apply_target1(
                             db,
@@ -155,6 +173,21 @@ def run_paper_trade_monitor_job():
                                 )
                                 trade_closed = True
                                 break
+                            if target2_decision["action"] == "MOVE_STOP":
+                                updated_trade = repo.move_stop_loss(
+                                    db,
+                                    updated_trade,
+                                    target2_decision["new_stop_loss"],
+                                    evaluated_at=last_evaluated_at,
+                                )
+                                summary["stop_moves"] += 1
+                                summary["records"].append(
+                                    {
+                                        **target2_decision,
+                                        "paper_trade_id": updated_trade.id,
+                                        "stop_loss": updated_trade.stop_loss,
+                                    }
+                                )
                         continue
 
                     closed_trade = repo.close_trade(

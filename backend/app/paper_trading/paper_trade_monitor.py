@@ -1,7 +1,10 @@
 from datetime import timedelta
 
 from app.paper_trading.fill_model import simulate_exit_fill
+from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
 from app.paper_trading.exit_policy import is_staged_exit_policy
+from app.paper_trading.exit_policy import target1_protection_stop
+from app.paper_trading.exit_policy import target2_trail_trigger
 
 
 def evaluate_paper_trade_exit(trade, candle):
@@ -92,6 +95,7 @@ def _evaluate_staged_exit(trade, candle, high, low):
 
     if target_hit and not target1_complete:
         exit_fill = simulate_exit_fill(trade, trade.target1, trigger_type="TARGET1")
+        target1_fraction = _target1_fraction(trade)
         return {
             "paper_trade_id": trade.id,
             "symbol": trade.symbol,
@@ -100,9 +104,12 @@ def _evaluate_staged_exit(trade, candle, high, low):
             "result": "OPEN",
             "exit_price": exit_fill["exit_fill_price"],
             "fill_profile": exit_fill,
-            "remaining_position_fraction": 1.0
-            - float(getattr(trade, "target1_fraction", None) or 0.5),
-            "new_stop_loss": float(trade.entry_price),
+            "remaining_position_fraction": 1.0 - target1_fraction,
+            "new_stop_loss": target1_protection_stop(
+                trade.side,
+                trade.entry_price,
+                trade.target1,
+            ),
             "candle_time": candle.candle_time,
             "high_price": high,
             "low_price": low,
@@ -117,6 +124,29 @@ def _evaluate_staged_exit(trade, candle, high, low):
             exit_fill["exit_fill_price"],
             exit_fill,
         )
+
+    if target1_complete:
+        trail_trigger = target2_trail_trigger(trade.target1, trade.target2)
+        if trade.side == "LONG":
+            trail_trigger_hit = high >= trail_trigger
+            target1_stop_active = float(trade.stop_loss) >= float(trade.target1)
+        else:
+            trail_trigger_hit = low <= trail_trigger
+            target1_stop_active = float(trade.stop_loss) <= float(trade.target1)
+        if trail_trigger_hit and not target1_stop_active:
+            return {
+                "paper_trade_id": trade.id,
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "action": "MOVE_STOP",
+                "result": "OPEN",
+                "new_stop_loss": float(trade.target1),
+                "reason": "TARGET2_75_PERCENT_PROGRESS",
+                "trail_trigger_price": trail_trigger,
+                "candle_time": candle.candle_time,
+                "high_price": high,
+                "low_price": low,
+            }
 
     if _maximum_hold_reached(trade, candle):
         return _time_exit_decision(trade, candle)
@@ -143,6 +173,11 @@ def _stop_trigger_price(trade, candle, high, low):
     if trade.side == "LONG":
         return min(stop_loss, low)
     return max(stop_loss, high)
+
+
+def _target1_fraction(trade):
+    persisted = getattr(trade, "target1_fraction", None)
+    return float(PAPER_TARGET1_FRACTION if persisted is None else persisted)
 
 
 def _maximum_hold_reached(trade, candle):

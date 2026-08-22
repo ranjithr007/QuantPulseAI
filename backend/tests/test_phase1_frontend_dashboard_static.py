@@ -99,10 +99,10 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("Target 2", pnl_section)
         self.assertIn("remainingPositionLabel(trade)", pnl_section)
         self.assertIn("exitDeadlineLabel(trade)", pnl_section)
-        self.assertIn('"PAPER_STAGED_EXIT_V1"', pnl_section)
+        self.assertIn('"PAPER_STAGED_EXIT_V2"', pnl_section)
         self.assertIn('"BTC_1H_STAGED_V1"', pnl_section)
         self.assertIn('rawRemaining === null', pnl_section)
-        self.assertIn('0.75% SL / 1.5% T1 / 2.3% T2', pnl_section)
+        self.assertIn('T1 closes 75% / protected stop / T2 closes 25%', pnl_section)
 
     def test_dashboard_layout_receives_paper_wallet_before_rendering_pnl_routes(self):
         source = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
