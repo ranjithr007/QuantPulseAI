@@ -66,6 +66,27 @@ $env:QUANTPULSE_START_SCHEDULER="false"
 
 This prevents background jobs from starting while you are only testing API startup.
 
+### FRED macro context
+
+The Market Move page can enrich its advisory macro score with verified data from
+the Federal Reserve Economic Data (FRED) API. Create a FRED API key and provide
+it only as a backend secret:
+
+```text
+FRED_API_KEY=<secret>
+FRED_TIMEOUT_SECONDS=10
+FRED_CACHE_SECONDS=1800
+```
+
+The collector uses Treasury yields, the broad US dollar index, Federal Reserve
+balance-sheet liquidity, reverse repo, Treasury General Account, effective fed
+funds, and VIX series. It reports `VERIFIED` only when the core series and at
+least five total series are fresh. If the key or sufficient fresh data is
+unavailable, macro context remains unavailable/degraded and cannot create a
+trade signal. Even when verified, FRED is advisory confirmation capped at a
+small contribution; the existing multi-timeframe direction, execution, and
+risk rules remain authoritative.
+
 ## Running The Backend
 
 From `backend`:

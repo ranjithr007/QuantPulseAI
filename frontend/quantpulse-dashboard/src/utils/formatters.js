@@ -1,4 +1,5 @@
 const IST_TIME_ZONE = "Asia/Kolkata";
+const ISO_TIMESTAMP_WITHOUT_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
 
 export function formatPrice(value, options = {}) {
   const { fallback = "N/A", fixedDigits = null, compactSmall = false } = normalizeOptions(options);
@@ -92,26 +93,32 @@ export function formatLevels(levels, fallback = "N/A") {
 
 export function formatDate(value, fallback = "N/A") {
   if (!value) return fallback;
-  const date = new Date(value);
+  const date = parseTimestamp(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString([], {
+  return `${date.toLocaleString("en-IN", {
     month: "short",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     timeZone: IST_TIME_ZONE,
-  });
+  })} IST`;
 }
 
 export function formatTimeInIst(value, fallback = "N/A") {
   if (!value) return fallback;
-  const date = new Date(value);
+  const date = parseTimestamp(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleTimeString([], {
+  return `${date.toLocaleTimeString("en-IN", {
     hour: "2-digit",
     minute: "2-digit",
     timeZone: IST_TIME_ZONE,
-  });
+  })} IST`;
+}
+
+export function timestampMillis(value, fallback = 0) {
+  if (!value) return fallback;
+  const timestamp = parseTimestamp(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : fallback;
 }
 
 export function safeNumber(value, fallback = 0) {
@@ -133,4 +140,14 @@ function normalizeOptions(options) {
     return { fixedDigits: options };
   }
   return options || {};
+}
+
+function parseTimestamp(value) {
+  if (value instanceof Date || typeof value === "number") return new Date(value);
+
+  const raw = String(value).trim();
+  // FastAPI serializes the application's UTC database datetimes without a
+  // suffix. JavaScript otherwise treats those values as browser-local time.
+  const normalized = ISO_TIMESTAMP_WITHOUT_ZONE.test(raw) ? `${raw}Z` : raw;
+  return new Date(normalized);
 }

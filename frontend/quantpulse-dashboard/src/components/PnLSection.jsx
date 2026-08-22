@@ -27,7 +27,7 @@ import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
 import Phase2ValidationBadge from "./Phase2ValidationBadge";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
-import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
+import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNumber, timestampMillis, tooltipStyle } from "../utils/formatters";
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
 const STAGED_EXIT_POLICIES = new Set(["PAPER_STAGED_EXIT_V2", "PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
@@ -545,7 +545,7 @@ function OpenPositionsTable({ openPositions }) {
               <th className="px-3 py-2.5 text-left">Target 2</th>
               <th className="px-3 py-2.5 text-left">Remaining</th>
               <th className="px-3 py-2.5 text-left">Exit state</th>
-              <th className="px-3 py-2.5 text-left">Deadline</th>
+              <th className="px-3 py-2.5 text-left">Deadline (IST)</th>
               <th className="px-3 py-2.5 text-left">Current</th>
               <th className="px-3 py-2.5 text-left">PnL</th>
             </tr>
@@ -643,7 +643,7 @@ function isStagedExitPolicy(trade) {
 }
 
 function exitDeadline(trade) {
-  const openedAt = Date.parse(trade?.opened_at || trade?.created_at || "");
+  const openedAt = timestampMillis(trade?.opened_at || trade?.created_at, Number.NaN);
   const maxHoldHours = Number(trade?.max_hold_hours);
   if (!Number.isFinite(openedAt) || !Number.isFinite(maxHoldHours) || maxHoldHours <= 0) return null;
   return openedAt + maxHoldHours * 60 * 60 * 1000;
@@ -683,7 +683,7 @@ function TradeHistoryTable({ tradeHistory }) {
               <th className="px-3 py-2.5 text-left">Exit</th>
               <th className="px-3 py-2.5 text-left">PnL</th>
               <th className="px-3 py-2.5 text-left">Result</th>
-              <th className="px-3 py-2.5 text-left">Closed</th>
+              <th className="px-3 py-2.5 text-left">Closed (IST)</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">

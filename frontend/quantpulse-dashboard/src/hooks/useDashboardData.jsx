@@ -816,6 +816,7 @@ function pageNeedsSelectedBundle(activePage) {
   return new Set([
     "dashboard",
     "market-scan",
+    "market-move",
     "coin-details",
     "derivatives",
     "trading-details",

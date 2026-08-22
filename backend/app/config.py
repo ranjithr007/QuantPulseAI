@@ -78,6 +78,13 @@ class Settings:
         self.database_url = os.getenv("QUANTPULSE_DATABASE_URL") or _build_sqlserver_url()
         self.binance_api_key = os.getenv("QUANTPULSE_BINANCE_API_KEY")
         self.binance_api_secret = os.getenv("QUANTPULSE_BINANCE_API_SECRET")
+        self.fred_api_key = (
+            os.getenv("FRED_API_KEY")
+            or os.getenv("QUANTPULSE_FRED_API_KEY")
+            or ""
+        ).strip()
+        self.fred_timeout_seconds = int(os.getenv("FRED_TIMEOUT_SECONDS", "10"))
+        self.fred_cache_seconds = int(os.getenv("FRED_CACHE_SECONDS", "1800"))
 
     def validate_runtime(self):
         if (

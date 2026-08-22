@@ -1,4 +1,4 @@
-import { formatTimeInIst } from "../utils/formatters";
+import { formatTimeInIst, timestampMillis } from "../utils/formatters";
 
 export function buildSignalRow(symbol, signal, watchlist) {
   const side = signalType(signal);
@@ -336,13 +336,13 @@ export function sumPnl(trades, field = "pnl_percent") {
 }
 
 export function sumWithinDays(trades, days, field = "pnl_percent") {
-  const now = new Date();
+  const now = Date.now();
   return Number(
     trades
       .filter((trade) => {
         const when = trade.closed_at || trade.created_at || trade.opened_at;
         if (!when) return false;
-        const diff = now - new Date(when);
+        const diff = now - timestampMillis(when);
         return diff >= 0 && diff <= days * 24 * 60 * 60 * 1000;
       })
       .reduce((sum, trade) => sum + safeNumber(trade[field], 0), 0)
@@ -366,8 +366,7 @@ export function safeNumber(value, fallback = 0) {
 }
 
 export function dateValue(value) {
-  const date = new Date(value || 0);
-  return Number.isFinite(date.getTime()) ? date.getTime() : 0;
+  return timestampMillis(value);
 }
 
 function buildConfidenceBreakdown(signal, diagnostics, aiScores, selectedOrderflow, selectedSmc) {

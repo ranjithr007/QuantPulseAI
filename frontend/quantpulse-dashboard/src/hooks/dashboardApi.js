@@ -19,6 +19,7 @@ const PAGE_DATA_NEEDS = {
   "market-scan": { watchlist: true, paper: true, risk: true, signals: true },
   signals: { watchlist: true, paper: true, signals: true },
   "market-trend": { signals: true },
+  "market-move": { signals: true },
   "coin-details": { signals: true },
   "trading-details": { pipeline: true, paper: true, risk: true, signals: true },
   "risk-controls": { paper: true, risk: true, signals: true },

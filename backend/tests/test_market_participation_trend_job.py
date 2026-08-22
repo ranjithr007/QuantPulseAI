@@ -39,6 +39,15 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
     symbol_repo.get_active_symbols.return_value = [SimpleNamespace(symbol="BTCUSDT")]
     trend_repo = Mock()
     trend_repo.save.return_value = SimpleNamespace(id=7)
+    fred_collector = Mock()
+    fred_collector.collect.return_value = {
+        "status": "VERIFIED",
+        "provider": "FRED",
+        "macro_score": 35.0,
+        "series_count": 8,
+        "data_timestamp": "2026-08-15",
+        "advisory_only": True,
+    }
 
     with patch(
         "app.jobs.market_participation_trend_job.SessionLocal",
@@ -58,6 +67,9 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
     ), patch(
         "app.jobs.market_participation_trend_job._liquidation_context",
         return_value={"data_quality": "OBSERVED", "bias": "HUNT_SHORTS"},
+    ), patch(
+        "app.jobs.market_participation_trend_job.FredMacroCollector",
+        return_value=fred_collector,
     ):
         result = run_market_participation_trend_job(
             context=SimpleNamespace(generation_id="test-generation")
@@ -68,6 +80,16 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
     assert result["records"][0]["direction"] == "BULLISH"
     saved = trend_repo.save.call_args.args[1]
     assert saved["source"] == "market_participation_trend_v1"
-    assert saved["external_context"]["status"] == "UNAVAILABLE"
+    assert saved["external_context"]["status"] == "VERIFIED"
+    assert saved["external_context"]["inputs"]["provider"] == "FRED"
+    assert saved["components"]["external_context"] == 10
     assert trend_repo.save.call_args.kwargs["data_generation_id"] == "test-generation"
+    assert result["macro"] == {
+        "provider": "FRED",
+        "status": "VERIFIED",
+        "macro_score": 35.0,
+        "series_count": 8,
+        "data_timestamp": "2026-08-15",
+        "advisory_only": True,
+    }
     db.close.assert_called_once_with()

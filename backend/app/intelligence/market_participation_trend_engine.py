@@ -225,6 +225,12 @@ def build_market_participation_trend(
     external_score, external_status = _external_component(external_context)
     score += external_score
     components["external_context"] = external_score
+    if external_status == "VERIFIED" and external_score:
+        reasons.append(
+            "Verified FRED macro context is supportive"
+            if external_score > 0
+            else "Verified FRED macro context is restrictive"
+        )
     score = round(_clamp(score, -100, 100), 2)
     quality_state = (
         "OK" if (spot_stack or {}).get("status") == "READY" else "DEGRADED"

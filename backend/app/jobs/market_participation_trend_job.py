@@ -2,6 +2,8 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
 
 from app.collectors.binances.spot_market_collector import SpotMarketCollector
+from app.collectors.fred_macro_collector import FredMacroCollector
+from app.config import get_settings
 from app.database.models.liquidation_heatmaps import LiquidationHeatmap
 from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
@@ -21,6 +23,7 @@ def run_market_participation_trend_job(*, context=None):
     db = SessionLocal()
     collector = SpotMarketCollector()
     repository = MarketParticipationRepository()
+    settings = get_settings()
     generation_id = getattr(context, "generation_id", None)
     try:
         symbols = sorted(
@@ -46,6 +49,11 @@ def run_market_participation_trend_job(*, context=None):
             "ETHBTC",
             collected.get("ETHBTC", {}),
         )
+        external_context = FredMacroCollector(
+            settings.fred_api_key,
+            timeout_seconds=settings.fred_timeout_seconds,
+            cache_seconds=settings.fred_cache_seconds,
+        ).collect()
 
         records = []
         for symbol in symbols:
@@ -55,7 +63,7 @@ def run_market_participation_trend_job(*, context=None):
                 breadth=breadth,
                 ethbtc=ethbtc,
                 liquidation=_liquidation_context(db, symbol),
-                external_context=None,
+                external_context=external_context,
             )
             record = repository.save(
                 db,
@@ -81,6 +89,14 @@ def run_market_participation_trend_job(*, context=None):
             "ethbtc": {
                 "status": ethbtc.get("status"),
                 "score": ethbtc.get("score"),
+            },
+            "macro": {
+                "provider": external_context.get("provider"),
+                "status": external_context.get("status"),
+                "macro_score": external_context.get("macro_score"),
+                "series_count": external_context.get("series_count"),
+                "data_timestamp": external_context.get("data_timestamp"),
+                "advisory_only": True,
             },
             "records": records,
         }

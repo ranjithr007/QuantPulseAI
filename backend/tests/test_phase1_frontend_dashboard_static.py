@@ -76,6 +76,35 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertNotIn("<MarketSignalTable", signals)
         self.assertIn('activePage !== "signals"', dashboard_api)
 
+    def test_market_move_page_combines_live_engines_without_fake_macro_data(self):
+        main = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
+        header = (
+            FRONTEND_ROOT / "src" / "components" / "DashboardHeader.jsx"
+        ).read_text(encoding="utf-8")
+        dashboard_api = (
+            FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js"
+        ).read_text(encoding="utf-8")
+        dashboard_data = (
+            FRONTEND_ROOT / "src" / "hooks" / "useDashboardData.jsx"
+        ).read_text(encoding="utf-8")
+        market_move = (
+            FRONTEND_ROOT / "src" / "pages" / "MarketMovePage.jsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('path="/market-move"', main)
+        self.assertIn('label: "Market Move"', header)
+        self.assertIn('"market-move": { signals: true }', dashboard_api)
+        self.assertIn('"market-move",', dashboard_data)
+        for label in ("Macro", "Liquidations", "Order Flow", "Whales", "SMC", "Regime"):
+            self.assertIn(f'label: "{label}"', market_move)
+        self.assertIn("Continuation", market_move)
+        self.assertIn("Pullback", market_move)
+        self.assertIn("Reversal", market_move)
+        self.assertIn("Next resistance", market_move)
+        self.assertIn("Major support", market_move)
+        self.assertIn('macroContext.status === "VERIFIED"', market_move)
+        self.assertIn("news or Treasury drivers are never inferred or fabricated", market_move)
+
     def test_pnl_page_shows_the_account_wide_trade_ledger_without_row_caps(self):
         dashboard_api = (FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js").read_text(
             encoding="utf-8"
@@ -103,6 +132,15 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('"BTC_1H_STAGED_V1"', pnl_section)
         self.assertIn('rawRemaining === null', pnl_section)
         self.assertIn('T1 closes 75% / protected stop / T2 closes 25%', pnl_section)
+        self.assertIn("Deadline (IST)", pnl_section)
+        self.assertIn("Closed (IST)", pnl_section)
+
+        formatters = (
+            FRONTEND_ROOT / "src" / "utils" / "formatters.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('const IST_TIME_ZONE = "Asia/Kolkata"', formatters)
+        self.assertIn('`${raw}Z`', formatters)
+        self.assertIn(')} IST`', formatters)
 
     def test_dashboard_layout_receives_paper_wallet_before_rendering_pnl_routes(self):
         source = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
