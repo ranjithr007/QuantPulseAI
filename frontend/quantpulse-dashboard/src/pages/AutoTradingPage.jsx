@@ -98,9 +98,9 @@ export default function AutoTradingPage({
           />
           <MetricCard
             className="col-span-2 xl:col-span-1"
-            label="Open futures trades"
+            label="Selected coin trades"
             value={openTrades.length}
-            note={`Limit ${auto.maxOpenTrades}`}
+            note={`${view.symbol} · account limit ${auto.maxOpenTrades}`}
             icon={Wallet}
             accent={openTrades.length < auto.maxOpenTrades ? "emerald" : "rose"}
           />

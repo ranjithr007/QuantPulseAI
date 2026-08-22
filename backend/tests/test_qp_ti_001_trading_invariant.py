@@ -10,6 +10,8 @@ from app.api.v1 import paper_trade_api
 from app.api.v1 import risk_api
 from app.api.v1.signals_api import _market_direction
 from app.api.v1.signals_api import _watchlist_computed_risk_payload
+from app.api.v1.signals_api import _watchlist_eligibility
+from app.api.v1.signals_api import _watchlist_risk_payload
 from app.api.v1.signals_api import _watchlist_row
 from app.database.models.fusion_signal import FusionSignal
 from app.database.models.paper_trade import PaperTrade
@@ -278,6 +280,52 @@ def test_selected_timeframe_confidence_drives_watchlist_and_risk():
     assert conflicting["eligibility_label"] == "Blocked by participation"
     assert conflicting["eligibility_status"] == "BLOCKED_PARTICIPATION"
     assert "SHORT requires BEARISH" in conflicting["eligibility_reason"]
+
+
+def test_persisted_rejected_risk_cannot_be_reported_as_eligible():
+    persisted = _watchlist_risk_payload(
+        SimpleNamespace(
+            symbol="SOLUSDT",
+            signal="LONG",
+            entry_price=100,
+            target1=101.5,
+            created_at=datetime.now(timezone.utc),
+            decision="REJECT",
+            reason="Risk engine rejected signal",
+        ),
+        stale_after_seconds=900,
+    )
+
+    eligibility = _watchlist_eligibility(
+        {
+            "trigger": {
+                "status": "READY",
+                "side": "LONG",
+                "reason": "4h LONG entry trigger is ready",
+                "conditions": [],
+            },
+            "trade_plan": {
+                "entry": 100,
+                "stop_loss": 99.25,
+                "target1": 101.5,
+                "risk_reward": 2.0,
+            },
+            "trade_plan_validation": {"is_valid": True, "errors": []},
+        },
+        risk=persisted,
+    )
+
+    assert persisted["decision"] == "REJECT"
+    assert persisted["is_usable"] is False
+    assert persisted["status"] == "current_rejected"
+    assert "Risk engine rejected signal" in persisted["validation_errors"]
+    assert eligibility == {
+        "label": "Blocked by risk",
+        "tone": "rose",
+        "reason": "Risk engine rejected signal",
+        "allowed": False,
+        "status": "BLOCKED_RISK",
+    }
 
 
 def test_legacy_fusion_repository_uses_governed_40_percent_floor():

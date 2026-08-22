@@ -2058,18 +2058,27 @@ def _watchlist_risk_payload(risk, stale_after_seconds):
         risk.target1,
     )
     freshness = freshness_status(risk.created_at, stale_after_seconds)
-    is_usable = validation["is_valid"] and not freshness["is_stale"]
+    decision = str(getattr(risk, "decision", "") or "").upper()
+    decision_approved = decision == "APPROVE"
+    is_usable = (
+        decision_approved
+        and validation["is_valid"]
+        and not freshness["is_stale"]
+    )
     reason = _watchlist_risk_reason_text(risk)
+    validation_errors = list(validation["errors"])
+    if not decision_approved:
+        validation_errors.append(reason)
 
     return {
         "symbol": risk.symbol,
-        "status": _watchlist_risk_status(freshness, validation),
-        "decision": risk.decision,
+        "status": _watchlist_risk_status(freshness, validation, decision),
+        "decision": decision or risk.decision,
         "reason": reason,
         "freshness": freshness,
         "is_valid_trade_plan": validation["is_valid"],
         "is_usable": is_usable,
-        "validation_errors": validation["errors"],
+        "validation_errors": validation_errors,
     }
 
 
@@ -2168,11 +2177,13 @@ def _timeframe_regime(timeframe, confirmation=None):
     return regime or (timeframe or {}).get("bias") or (confirmation or {}).get("overall_bias")
 
 
-def _watchlist_risk_status(freshness, validation):
+def _watchlist_risk_status(freshness, validation, decision=None):
     if freshness.get("is_stale") and not validation.get("is_valid"):
         return "historical_stale_invalid"
     if freshness.get("is_stale"):
         return "historical_stale"
+    if str(decision or "").upper() != "APPROVE":
+        return "current_rejected"
     if validation.get("is_valid"):
         return "current_valid"
     return "current_invalid"

@@ -162,6 +162,25 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn(')} IST`', formatters)
         self.assertIn('background: "#ffffff"', formatters)
 
+    def test_risk_views_scope_open_trade_counts_and_charts_have_initial_size(self):
+        auto_page = (
+            FRONTEND_ROOT / "src" / "pages" / "AutoTradingPage.jsx"
+        ).read_text(encoding="utf-8")
+        risk_page = (
+            FRONTEND_ROOT / "src" / "pages" / "RiskControlsPage.jsx"
+        ).read_text(encoding="utf-8")
+        rotation_page = (
+            FRONTEND_ROOT / "src" / "pages" / "RotationPage.jsx"
+        ).read_text(encoding="utf-8")
+
+        for source in (auto_page, risk_page):
+            self.assertIn('label="Selected coin trades"', source)
+            self.assertIn("account limit", source)
+
+        self.assertEqual(rotation_page.count("initialDimension="), 2)
+        self.assertEqual(rotation_page.count("minWidth={0}"), 2)
+        self.assertEqual(rotation_page.count("minHeight={0}"), 2)
+
     def test_redundant_views_and_repeated_rows_are_removed(self):
         main = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
         header = (

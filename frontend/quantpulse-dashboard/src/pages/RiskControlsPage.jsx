@@ -45,9 +45,9 @@ export default function RiskControlsPage({
             accent={selectedDetail.confidence >= auto.minConfidence ? "emerald" : "amber"}
           />
           <MetricCard
-            label="Open trades"
+            label="Selected coin trades"
             value={openTrades.length}
-            note={`Limit ${auto.maxOpenTrades}`}
+            note={`${view.symbol} · account limit ${auto.maxOpenTrades}`}
             icon={Target}
             accent={openTrades.length < auto.maxOpenTrades ? "emerald" : "rose"}
           />

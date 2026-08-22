@@ -50,7 +50,13 @@ export default function RotationPage({ signalRows, watchlist, auto, getSymbolHre
 
         <div className="mt-3.5 grid gap-3.5 xl:grid-cols-[0.65fr_1.35fr]">
           <ChartCard title="Signal breadth" subtitle="BUY / SELL / WAIT distribution">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer
+              width="100%"
+              height="100%"
+              minWidth={0}
+              minHeight={0}
+              initialDimension={{ width: 420, height: 240 }}
+            >
               <PieChart>
                 <Pie
                   data={[
@@ -73,7 +79,13 @@ export default function RotationPage({ signalRows, watchlist, auto, getSymbolHre
           </ChartCard>
 
           <ChartCard title="Directional confidence" subtitle="Strongest signal confidence by symbol">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer
+              width="100%"
+              height="100%"
+              minWidth={0}
+              minHeight={0}
+              initialDimension={{ width: 720, height: 240 }}
+            >
               <BarChart data={leadership}>
                 <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
                 <XAxis dataKey="symbol" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
@@ -137,7 +149,7 @@ function ChartCard({ title, subtitle, children }) {
         <div className="text-sm font-medium text-white">{title}</div>
         <div className="text-xs text-slate-500">{subtitle}</div>
       </div>
-      <div className="h-60">{children}</div>
+      <div className="h-60 min-h-0 min-w-0">{children}</div>
     </div>
   );
 }
