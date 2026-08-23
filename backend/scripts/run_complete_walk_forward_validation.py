@@ -33,16 +33,14 @@ from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.repositories.candle_repository import get_candles_as_of
 from app.repositories.derivative_repository import DerivativeRepository
-from app.trading.futures_cost_model import DEFAULT_STOP_LOSS_PERCENT
-from app.trading.futures_cost_model import TARGET1_NET_RISK_REWARD
+from app.paper_trading.exit_policy import PAPER_STOP_LOSS_PERCENT
+from app.paper_trading.exit_policy import PAPER_TARGET1_PERCENT
 
 
-RUN_VERSION = "complete_walk_forward_validation_v3_governed_confidence_sizing"
+RUN_VERSION = "complete_walk_forward_validation_v4_staged_exit_parity"
 PRODUCTION_MAX_RISK_PERCENT = 1.0
-PRODUCTION_STOP_PERCENT = DEFAULT_STOP_LOSS_PERCENT
-PRODUCTION_TARGET_PERCENT = (
-    DEFAULT_STOP_LOSS_PERCENT * TARGET1_NET_RISK_REWARD
-)
+PRODUCTION_STOP_PERCENT = PAPER_STOP_LOSS_PERCENT
+PRODUCTION_TARGET_PERCENT = PAPER_TARGET1_PERCENT
 DEFAULT_SYMBOLS = (
     "BTCUSDT",
     "ETHUSDT",
@@ -431,9 +429,12 @@ def _consolidated_payload(results, *, symbols, timeframes, signals, as_of, start
             "grid": {
                 "exit_distance_model": "PAPER_POLICY",
                 "stop_loss_percent": PRODUCTION_STOP_PERCENT,
-                "target1_net_risk_reward": TARGET1_NET_RISK_REWARD,
+                "target1_net_risk_reward": round(
+                    PRODUCTION_TARGET_PERCENT / PRODUCTION_STOP_PERCENT,
+                    4,
+                ),
                 "target1_base_distance_percent": PRODUCTION_TARGET_PERCENT,
-                "target_adjustment": "FEES_AND_SLIPPAGE",
+                "target_adjustment": "FIXED_LEVELS_COSTS_APPLIED_TO_FILLS",
                 "configured_max_risk_percent": PRODUCTION_MAX_RISK_PERCENT,
             },
         },

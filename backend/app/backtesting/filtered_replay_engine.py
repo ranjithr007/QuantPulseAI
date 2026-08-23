@@ -20,12 +20,18 @@ from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.utils.freshness import normalize_timestamp_to_utc
-from app.trading.futures_cost_model import build_cost_adjusted_targets
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
-from app.trading.futures_cost_model import DEFAULT_STOP_LOSS_PERCENT
+from app.paper_trading.exit_policy import PAPER_MAX_HOLD_HOURS
+from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
+from app.paper_trading.exit_policy import PAPER_STOP_LOSS_PERCENT
+from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
+from app.paper_trading.exit_policy import PAPER_TARGET1_PERCENT
+from app.paper_trading.exit_policy import PAPER_TARGET1_STOP_PROGRESS_FRACTION
+from app.paper_trading.exit_policy import PAPER_TARGET2_PERCENT
+from app.paper_trading.exit_policy import PAPER_TARGET2_TRAIL_TRIGGER_FRACTION
 
 
-ENGINE_VERSION = "filtered_replay_v1"
+ENGINE_VERSION = "filtered_replay_v2_staged_exit_parity"
 
 
 class _CandlePrefixView(Sequence):
@@ -530,51 +536,75 @@ def run_filtered_replay(
             decision_index += 1
             continue
         exit_details = None
+        paper_exit = None
         active_stop = stop
         protection_activated = False
         protection_activation_time = None
-        for exit_index in range(entry_index, len(ordered)):
-            candle = ordered[exit_index]
-            trigger = _exit_trigger_with_policy(
-                candle,
+        if config.exit_distance_model == "PAPER_POLICY":
+            paper_exit = _paper_policy_exit_path(
+                ordered,
+                entry_index,
                 requested_side,
-                active_stop,
+                entry_fill,
+                stop,
                 target,
-                config.collision_policy,
+                config,
             )
-            if trigger is not None:
-                trigger_type, trigger_price = trigger
-                if trigger_type == "STOP" and protection_activated:
-                    trigger_type = "PROTECTED_STOP"
-                exit_fill = _adverse_fill(
-                    trigger_price,
-                    requested_side,
-                    config.slippage_bps,
-                    entering=False,
-                )
+            if paper_exit is not None:
+                active_stop = paper_exit["exit_stop"]
+                protection_activated = paper_exit["target1_hit"]
+                protection_activation_time = paper_exit["protection_activation_time"]
                 exit_details = (
-                    exit_index,
-                    candle,
-                    trigger_type,
-                    trigger_price,
-                    exit_fill,
-                    active_stop,
+                    paper_exit["exit_index"],
+                    paper_exit["exit_candle"],
+                    paper_exit["exit_reason"],
+                    paper_exit["trigger_price"],
+                    paper_exit["exit_fill"],
+                    paper_exit["exit_stop"],
                 )
-                break
-            if not protection_activated:
-                protected_stop, activated = _profit_protection_stop(
+        else:
+            for exit_index in range(entry_index, len(ordered)):
+                candle = ordered[exit_index]
+                trigger = _exit_trigger_with_policy(
                     candle,
                     requested_side,
-                    entry_fill,
-                    stop_distance,
                     active_stop,
-                    mode=config.profit_protection_mode,
-                    activation_r=config.profit_protection_activation_r,
+                    target,
+                    config.collision_policy,
                 )
-                if activated:
-                    active_stop = protected_stop
-                    protection_activated = True
-                    protection_activation_time = _time_value(candle)
+                if trigger is not None:
+                    trigger_type, trigger_price = trigger
+                    if trigger_type == "STOP" and protection_activated:
+                        trigger_type = "PROTECTED_STOP"
+                    exit_fill = _adverse_fill(
+                        trigger_price,
+                        requested_side,
+                        config.slippage_bps,
+                        entering=False,
+                    )
+                    exit_details = (
+                        exit_index,
+                        candle,
+                        trigger_type,
+                        trigger_price,
+                        exit_fill,
+                        active_stop,
+                    )
+                    break
+                if not protection_activated:
+                    protected_stop, activated = _profit_protection_stop(
+                        candle,
+                        requested_side,
+                        entry_fill,
+                        stop_distance,
+                        active_stop,
+                        mode=config.profit_protection_mode,
+                        activation_r=config.profit_protection_activation_r,
+                    )
+                    if activated:
+                        active_stop = protected_stop
+                        protection_activated = True
+                        protection_activation_time = _time_value(candle)
 
         if exit_details is None:
             exit_index = len(ordered) - 1
@@ -599,28 +629,66 @@ def run_filtered_replay(
             exit_fill,
             exit_stop,
         ) = exit_details
+        exit_legs = (
+            paper_exit["legs"]
+            if paper_exit is not None
+            else [
+                {
+                    "exit_index": exit_index,
+                    "candle": exit_candle,
+                    "reason": exit_reason,
+                    "trigger_price": trigger_price,
+                    "fill": exit_fill,
+                    "fraction": 1.0,
+                }
+            ]
+        )
         entry_fee = entry_fill * quantity * _bps_rate(config.fee_bps)
-        exit_fee = exit_fill * quantity * _bps_rate(config.fee_bps)
-        gross_pnl = (
-            (exit_fill - entry_fill) * quantity
-            if requested_side == "LONG"
-            else (entry_fill - exit_fill) * quantity
+        exit_fee = sum(
+            item["fill"]
+            * quantity
+            * item["fraction"]
+            * _bps_rate(config.fee_bps)
+            for item in exit_legs
+        )
+        gross_pnl = sum(
+            (
+                (item["fill"] - entry_fill)
+                if requested_side == "LONG"
+                else (entry_fill - item["fill"])
+            )
+            * quantity
+            * item["fraction"]
+            for item in exit_legs
         )
         fees = entry_fee + exit_fee
         entry_slippage_cost = abs(entry_fill - raw_entry) * quantity
-        exit_slippage_cost = abs(exit_fill - trigger_price) * quantity
+        exit_slippage_cost = sum(
+            abs(item["fill"] - item["trigger_price"])
+            * quantity
+            * item["fraction"]
+            for item in exit_legs
+        )
         duration_candles = exit_index - entry_index + 1
         funding_rate = _replay_funding_rate(decision.get("timeframe_stack"))
         funding_events = int(
             (duration_candles * config.timeframe_minutes)
             // (config.funding_interval_hours * 60)
         )
-        funding_payment = (
+        funding_payment = sum(
             entry_fill
             * quantity
+            * item["fraction"]
             * funding_rate
-            * funding_events
+            * int(
+                (
+                    (item["exit_index"] - entry_index + 1)
+                    * config.timeframe_minutes
+                )
+                // (config.funding_interval_hours * 60)
+            )
             * (1 if requested_side == "LONG" else -1)
+            for item in exit_legs
         )
         net_pnl = gross_pnl - fees - funding_payment
         pnl_denominator = (
@@ -641,13 +709,17 @@ def run_filtered_replay(
             requested_side,
             entry_fill,
             stop,
-            target,
+            paper_exit["target2"] if paper_exit is not None else target,
         )
-        collision = _intrabar_collision(
-            exit_candle,
-            requested_side,
-            exit_stop,
-            target,
+        collision = (
+            paper_exit["collision_detected"]
+            if paper_exit is not None
+            else _intrabar_collision(
+                exit_candle,
+                requested_side,
+                exit_stop,
+                target,
+            )
         )
         result_label = (
             "WIN" if net_pnl > 0 else "LOSS" if net_pnl < 0 else "BREAKEVEN"
@@ -693,6 +765,12 @@ def run_filtered_replay(
                 "stop": round(stop, 8),
                 "effective_stop_at_exit": round(exit_stop, 8),
                 "target": round(target, 8),
+                "target1": round(target, 8),
+                "target2": (
+                    round(paper_exit["target2"], 8)
+                    if paper_exit is not None
+                    else None
+                ),
                 "result": result_label,
                 "exit_reason": exit_reason,
                 "loss_class": loss_class,
@@ -718,6 +796,34 @@ def run_filtered_replay(
                 "pnl_percent": round(pnl_percent, 4),
                 "capital_after": round(capital, 2),
                 "duration_candles": duration_candles,
+                "exit_legs": [
+                    {
+                        "reason": item["reason"],
+                        "exit_time": _time_value(item["candle"]),
+                        "quantity_fraction": round(item["fraction"], 4),
+                        "quantity": round(quantity * item["fraction"], 8),
+                        "exit": round(item["fill"], 8),
+                        "exit_reference": round(item["trigger_price"], 8),
+                        "gross_pnl": round(
+                            (
+                                (item["fill"] - entry_fill)
+                                if requested_side == "LONG"
+                                else (entry_fill - item["fill"])
+                            )
+                            * quantity
+                            * item["fraction"],
+                            4,
+                        ),
+                        "fee": round(
+                            item["fill"]
+                            * quantity
+                            * item["fraction"]
+                            * _bps_rate(config.fee_bps),
+                            4,
+                        ),
+                    }
+                    for item in exit_legs
+                ],
                 "sizing": {
                     "mode": sizing_mode,
                     "position_tier": position_tier,
@@ -747,7 +853,11 @@ def run_filtered_replay(
                 "feature_source": decision["feature_source"],
                 "timeframe_stack": decision.get("timeframe_stack"),
                 "profit_protection": {
-                    "mode": config.profit_protection_mode,
+                    "mode": (
+                        PAPER_STAGED_EXIT_POLICY
+                        if paper_exit is not None
+                        else config.profit_protection_mode
+                    ),
                     "activation_r": config.profit_protection_activation_r,
                     "activated": protection_activated,
                     "activation_time": protection_activation_time,
@@ -756,6 +866,34 @@ def run_filtered_replay(
                     ),
                     "activation_applies_from_next_candle": True,
                 },
+                "staged_exit": (
+                    {
+                        "policy": PAPER_STAGED_EXIT_POLICY,
+                        "target1_fraction": PAPER_TARGET1_FRACTION,
+                        "target1_hit": paper_exit["target1_hit"],
+                        "target1_protected_stop": round(
+                            paper_exit["target1_protected_stop"],
+                            8,
+                        ),
+                        "target2_hit": paper_exit["target2_hit"],
+                        "target2_trail_trigger_fraction": (
+                            PAPER_TARGET2_TRAIL_TRIGGER_FRACTION
+                        ),
+                        "target2_trail_trigger": round(
+                            paper_exit["target2_trail_trigger"],
+                            8,
+                        ),
+                        "target2_trail_activated": paper_exit[
+                            "target2_trail_activated"
+                        ],
+                        "target2_trail_activation_time": paper_exit[
+                            "target2_trail_activation_time"
+                        ],
+                        "max_hold_hours": PAPER_MAX_HOLD_HOURS,
+                    }
+                    if paper_exit is not None
+                    else None
+                ),
                 "excursions": excursions,
             }
         )
@@ -897,7 +1035,7 @@ def run_filtered_replay(
             "signal_reentry": "REQUIRES_GATE_RESET",
             "stop_model": config.exit_distance_model,
             "target_model": (
-                "COST_ADJUSTED_NET_2R"
+                PAPER_STAGED_EXIT_POLICY
                 if config.exit_distance_model == "PAPER_POLICY"
                 else config.exit_distance_model
             ),
@@ -906,7 +1044,30 @@ def run_filtered_replay(
                 if stack_resolver is not None
                 else "NOT_APPLIED"
             ),
-            "reward_risk_ratio": round(config.target_atr_multiple / config.stop_atr_multiple, 4),
+            "reward_risk_ratio": round(
+                PAPER_TARGET1_PERCENT / PAPER_STOP_LOSS_PERCENT
+                if config.exit_distance_model == "PAPER_POLICY"
+                else config.target_atr_multiple / config.stop_atr_multiple,
+                4,
+            ),
+            "paper_exit_policy": (
+                {
+                    "name": PAPER_STAGED_EXIT_POLICY,
+                    "stop_loss_percent": PAPER_STOP_LOSS_PERCENT,
+                    "target1_percent": PAPER_TARGET1_PERCENT,
+                    "target2_percent": PAPER_TARGET2_PERCENT,
+                    "target1_fraction": PAPER_TARGET1_FRACTION,
+                    "target1_stop_progress_fraction": (
+                        PAPER_TARGET1_STOP_PROGRESS_FRACTION
+                    ),
+                    "target2_trail_trigger_fraction": (
+                        PAPER_TARGET2_TRAIL_TRIGGER_FRACTION
+                    ),
+                    "max_hold_hours": PAPER_MAX_HOLD_HOURS,
+                }
+                if config.exit_distance_model == "PAPER_POLICY"
+                else None
+            ),
         },
         **performance,
     }
@@ -916,17 +1077,10 @@ def _entry_exit_levels(side, entry, atr, confidence, config):
     """Return replay levels using either research ATR exits or paper policy."""
 
     if config.exit_distance_model == "PAPER_POLICY":
-        stop_distance = entry * (DEFAULT_STOP_LOSS_PERCENT / 100)
+        stop_distance = entry * (PAPER_STOP_LOSS_PERCENT / 100)
         stop = entry - stop_distance if side == "LONG" else entry + stop_distance
-        targets = build_cost_adjusted_targets(
-            side,
-            entry,
-            stop,
-            confidence=confidence,
-            fee_bps=config.fee_bps,
-            price_precision=8,
-        )
-        target = float(targets["target1"])
+        target_distance = entry * (PAPER_TARGET1_PERCENT / 100)
+        target = entry + target_distance if side == "LONG" else entry - target_distance
         return stop, target, stop_distance, abs(target - entry)
 
     stop_distance = atr * config.stop_atr_multiple
@@ -944,6 +1098,200 @@ def _entry_exit_levels(side, entry, atr, confidence, config):
         stop_distance,
         target_distance,
     )
+
+
+def _paper_policy_exit_path(
+    candles,
+    entry_index,
+    side,
+    entry,
+    stop,
+    target1,
+    config,
+):
+    """Replay the production staged paper exit policy without look-ahead.
+
+    T1 closes 75%, then the remaining 25% is protected.  Stop changes caused
+    by a candle apply from the following candle so one OHLC bar cannot invent
+    a favorable intrabar ordering.  T2 closes the remainder, and positions
+    that survive for 48 hours are closed at that candle's close.
+    """
+
+    direction = 1 if side == "LONG" else -1
+    target2 = entry * (1 + direction * PAPER_TARGET2_PERCENT / 100)
+    target1_protected_stop = entry + (
+        (target1 - entry) * PAPER_TARGET1_STOP_PROGRESS_FRACTION
+    )
+    target2_trail_trigger = target1 + (
+        (target2 - target1) * PAPER_TARGET2_TRAIL_TRIGGER_FRACTION
+    )
+    active_stop = stop
+    remaining_fraction = 1.0
+    target1_hit = False
+    target2_trail_activated = False
+    protection_activation_time = None
+    target2_trail_activation_time = None
+    legs = []
+    collision_detected = False
+
+    for exit_index in range(entry_index, len(candles)):
+        candle = candles[exit_index]
+        active_target = target2 if target1_hit else target1
+        collision_detected = collision_detected or _intrabar_collision(
+            candle,
+            side,
+            active_stop,
+            active_target,
+        )
+        trigger = _exit_trigger_with_policy(
+            candle,
+            side,
+            active_stop,
+            active_target,
+            config.collision_policy,
+        )
+        if trigger is not None:
+            trigger_type, trigger_price = trigger
+            if trigger_type == "TARGET" and not target1_hit:
+                fraction = min(PAPER_TARGET1_FRACTION, remaining_fraction)
+                legs.append(
+                    _paper_exit_leg(
+                        exit_index,
+                        candle,
+                        "TARGET1",
+                        trigger_price,
+                        fraction,
+                        side,
+                        config,
+                    )
+                )
+                remaining_fraction = max(0.0, remaining_fraction - fraction)
+                target1_hit = True
+                active_stop = target1_protected_stop
+                protection_activation_time = _time_value(candle)
+                if remaining_fraction <= 0:
+                    break
+                continue
+
+            if trigger_type == "TARGET":
+                trigger_type = "TARGET2"
+            elif trigger_type == "STOP" and target1_hit:
+                trigger_type = "PROTECTED_STOP"
+            legs.append(
+                _paper_exit_leg(
+                    exit_index,
+                    candle,
+                    trigger_type,
+                    trigger_price,
+                    remaining_fraction,
+                    side,
+                    config,
+                )
+            )
+            remaining_fraction = 0.0
+            break
+
+        if target1_hit and not target2_trail_activated:
+            favorable_price = _price(
+                candle,
+                "high_price" if side == "LONG" else "low_price",
+                "close_price",
+            )
+            trail_reached = favorable_price is not None and (
+                favorable_price >= target2_trail_trigger
+                if side == "LONG"
+                else favorable_price <= target2_trail_trigger
+            )
+            if trail_reached:
+                active_stop = target1
+                target2_trail_activated = True
+                target2_trail_activation_time = _time_value(candle)
+
+        duration_minutes = (
+            (exit_index - entry_index + 1) * config.timeframe_minutes
+        )
+        if duration_minutes >= PAPER_MAX_HOLD_HOURS * 60:
+            raw_exit = _price(candle, "close_price", "open_price")
+            if raw_exit is not None:
+                legs.append(
+                    _paper_exit_leg(
+                        exit_index,
+                        candle,
+                        "MAX_HOLD_TIME",
+                        raw_exit,
+                        remaining_fraction,
+                        side,
+                        config,
+                    )
+                )
+                remaining_fraction = 0.0
+            break
+
+    if remaining_fraction > 0 and candles:
+        exit_index = len(candles) - 1
+        candle = candles[exit_index]
+        raw_exit = _price(candle, "close_price", "open_price")
+        if raw_exit is not None:
+            legs.append(
+                _paper_exit_leg(
+                    exit_index,
+                    candle,
+                    "END_OF_DATA",
+                    raw_exit,
+                    remaining_fraction,
+                    side,
+                    config,
+                )
+            )
+
+    if not legs:
+        return None
+
+    final_leg = legs[-1]
+    return {
+        "exit_index": final_leg["exit_index"],
+        "exit_candle": final_leg["candle"],
+        "exit_reason": final_leg["reason"],
+        "trigger_price": sum(
+            item["trigger_price"] * item["fraction"] for item in legs
+        ),
+        "exit_fill": sum(item["fill"] * item["fraction"] for item in legs),
+        "exit_stop": active_stop,
+        "target2": target2,
+        "target1_protected_stop": target1_protected_stop,
+        "target2_trail_trigger": target2_trail_trigger,
+        "target1_hit": target1_hit,
+        "target2_hit": any(item["reason"] == "TARGET2" for item in legs),
+        "target2_trail_activated": target2_trail_activated,
+        "protection_activation_time": protection_activation_time,
+        "target2_trail_activation_time": target2_trail_activation_time,
+        "collision_detected": collision_detected,
+        "legs": legs,
+    }
+
+
+def _paper_exit_leg(
+    exit_index,
+    candle,
+    reason,
+    trigger_price,
+    fraction,
+    side,
+    config,
+):
+    return {
+        "exit_index": exit_index,
+        "candle": candle,
+        "reason": reason,
+        "trigger_price": float(trigger_price),
+        "fill": _adverse_fill(
+            trigger_price,
+            side,
+            config.slippage_bps,
+            entering=False,
+        ),
+        "fraction": float(fraction),
+    }
 
 
 def _execution_confidence(decision):
@@ -2312,7 +2660,13 @@ def _execution_parity_summary(trades, config):
             "exit_slippage_pct": replay_exit_slippage_pct,
             "fee_bps": float(config.fee_bps),
             "round_trip_fee_percent": round(float(config.fee_bps) * 2 / 100, 4),
-            "reward_risk_ratio": round(float(config.target_atr_multiple) / float(config.stop_atr_multiple), 4),
+            "reward_risk_ratio": round(
+                PAPER_TARGET1_PERCENT / PAPER_STOP_LOSS_PERCENT
+                if config.exit_distance_model == "PAPER_POLICY"
+                else float(config.target_atr_multiple)
+                / float(config.stop_atr_multiple),
+                4,
+            ),
         },
         "paper_model": {
             "fill_model": "paper_trade_fill_model_v1",

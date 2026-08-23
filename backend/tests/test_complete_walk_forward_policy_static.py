@@ -17,6 +17,8 @@ def test_complete_walk_forward_runner_uses_deployed_paper_risk_policy():
     assert "target_grid=(PRODUCTION_TARGET_PERCENT,)" in source
     assert "risk_percent_per_trade=PRODUCTION_MAX_RISK_PERCENT" in source
     assert "PRODUCTION_MAX_RISK_PERCENT = 1.0" in source
+    assert "PRODUCTION_STOP_PERCENT = PAPER_STOP_LOSS_PERCENT" in source
+    assert "PRODUCTION_TARGET_PERCENT = PAPER_TARGET1_PERCENT" in source
 
 
 def test_complete_walk_forward_scope_remains_all_current_timeframes_and_sides():

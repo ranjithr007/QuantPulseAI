@@ -3,11 +3,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.api.v1 import backtest_api
+from app.backtesting import filtered_replay_engine
 from app.backtesting.filtered_replay_engine import FilteredReplayConfig
 from app.backtesting.filtered_replay_engine import _entry_exit_levels
 from app.backtesting.filtered_replay_engine import _execution_confidence
 from app.backtesting.filtered_replay_engine import _exit_trigger_with_policy
 from app.backtesting.filtered_replay_engine import _liquidation_diagnostics
+from app.backtesting.filtered_replay_engine import _paper_policy_exit_path
 from app.backtesting.filtered_replay_engine import _position_sizing
 from app.backtesting.filtered_replay_engine import _portfolio_gate
 from app.backtesting.filtered_replay_engine import _portfolio_state
@@ -132,7 +134,7 @@ def test_replay_config_rejects_two_sizing_authorities():
         )
 
 
-def test_paper_policy_replay_uses_fixed_five_percent_stop_and_cost_adjusted_2r():
+def test_paper_policy_replay_uses_current_fixed_exit_distances():
     config = FilteredReplayConfig(
         stop_atr_multiple=5,
         target_atr_multiple=10,
@@ -154,14 +156,226 @@ def test_paper_policy_replay_uses_fixed_five_percent_stop_and_cost_adjusted_2r()
         config,
     )
 
-    assert long_stop == pytest.approx(95)
-    assert short_stop == pytest.approx(105)
-    assert long_target > 110
-    assert short_target < 90
-    assert long_risk == pytest.approx(5)
-    assert short_risk == pytest.approx(5)
-    assert long_reward > 10
-    assert short_reward > 10
+    assert long_stop == pytest.approx(99.25)
+    assert short_stop == pytest.approx(100.75)
+    assert long_target == pytest.approx(101.5)
+    assert short_target == pytest.approx(98.5)
+    assert long_risk == pytest.approx(0.75)
+    assert short_risk == pytest.approx(0.75)
+    assert long_reward == pytest.approx(1.5)
+    assert short_reward == pytest.approx(1.5)
+
+
+def test_paper_policy_long_closes_75_percent_at_t1_and_remainder_at_t2():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=101.6, low_price=100, close_price=101.5),
+        _candle(open_price=101.5, high_price=102.4, low_price=101, close_price=102.3),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "LONG",
+        100,
+        99.25,
+        101.5,
+        config,
+    )
+
+    assert result["exit_reason"] == "TARGET2"
+    assert result["target2"] == pytest.approx(102.3)
+    assert [item["reason"] for item in result["legs"]] == ["TARGET1", "TARGET2"]
+    assert [item["fraction"] for item in result["legs"]] == pytest.approx([0.75, 0.25])
+    assert result["exit_fill"] == pytest.approx(101.7)
+
+
+def test_paper_policy_short_staged_targets_are_symmetric():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=100, low_price=98.4, close_price=98.5),
+        _candle(open_price=98.5, high_price=99, low_price=97.6, close_price=97.7),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "SHORT",
+        100,
+        100.75,
+        98.5,
+        config,
+    )
+
+    assert result["exit_reason"] == "TARGET2"
+    assert result["target2"] == pytest.approx(97.7)
+    assert [item["reason"] for item in result["legs"]] == ["TARGET1", "TARGET2"]
+    assert [item["fraction"] for item in result["legs"]] == pytest.approx([0.75, 0.25])
+
+
+def test_paper_policy_t1_moves_remaining_stop_halfway_to_t1_from_entry():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=101.6, low_price=100, close_price=101.5),
+        _candle(open_price=101, high_price=101.2, low_price=100.7, close_price=100.75),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "LONG",
+        100,
+        99.25,
+        101.5,
+        config,
+    )
+
+    assert result["target1_protected_stop"] == pytest.approx(100.75)
+    assert result["exit_reason"] == "PROTECTED_STOP"
+    assert result["exit_fill"] == pytest.approx(101.3125)
+
+
+def test_paper_policy_short_t1_protects_remaining_position_symmetrically():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=100, low_price=98.4, close_price=98.5),
+        _candle(open_price=99, high_price=99.3, low_price=98.8, close_price=99.25),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "SHORT",
+        100,
+        100.75,
+        98.5,
+        config,
+    )
+
+    assert result["target1_protected_stop"] == pytest.approx(99.25)
+    assert result["exit_reason"] == "PROTECTED_STOP"
+    assert result["exit_fill"] == pytest.approx(98.6875)
+
+
+def test_paper_policy_target2_progress_trails_remaining_stop_to_t1():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=101.6, low_price=100, close_price=101.5),
+        _candle(open_price=101.5, high_price=102.15, low_price=101, close_price=102.1),
+        _candle(open_price=102, high_price=102.1, low_price=101.4, close_price=101.5),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "LONG",
+        100,
+        99.25,
+        101.5,
+        config,
+    )
+
+    assert result["target2_trail_trigger"] == pytest.approx(102.1)
+    assert result["target2_trail_activated"] is True
+    assert result["exit_reason"] == "PROTECTED_STOP"
+    assert result["exit_stop"] == pytest.approx(101.5)
+
+
+def test_paper_policy_closes_at_48_hour_maximum_holding_time():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+        timeframe_minutes=60,
+    )
+    candles = [_candle(open_price=100, high_price=100.5, low_price=99.5, close_price=100)] * 48
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "LONG",
+        100,
+        99.25,
+        101.5,
+        config,
+    )
+
+    assert result["exit_reason"] == "MAX_HOLD_TIME"
+    assert result["exit_index"] == 47
+
+
+def test_filtered_replay_records_blended_staged_exit_pnl(monkeypatch):
+    monkeypatch.setattr(
+        filtered_replay_engine,
+        "build_candle_decision",
+        lambda *_args, **_kwargs: {
+            "eligible": True,
+            "signal": "LONG",
+            "blocked_reasons": [],
+            "confidence": 70,
+            "regime": "TRENDING_BULL",
+            "feature_source": "TEST",
+            "point_in_time_flags": {},
+            "timeframe_stack_state": "ALIGNED",
+            "timeframe_stack": None,
+            "features": {
+                "trend_score": 70,
+                "momentum_score": 70,
+                "final_score": 70,
+                "atr": 1,
+            },
+        },
+    )
+    candles = [_candle() for _ in range(50)]
+    candles.extend(
+        [
+            _candle(open_price=100, high_price=101.6, low_price=100, close_price=101.5),
+            _candle(open_price=101.5, high_price=102.4, low_price=101, close_price=102.3),
+        ]
+    )
+
+    result = filtered_replay_engine.run_filtered_replay(
+        candles,
+        "LONG",
+        min_confidence=0,
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+        cooldown_candles=0,
+    )
+
+    trade = result["trades"][0]
+    assert trade["stop"] == pytest.approx(99.25)
+    assert trade["target1"] == pytest.approx(101.5)
+    assert trade["target2"] == pytest.approx(102.3)
+    assert trade["exit_reason"] == "TARGET2"
+    assert trade["exit"] == pytest.approx(101.7)
+    assert trade["gross_pnl"] == pytest.approx(170)
+    assert trade["pnl_percent"] == pytest.approx(1.7)
+    assert [item["quantity_fraction"] for item in trade["exit_legs"]] == [0.75, 0.25]
+    assert trade["staged_exit"]["target1_hit"] is True
+    assert trade["staged_exit"]["target2_hit"] is True
+    assert result["assumptions"]["paper_exit_policy"]["max_hold_hours"] == 48
 
 
 def test_replay_config_rejects_unknown_exit_distance_model():
