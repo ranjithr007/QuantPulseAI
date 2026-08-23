@@ -28,6 +28,7 @@ COPY alembic ./alembic
 COPY alembic.postgresql.ini ./alembic.postgresql.ini
 COPY alembic_postgresql ./alembic_postgresql
 COPY app ./app
+COPY scripts ./scripts
 
 RUN useradd --create-home --uid 10001 quantpulse \
     && chown -R quantpulse:quantpulse /app
