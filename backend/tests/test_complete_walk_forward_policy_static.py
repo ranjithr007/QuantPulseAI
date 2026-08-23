@@ -19,6 +19,11 @@ def test_complete_walk_forward_runner_uses_deployed_paper_risk_policy():
     assert "PRODUCTION_MAX_RISK_PERCENT = 1.0" in source
     assert "PRODUCTION_STOP_PERCENT = PAPER_STOP_LOSS_PERCENT" in source
     assert "PRODUCTION_TARGET_PERCENT = PAPER_TARGET1_PERCENT" in source
+    assert '"target1_close_fraction": PAPER_TARGET1_FRACTION' in source
+    assert '"target2_base_distance_percent": PAPER_TARGET2_PERCENT' in source
+    assert '"max_hold_hours": PAPER_MAX_HOLD_HOURS' in source
+    assert "f\"- Exit policy: {PAPER_STAGED_EXIT_POLICY}; \"" in source
+    assert "5% stop with cost-adjusted net 2R" not in source
 
 
 def test_complete_walk_forward_scope_remains_all_current_timeframes_and_sides():

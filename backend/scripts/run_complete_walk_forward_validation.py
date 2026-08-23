@@ -33,8 +33,12 @@ from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.repositories.candle_repository import get_candles_as_of
 from app.repositories.derivative_repository import DerivativeRepository
+from app.paper_trading.exit_policy import PAPER_MAX_HOLD_HOURS
+from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
 from app.paper_trading.exit_policy import PAPER_STOP_LOSS_PERCENT
+from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
 from app.paper_trading.exit_policy import PAPER_TARGET1_PERCENT
+from app.paper_trading.exit_policy import PAPER_TARGET2_PERCENT
 
 
 RUN_VERSION = "complete_walk_forward_validation_v4_staged_exit_parity"
@@ -434,6 +438,9 @@ def _consolidated_payload(results, *, symbols, timeframes, signals, as_of, start
                     4,
                 ),
                 "target1_base_distance_percent": PRODUCTION_TARGET_PERCENT,
+                "target1_close_fraction": PAPER_TARGET1_FRACTION,
+                "target2_base_distance_percent": PAPER_TARGET2_PERCENT,
+                "max_hold_hours": PAPER_MAX_HOLD_HOURS,
                 "target_adjustment": "FIXED_LEVELS_COSTS_APPLIED_TO_FILLS",
                 "configured_max_risk_percent": PRODUCTION_MAX_RISK_PERCENT,
             },
@@ -464,7 +471,12 @@ def _markdown_report(payload):
         f"- Symbols: {', '.join(scope['symbols'])}",
         f"- Timeframes: {', '.join(scope['timeframes'])}",
         f"- Directions tested: {', '.join(scope['signals'])}",
-        "- Exit policy: 5% stop with cost-adjusted net 2R first target",
+        (
+            f"- Exit policy: {PAPER_STAGED_EXIT_POLICY}; "
+            f"{PAPER_STOP_LOSS_PERCENT}% stop; T1 {PAPER_TARGET1_PERCENT}% "
+            f"closes {PAPER_TARGET1_FRACTION:.0%}; T2 {PAPER_TARGET2_PERCENT}% "
+            f"closes the remainder; {PAPER_MAX_HOLD_HOURS}h maximum hold"
+        ),
         "- Position risk: confidence-tiered up to 1% of account equity",
         f"- Completed side runs: {summary['completed_side_runs']} / {scope['side_run_count']}",
         f"- Contract passes: {summary['contract_passes']} / {scope['side_run_count']}",
