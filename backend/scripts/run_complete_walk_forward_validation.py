@@ -22,6 +22,7 @@ from app.backtesting.phase2_validation_artifacts import (
     persist_phase2_validation_artifact,
 )
 from app.backtesting.phase2_validation_report import build_phase2_validation_report
+from app.backtesting.loss_cluster_analysis import generate_loss_cluster_artifacts
 from app.backtesting.trade_simulator import (
     _build_in_memory_stack_resolver,
     _latest_candle_timestamp,
@@ -137,6 +138,7 @@ def main():
     markdown_path = run_dir / "consolidated_walk_forward_report.md"
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     markdown_path.write_text(_markdown_report(payload), encoding="utf-8")
+    loss_analysis = generate_loss_cluster_artifacts(json_path)
     print(
         json.dumps(
             {
@@ -145,6 +147,8 @@ def main():
                 "failed_side_runs": payload["summary"]["failed_side_runs"],
                 "json_path": str(json_path.resolve()),
                 "markdown_path": str(markdown_path.resolve()),
+                "loss_analysis_json_path": loss_analysis["json_path"],
+                "loss_analysis_markdown_path": loss_analysis["markdown_path"],
             },
             indent=2,
         ),
