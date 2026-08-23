@@ -109,6 +109,8 @@ class WhaleCollector:
 
                 whales.append(
                     {
+                        "venue": "BINANCE",
+                        "exchange_trade_id": str(x.get("a")) if x.get("a") is not None else None,
                         "symbol": symbol,
                         "side": side,
                         "price": price,

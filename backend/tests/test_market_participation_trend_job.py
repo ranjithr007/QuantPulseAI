@@ -48,6 +48,8 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
         "data_timestamp": "2026-08-15",
         "advisory_only": True,
     }
+    spot_repo = Mock()
+    spot_repo.save_many.return_value = 1680
 
     with patch(
         "app.jobs.market_participation_trend_job.SessionLocal",
@@ -61,6 +63,9 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
     ), patch(
         "app.jobs.market_participation_trend_job.MarketParticipationRepository",
         return_value=trend_repo,
+    ), patch(
+        "app.jobs.market_participation_trend_job.SpotMarketRepository",
+        return_value=spot_repo,
     ), patch(
         "app.jobs.market_participation_trend_job._derivative_context",
         return_value={"funding_rate": 0.0001, "open_interest_change_percent": 1.0},
@@ -77,6 +82,8 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
 
     assert result["status"] == "OK"
     assert result["count"] == 1
+    assert result["spot_rows_stored"] == 1680
+    assert len(spot_repo.save_many.call_args.args[1]) == 480
     assert result["records"][0]["direction"] == "BULLISH"
     saved = trend_repo.save.call_args.args[1]
     assert saved["source"] == "market_participation_trend_v1"

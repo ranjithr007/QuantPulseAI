@@ -5,7 +5,7 @@ MARKET_PARTICIPATION_MAX_AGE_SECONDS = 75 * 60
 MARKET_PARTICIPATION_EXECUTION_THRESHOLD = 40.0
 
 
-def evaluate_market_participation(payload, side):
+def evaluate_market_participation(payload, side, *, as_of_timestamp=None):
     """Return the single market-participation decision used by every entry surface."""
     normalized_side = _normalize_side(side)
     expected_direction = (
@@ -19,6 +19,7 @@ def evaluate_market_participation(payload, side):
     freshness = freshness_status(
         (payload or {}).get("effective_timestamp"),
         MARKET_PARTICIPATION_MAX_AGE_SECONDS,
+        reference_timestamp=as_of_timestamp,
     )
 
     base = {
@@ -81,8 +82,12 @@ def evaluate_market_participation(payload, side):
     }
 
 
-def market_participation_blockers(payload, side):
-    decision = evaluate_market_participation(payload, side)
+def market_participation_blockers(payload, side, *, as_of_timestamp=None):
+    decision = evaluate_market_participation(
+        payload,
+        side,
+        as_of_timestamp=as_of_timestamp,
+    )
     return [] if decision["allowed"] else [decision["reason"]]
 
 

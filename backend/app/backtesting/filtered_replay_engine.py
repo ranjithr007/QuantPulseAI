@@ -824,13 +824,21 @@ def run_filtered_replay(
             "features": "POINT_IN_TIME_SNAPSHOT_FIRST",
             "regime": "RECONSTRUCTED_FROM_CLOSED_CANDLES",
             "timeframe_stack": (
-                "POINT_IN_TIME_1H_4H_1D"
+                "POINT_IN_TIME_1H_2H_4H_1D"
                 if stack_resolver is not None
                 else "NOT_SUPPLIED"
             ),
-            "smc": "UNAVAILABLE_HISTORICALLY",
-            "orderflow": "UNAVAILABLE_HISTORICALLY",
-            "claim_scope": "CANDLE_FILTER_VALIDATION_NOT_FULL_AI_REPLAY",
+            "smc": "RECONSTRUCTED_FROM_CLOSED_CANDLES",
+            "orderflow": "CANDLE_VOLUME_PROXY_WITH_STATEFUL_CVD",
+            "market_participation": _market_participation_replay_status(
+                stack_resolver
+            ),
+            "orderbook": "NOT_APPLIED_TO_CURRENT_STRATEGY",
+            "liquidations": "EXECUTION_MODEL_ONLY_NOT_SIGNAL_GATE",
+            "whales": "NOT_APPLIED_TO_CURRENT_STRATEGY",
+            "strategy_configuration": "WALK_FORWARD_PARAMETERS_SNAPSHOT",
+            "coverage_status": _historical_coverage_status(stack_resolver),
+            "claim_scope": "POINT_IN_TIME_REPLAY_WITH_DECLARED_EVIDENCE_GAPS",
         },
         "replay_provenance": {
             "feature_source_counts": dict(sorted(feature_source_counts.items())),
@@ -2111,6 +2119,25 @@ def _serialize_master_candidate_chain_audit(diagnostics):
         ),
         "scope": "READ_ONLY_MASTER_CANDIDATES_AFTER_TIMEFRAME_GATE",
     }
+
+
+def _market_participation_replay_status(stack_resolver):
+    if stack_resolver is None:
+        return "NOT_SUPPLIED"
+    if getattr(stack_resolver, "market_participation_record_count", 0) > 0:
+        return "POINT_IN_TIME_DECISION_SNAPSHOTS"
+    if getattr(stack_resolver, "raw_spot_replay_ready", False):
+        return "RECONSTRUCTED_FROM_RAW_SPOT_CANDLES"
+    return "UNAVAILABLE_HISTORICALLY"
+
+
+def _historical_coverage_status(stack_resolver):
+    participation = _market_participation_replay_status(stack_resolver)
+    if participation == "POINT_IN_TIME_DECISION_SNAPSHOTS":
+        return "FULL_DECISION_EVIDENCE"
+    if participation == "RECONSTRUCTED_FROM_RAW_SPOT_CANDLES":
+        return "PARTIAL_EXTERNAL_CONTEXT_NOT_REPLAYED"
+    return "PARTIAL_MISSING_SPOT_PARTICIPATION"
 
 
 def _stateful_regime_from_stack(stack_context):

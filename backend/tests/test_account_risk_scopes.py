@@ -136,8 +136,8 @@ def test_persisted_notional_and_remaining_fraction_drive_account_exposure():
     )
 
     assert snapshot["risk_available"] is True
-    assert snapshot["contributions"][0]["account_exposure_factor"] == 0.375
-    assert snapshot["daily_pnl_percent"] == -1.5
+    assert snapshot["contributions"][0]["account_exposure_factor"] == 0.1875
+    assert snapshot["daily_pnl_percent"] == -0.75
 
 
 def test_closed_trade_uses_persisted_realized_inr_for_exact_account_pnl():
@@ -153,7 +153,7 @@ def test_closed_trade_uses_persisted_realized_inr_for_exact_account_pnl():
 
     snapshot = build_account_daily_pnl_snapshot([trade])
 
-    assert snapshot["daily_pnl_percent"] == -3.0
+    assert snapshot["daily_pnl_percent"] == -1.5
     assert snapshot["contributions"][0]["account_pnl_source"] == (
         "PERSISTED_REALIZED_INR"
     )

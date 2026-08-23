@@ -21,7 +21,12 @@ def stale_after_seconds_for_timeframe(timeframe, fallback=DEFAULT_STALE_AFTER_SE
     return TIMEFRAME_STALE_AFTER_SECONDS.get(str(timeframe).lower(), fallback)
 
 
-def freshness_status(timestamp, stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS):
+def freshness_status(
+    timestamp,
+    stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS,
+    *,
+    reference_timestamp=None,
+):
     if timestamp is None:
         return {
             "data_timestamp": None,
@@ -33,7 +38,11 @@ def freshness_status(timestamp, stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS)
             "stale_after_seconds": stale_after_seconds,
         }
 
-    now = datetime.now(timezone.utc)
+    now = (
+        normalize_timestamp_to_utc(reference_timestamp)
+        if reference_timestamp is not None
+        else datetime.now(timezone.utc)
+    )
     normalized, timezone_assumption = _as_utc(timestamp, now)
     age_seconds = int((now - normalized).total_seconds())
     is_future = age_seconds < 0

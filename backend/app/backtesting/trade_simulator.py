@@ -28,8 +28,14 @@ from app.features.point_in_time_feature_service import build_features_as_of
 from app.features.point_in_time_feature_service import build_feature_snapshot
 from app.utils.freshness import normalize_timestamp_to_utc
 from app.repositories.derivative_repository import DerivativeRepository
+from app.repositories.market_participation_repository import MarketParticipationRepository
+from app.repositories.spot_market_repository import SpotMarketRepository
+from app.repositories.symbol_repository import SymbolRepository
 from app.smc.smc_engine import analyze_smc
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.intelligence.market_participation_trend_engine import analyze_spot_stack
+from app.intelligence.market_participation_trend_engine import build_market_breadth
+from app.intelligence.market_participation_trend_engine import build_market_participation_trend
 
 COLLISION_POLICIES = (
     "STOP_FIRST",
@@ -358,6 +364,17 @@ def _build_filtered_replay_inputs(db, symbol, timeframe, limit):
         _latest_candle_timestamp(candles),
         mark_price_timeframe=timeframe,
     )
+    derivative_history["market_participation"] = (
+        MarketParticipationRepository().history_through(
+            db,
+            symbol,
+            _latest_candle_timestamp(candles),
+        )
+    )
+    derivative_history["spot_histories"] = _load_spot_replay_histories(
+        db,
+        _latest_candle_timestamp(candles),
+    )
     stack_resolver = _build_in_memory_stack_resolver(
         symbol,
         _load_replay_stack_candles(db, symbol, timeframe, candles, limit),
@@ -566,6 +583,17 @@ def execute_walk_forward(
                         symbol,
                         _latest_candle_timestamp(candles),
                         mark_price_timeframe=timeframe,
+                    )
+                    derivative_history["market_participation"] = (
+                        MarketParticipationRepository().history_through(
+                            db,
+                            symbol,
+                            _latest_candle_timestamp(candles),
+                        )
+                    )
+                    derivative_history["spot_histories"] = _load_spot_replay_histories(
+                        db,
+                        _latest_candle_timestamp(candles),
                     )
                     stack_candles = _load_replay_stack_candles(
                         db,
@@ -950,6 +978,18 @@ def _build_in_memory_stack_resolver(
                 margin_bracket_records=(derivative_history or {}).get("margin_brackets"),
             )
             stack["derivatives"] = derivatives
+            market_participation = _market_participation_as_of(
+                (derivative_history or {}).get("market_participation"),
+                normalized_as_of,
+            )
+            if market_participation is None:
+                market_participation = _reconstruct_market_participation_as_of(
+                    symbol,
+                    (derivative_history or {}).get("spot_histories"),
+                    normalized_as_of,
+                    derivatives,
+                )
+            stack["market_participation"] = market_participation
             decision_record = next(
                 (
                     item
@@ -970,6 +1010,7 @@ def _build_in_memory_stack_resolver(
                 derivatives,
                 risk_min_confidence=risk_min_confidence,
                 risk_confidence_scope=risk_confidence_scope,
+                market_participation=market_participation,
             )
             stack["decision_chain_timeframe"] = decision_timeframe
             stack["event_state_scope"] = {
@@ -1008,7 +1049,137 @@ def _build_in_memory_stack_resolver(
     resolve.transition_policy_key = transition_policy_key
     resolve.risk_min_confidence_key = risk_min_confidence_key
     resolve.risk_confidence_scope_key = risk_confidence_scope_key
+    resolve.market_participation_record_count = len(
+        (derivative_history or {}).get("market_participation") or []
+    )
+    selected_spot = (
+        ((derivative_history or {}).get("spot_histories") or {}).get(
+            str(symbol).upper()
+        )
+        or {}
+    )
+    resolve.raw_spot_replay_ready = all(
+        len(_spot_index_rows(selected_spot.get(timeframe))) >= 25
+        for timeframe in OFFICIAL_ENTRY_TIMEFRAMES
+    )
     return resolve
+
+
+def _market_participation_as_of(records, as_of_timestamp):
+    cutoff = normalize_timestamp_to_utc(as_of_timestamp)
+    if cutoff is None:
+        return None
+    selected = None
+    for record in records or []:
+        timestamp = normalize_timestamp_to_utc(record.get("effective_timestamp"))
+        if timestamp is None:
+            continue
+        if timestamp <= cutoff:
+            selected = record
+        else:
+            break
+    return selected
+
+
+def _load_spot_replay_histories(db, as_of_timestamp):
+    active = [
+        str(item.symbol).upper()
+        for item in SymbolRepository().get_active_symbols(db)
+    ]
+    symbols = list(dict.fromkeys([*active, "ETHBTC"]))
+    repository = SpotMarketRepository()
+    histories = {
+        symbol: repository.history_through(
+            db,
+            symbol,
+            as_of_timestamp,
+            limit_per_timeframe=15000,
+        )
+        for symbol in symbols
+    }
+    return {
+        symbol: {
+            timeframe: {
+                "rows": rows,
+                "timestamps": [
+                    normalize_timestamp_to_utc(row.get("close_time"))
+                    for row in rows
+                ],
+            }
+            for timeframe, rows in timeframe_rows.items()
+        }
+        for symbol, timeframe_rows in histories.items()
+    }
+
+
+def _reconstruct_market_participation_as_of(
+    symbol,
+    spot_histories,
+    as_of_timestamp,
+    derivatives,
+):
+    if not spot_histories or str(symbol).upper() not in spot_histories:
+        return None
+    bounded = {
+        market_symbol: {
+            timeframe: _spot_rows_as_of(rows, as_of_timestamp, limit=60)
+            for timeframe, rows in timeframe_rows.items()
+        }
+        for market_symbol, timeframe_rows in spot_histories.items()
+    }
+    stacks = {
+        market_symbol: analyze_spot_stack(market_symbol, timeframe_rows)
+        for market_symbol, timeframe_rows in bounded.items()
+        if market_symbol != "ETHBTC"
+    }
+    selected = stacks.get(str(symbol).upper())
+    if selected is None:
+        return None
+    trend = build_market_participation_trend(
+        selected,
+        derivatives={
+            "funding_rate": ((derivatives or {}).get("funding") or {}).get("rate"),
+            "open_interest_change_percent": (
+                ((derivatives or {}).get("open_interest") or {}).get("change_pct")
+            ),
+            "source": "POINT_IN_TIME_REPLAY",
+        },
+        breadth=build_market_breadth(stacks),
+        ethbtc=analyze_spot_stack(
+            "ETHBTC",
+            bounded.get("ETHBTC") or {},
+        ),
+    )
+    return {
+        **trend,
+        "effective_timestamp": normalize_timestamp_to_utc(as_of_timestamp),
+        "replay_source": "RECONSTRUCTED_RAW_SPOT_CANDLES",
+        "external_evidence_status": "NOT_REPLAYED",
+    }
+
+
+def _spot_rows_as_of(rows, as_of_timestamp, *, limit):
+    cutoff = normalize_timestamp_to_utc(as_of_timestamp)
+    if cutoff is None:
+        return []
+    source_rows = _spot_index_rows(rows)
+    timestamps = (
+        rows.get("timestamps")
+        if isinstance(rows, dict)
+        else [
+            normalize_timestamp_to_utc(row.get("close_time"))
+            for row in source_rows
+        ]
+    )
+    end = bisect_right(timestamps, cutoff)
+    start = max(0, end - max(0, int(limit)))
+    return source_rows[start:end]
+
+
+def _spot_index_rows(index):
+    if isinstance(index, dict) and "rows" in index:
+        return index.get("rows") or []
+    return index or []
 
 
 def _enrich_state_snapshot(symbol, timeframe, history, state_snapshot):

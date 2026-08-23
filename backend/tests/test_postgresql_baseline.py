@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).parents[2]
 def test_postgresql_baseline_fingerprint_is_reviewed_and_stable():
     statements = postgresql_baseline.compiled_postgresql_schema()
 
-    assert len(statements) == 130
+    assert len(statements) == 133
     assert postgresql_baseline.postgresql_schema_fingerprint() == (
         postgresql_baseline.POSTGRESQL_BASELINE_FINGERPRINT
     )
@@ -68,6 +68,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260815_exit_monitor_checkpoint.py",
         "pg_20260815_inr_wallet_ledger.py",
         "pg_20260819_paper_trade_exit_reason.py",
+        "pg_20260823_backtest_market_evidence.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -114,3 +115,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     exit_reason = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260819_paper_trade_exit_reason.py").read_text(encoding="utf-8")
     assert 'down_revision = "pg_20260815_wallet_ledger"' in exit_reason
     assert 'revision = "pg_20260819_stop_reason"' in exit_reason
+
+    evidence = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260823_backtest_market_evidence.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260819_stop_reason"' in evidence
+    assert 'revision = "pg_20260823_evidence"' in evidence

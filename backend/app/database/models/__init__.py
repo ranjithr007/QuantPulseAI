@@ -9,6 +9,8 @@ from .funding_rates import FundingRate
 from .open_interest import OpenInterest
 from .futures_mark_prices import FuturesMarkPrice
 from .futures_margin_brackets import FuturesMarginBracket
+from .spot_market_candles import SpotMarketCandle
+from .orderbook_snapshots import OrderBookSnapshot
 
 from .liquidations import Liquidation
 

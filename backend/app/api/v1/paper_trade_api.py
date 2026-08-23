@@ -921,7 +921,10 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 db.rollback()
                 continue
-            if locked_account_risk.get("limit_reached"):
+            if (
+                auto.get("dailyLossLimitEnabled", False)
+                and locked_account_risk.get("limit_reached")
+            ):
                 skipped.append(
                     {
                         "symbol": candidate["symbol"],
@@ -947,7 +950,10 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 int(auto.get("maxOpenTrades", PAPER_MAX_OPEN_TRADES)),
                 PAPER_MAX_OPEN_TRADES,
             )
-            if wallet["open_position_count"] >= effective_max_open_trades:
+            if (
+                auto.get("maxOpenTradesEnabled", False)
+                and wallet["open_position_count"] >= effective_max_open_trades
+            ):
                 skipped.append(
                     {
                         "symbol": candidate["symbol"],
@@ -1220,14 +1226,15 @@ def _automation_execution_blockers(auto, candidate):
         missing_reason="Candidate confidence is unavailable",
         blocked_reason="Candidate confidence is below the automation minimum",
     )
-    _append_automation_numeric_limit_blocker(
-        reasons,
-        value=risk.get("risk_percent"),
-        limit=auto.get("maxRiskPerTrade"),
-        comparison="maximum",
-        missing_reason="Candidate risk percentage is unavailable",
-        blocked_reason="Candidate risk percentage exceeds the automation maximum",
-    )
+    if auto.get("maxRiskPerTradeEnabled", False):
+        _append_automation_numeric_limit_blocker(
+            reasons,
+            value=risk.get("risk_percent"),
+            limit=auto.get("maxRiskPerTrade"),
+            comparison="maximum",
+            missing_reason="Candidate risk percentage is unavailable",
+            blocked_reason="Candidate risk percentage exceeds the automation maximum",
+        )
     _append_automation_numeric_limit_blocker(
         reasons,
         value=sizing.get("leverage"),
@@ -1364,6 +1371,8 @@ def build_paper_trade_candidates(
                 int(auto.get("maxOpenTrades", PAPER_MAX_OPEN_TRADES)),
                 PAPER_MAX_OPEN_TRADES,
             ),
+            max_open_trades_enabled=auto.get("maxOpenTradesEnabled", False),
+            daily_loss_limit_enabled=auto.get("dailyLossLimitEnabled", False),
             coin_has_active_trade=str(trade.symbol).upper() in open_symbols,
             stop_reentry_cooldown=same_side_stop_reentry_cooldown(
                 account_trades,
@@ -2095,6 +2104,8 @@ def _paper_trade_candidate(
     account_risk=None,
     paper_wallet=None,
     max_open_trades=4,
+    max_open_trades_enabled=False,
+    daily_loss_limit_enabled=False,
     coin_has_active_trade=False,
     stop_reentry_cooldown=None,
 ):
@@ -2137,11 +2148,11 @@ def _paper_trade_candidate(
     account_blockers = []
     if not account_risk or not account_risk.get("risk_available", False):
         account_blockers.append("Account-wide risk valuation is unavailable or stale")
-    elif account_risk.get("limit_reached"):
+    elif daily_loss_limit_enabled and account_risk.get("limit_reached"):
         account_blockers.append("Account-wide daily loss limit reached")
-    if int((paper_wallet or {}).get("open_position_count") or 0) >= int(
-        max_open_trades
-    ):
+    if max_open_trades_enabled and int(
+        (paper_wallet or {}).get("open_position_count") or 0
+    ) >= int(max_open_trades):
         account_blockers.append("Account-wide open trade cap reached")
     remaining_margin_capacity = (paper_wallet or {}).get(
         "remaining_margin_capacity_inr"

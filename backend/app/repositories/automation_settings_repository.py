@@ -15,6 +15,9 @@ from app.repositories._db_utils import flush_or_rollback
 
 PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT = 4.0
 PAPER_MAX_OPEN_TRADES = 4
+PAPER_MAX_RISK_LIMIT_ENABLED = False
+PAPER_DAILY_LOSS_LIMIT_ENABLED = False
+PAPER_MAX_OPEN_TRADES_LIMIT_ENABLED = False
 
 
 DEFAULT_AUTOMATION_SETTINGS = {
@@ -210,6 +213,7 @@ def automation_settings_payload(row):
         "emergencyStop": bool(row.emergency_stop),
         "allowedSymbols": _json_value(row.allowed_symbols, []),
         "maxRiskPerTrade": float(row.max_risk_per_trade),
+        "maxRiskPerTradeEnabled": PAPER_MAX_RISK_LIMIT_ENABLED,
         "dailyLossLimit": min(
             float(row.daily_loss_limit),
             PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
@@ -218,6 +222,8 @@ def automation_settings_payload(row):
             int(row.max_open_trades),
             PAPER_MAX_OPEN_TRADES,
         ),
+        "dailyLossLimitEnabled": PAPER_DAILY_LOSS_LIMIT_ENABLED,
+        "maxOpenTradesEnabled": PAPER_MAX_OPEN_TRADES_LIMIT_ENABLED,
         "maxLeverage": int(row.max_leverage),
         "maxPositionSize": float(row.max_position_size),
         "paperCapitalInr": PAPER_CAPITAL_INR,

@@ -147,7 +147,7 @@ def test_qa_losses_do_not_affect_performance_or_account_daily_loss():
     assert performance["total_trades"] == 1
     assert performance["wins"] == 1
     assert performance["losses"] == 0
-    assert account["daily_pnl_percent"] == 0.75
+    assert account["daily_pnl_percent"] == 0.375
     assert account["limit_reached"] is False
     assert [item["symbol"] for item in account["contributions"]] == ["BTCUSDT"]
 

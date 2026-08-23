@@ -498,7 +498,7 @@ function formatAgeShort(seconds) {
 }
 
 function PaperWalletStrip({ wallet, openPositions }) {
-  const capital = safeNumber(wallet?.paper_capital_inr, 100000);
+  const capital = safeNumber(wallet?.paper_capital_inr, 200000);
   const committed = safeNumber(
     wallet?.committed_margin_inr,
     (openPositions || []).reduce(
@@ -514,7 +514,7 @@ function PaperWalletStrip({ wallet, openPositions }) {
       <WalletDatum label="INR-M paper wallet" value={formatInr(capital)} note="Paper trading only" />
       <WalletDatum label="Committed margin" value={formatInr(committed)} note={`${formatPercent(utilization, 1)} utilised`} />
       <WalletDatum label="Available balance" value={formatInr(available)} note="Uncommitted paper capital" />
-      <WalletDatum label="Position sizing" value="75% / 85%" note={`${formatInr(75000)} minimum / ${formatInr(85000)} maximum notional`} />
+      <WalletDatum label="Position sizing" value="75% / 85%" note={`${formatInr(150000)} minimum / ${formatInr(170000)} maximum notional`} />
     </div>
   );
 }

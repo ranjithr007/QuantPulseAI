@@ -180,7 +180,7 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
 
         for source in (auto_page, risk_page):
             self.assertIn('label="Selected coin trades"', source)
-            self.assertIn("account limit", source)
+            self.assertIn("one active trade per coin", source)
 
         self.assertEqual(rotation_page.count("initialDimension="), 2)
         self.assertEqual(rotation_page.count("minWidth={0}"), 2)

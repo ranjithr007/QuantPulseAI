@@ -1,6 +1,7 @@
 import json
 import asyncio
 import websockets
+from hashlib import sha256
 
 from datetime import datetime
 
@@ -54,8 +55,21 @@ def _parse_liquidation_message(message):
 
         price = float(order["p"])
         quantity = float(order["q"])
+        event_identity = "|".join(
+            str(item)
+            for item in (
+                order["s"],
+                order["S"],
+                event_time,
+                order.get("T"),
+                price,
+                quantity,
+            )
+        )
 
         return {
+            "venue": "BINANCE",
+            "exchange_event_id": sha256(event_identity.encode("utf-8")).hexdigest()[:40],
             "symbol": order["s"],
             "side": order["S"],
             "price": price,

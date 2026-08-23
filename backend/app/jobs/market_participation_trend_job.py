@@ -12,6 +12,7 @@ from app.intelligence.market_participation_trend_engine import build_market_brea
 from app.intelligence.market_participation_trend_engine import build_market_participation_trend
 from app.repositories.derivative_repository import DerivativeRepository
 from app.repositories.market_participation_repository import MarketParticipationRepository
+from app.repositories.spot_market_repository import SpotMarketRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.utils.network_resilience import summarize_network_error
 
@@ -49,6 +50,13 @@ def run_market_participation_trend_job(*, context=None):
             "ETHBTC",
             collected.get("ETHBTC", {}),
         )
+        raw_spot_rows = [
+            row
+            for symbol_rows in collected.values()
+            for timeframe_rows in symbol_rows.values()
+            for row in timeframe_rows
+        ]
+        stored_spot_rows = SpotMarketRepository().save_many(db, raw_spot_rows)
         external_context = FredMacroCollector(
             settings.fred_api_key,
             timeout_seconds=settings.fred_timeout_seconds,
@@ -85,6 +93,7 @@ def run_market_participation_trend_job(*, context=None):
             "status": "OK" if all(item["persisted"] for item in records) else "DEGRADED",
             "source": "market_participation_trend_job",
             "count": len(records),
+            "spot_rows_stored": stored_spot_rows,
             "breadth": breadth,
             "ethbtc": {
                 "status": ethbtc.get("status"),

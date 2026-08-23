@@ -6,6 +6,11 @@ DEFAULT_SCHEDULER_JOBS = [
     "deterministic_pipeline",
     "derivative",
     "candle_completeness",
+    "liquidations",
+    "whales",
+    "whale_ai",
+    "heatmap",
+    "orderbook",
 ]
 DEFAULT_LIVE_MARKET_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
 DEFAULT_DEVELOPMENT_ORIGINS = [

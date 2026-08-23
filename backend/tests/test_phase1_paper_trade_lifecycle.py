@@ -34,7 +34,7 @@ def _enabled_automation_settings():
         "dailyLossLimit": 4.0,
         "maxOpenTrades": 4,
         "maxLeverage": 5,
-        "maxPositionSize": 85_000.0,
+        "maxPositionSize": 170_000.0,
         "minConfidence": 40.0,
         "direction": "BOTH",
         "executionMode": "PAPER",
@@ -237,8 +237,8 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
 
         with self.Session() as db:
             trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
-            self.assertEqual(85_000, trade.position_notional_inr)
-            self.assertEqual(17_000, trade.margin_used_inr)
+            self.assertEqual(170_000, trade.position_notional_inr)
+            self.assertEqual(34_000, trade.margin_used_inr)
             self.assertEqual(5, trade.leverage)
             entry_event = db.query(PaperWalletLedgerEntry).one()
             self.assertEqual("ENTRY", entry_event.event_type)

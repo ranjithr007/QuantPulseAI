@@ -36,7 +36,7 @@ def test_whale_job_continues_when_one_symbol_has_no_data():
     ), patch(
         "app.jobs.whale_job.WhaleCollector.get_order_flow",
         side_effect=[None, whale_payload],
-    ), patch("app.jobs.whale_job.WhaleRepository.save") as whale_save, patch(
+    ), patch("app.jobs.whale_job.WhaleRepository.save_many") as whale_save, patch(
         "app.jobs.whale_job.OrderFlowRepository.get_last_cvd",
         return_value=0,
     ), patch(

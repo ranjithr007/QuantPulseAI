@@ -12,6 +12,8 @@ def _decision(
     selected_symbol="BTCUSDT",
     open_trades=None,
     account_risk=None,
+    daily_loss_limit_enabled=False,
+    max_open_trades_enabled=False,
 ):
     return _build_auto_decision(
         auto={
@@ -22,7 +24,10 @@ def _decision(
             "direction": "BOTH",
             "minConfidence": 40.0,
             "maxOpenTrades": 4,
+            "maxOpenTradesEnabled": max_open_trades_enabled,
             "dailyLossLimit": 4.0,
+            "dailyLossLimitEnabled": daily_loss_limit_enabled,
+            "maxRiskPerTradeEnabled": False,
         },
         selected_symbol=selected_symbol,
         signal={
@@ -120,8 +125,17 @@ def test_genuine_account_daily_loss_blocks_every_coin():
         "limit_reached": True,
     }
 
-    btc = _decision(80, account_risk=account_risk)
-    eth = _decision(80, selected_symbol="ETHUSDT", account_risk=account_risk)
+    btc = _decision(
+        80,
+        account_risk=account_risk,
+        daily_loss_limit_enabled=True,
+    )
+    eth = _decision(
+        80,
+        selected_symbol="ETHUSDT",
+        account_risk=account_risk,
+        daily_loss_limit_enabled=True,
+    )
 
     assert btc["allowed"] is False
     assert eth["allowed"] is False
@@ -140,8 +154,25 @@ def test_global_open_trade_cap_uses_account_count_not_selected_coin_records():
             "limit_reached": False,
             "open_trade_count": 4,
         },
+        max_open_trades_enabled=True,
     )
 
     assert decision["allowed"] is False
     assert decision["accountOpenTrades"] == 4
     assert decision["accountBlockers"] == ["Account-wide open trade cap reached"]
+
+
+def test_paper_account_count_and_daily_loss_are_monitor_only_when_disabled():
+    decision = _decision(
+        80,
+        selected_symbol="ETHUSDT",
+        account_risk={
+            "daily_pnl_percent": -25.0,
+            "daily_loss_limit_percent": 4.0,
+            "limit_reached": True,
+            "open_trade_count": 99,
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert decision["accountBlockers"] == []

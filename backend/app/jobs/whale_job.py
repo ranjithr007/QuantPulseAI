@@ -33,8 +33,7 @@ def run_whale_job():
                 print("No whale data:", item.symbol)
                 continue
             # print(trades)
-            for trade in trades["whales"]:
-                repo.save(db, trade)
+            repo.save_many(db, trades["whales"])
 
             previous_cvd = order_repo.get_last_cvd(db, item.symbol)
             trades["cumulative_delta"] = previous_cvd + trades["delta"]

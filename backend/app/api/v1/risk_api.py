@@ -392,6 +392,9 @@ def _normalize_auto_settings(auto):
         "emergencyStop": bool(auto.get("emergencyStop", False)),
         "allowedSymbols": allowed_symbols,
         "maxRiskPerTrade": _safe_number(auto.get("maxRiskPerTrade"), 1.0),
+        "maxRiskPerTradeEnabled": bool(
+            auto.get("maxRiskPerTradeEnabled", False)
+        ),
         "dailyLossLimit": min(
             _safe_number(auto.get("dailyLossLimit"), 4.0),
             PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT,
@@ -399,6 +402,12 @@ def _normalize_auto_settings(auto):
         "maxOpenTrades": min(
             int(_safe_number(auto.get("maxOpenTrades"), 4)),
             PAPER_MAX_OPEN_TRADES,
+        ),
+        "dailyLossLimitEnabled": bool(
+            auto.get("dailyLossLimitEnabled", False)
+        ),
+        "maxOpenTradesEnabled": bool(
+            auto.get("maxOpenTradesEnabled", False)
         ),
         "maxLeverage": int(_safe_number(auto.get("maxLeverage"), 5)),
         "maxPositionSize": PAPER_MAX_POSITION_INR,
@@ -453,7 +462,10 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
         warnings.append("Timeframe stack is mixed")
     if confidence < auto["minConfidence"]:
         trade_blockers.append("Confidence below minimum")
-    if account_open_trade_count >= auto["maxOpenTrades"]:
+    if (
+        auto["maxOpenTradesEnabled"]
+        and account_open_trade_count >= auto["maxOpenTrades"]
+    ):
         account_blockers.append("Account-wide open trade cap reached")
     if any(
         str(trade.get("symbol") or "").upper() == str(selected_symbol).upper()
@@ -474,7 +486,7 @@ def _build_auto_decision(auto, selected_symbol, signal, risk, computed_risk, pap
         trade_blockers.append("Higher timeframe conflict is too strong")
 
     daily_loss = _safe_number(account_risk.get("daily_pnl_percent"), 0)
-    if account_risk.get("limit_reached"):
+    if auto["dailyLossLimitEnabled"] and account_risk.get("limit_reached"):
         account_blockers.append("Account-wide daily loss limit reached")
 
     blocker_scopes = {

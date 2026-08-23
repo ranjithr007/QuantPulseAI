@@ -1,8 +1,10 @@
 import json
 from datetime import datetime
+from datetime import timezone
 
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.repositories.point_in_time_snapshot_repository import save_decision_snapshot
+from app.utils.freshness import normalize_timestamp_to_utc
 
 
 MARKET_PARTICIPATION_DECISION_VERSION = "market_participation_trend_v1"
@@ -56,6 +58,29 @@ class MarketParticipationRepository:
             symbol: self.latest(db, symbol)
             for symbol in sorted({str(item).upper() for item in symbols or []})
         }
+
+    def history_through(self, db, symbol, as_of_timestamp=None, *, limit=5000):
+        self.ensure_table(db)
+        query = db.query(DecisionSnapshot).filter(
+            DecisionSnapshot.symbol == str(symbol).upper(),
+            DecisionSnapshot.timeframe == MARKET_PARTICIPATION_TIMEFRAME,
+            DecisionSnapshot.decision_version
+            == MARKET_PARTICIPATION_DECISION_VERSION,
+        )
+        if as_of_timestamp is not None:
+            cutoff = normalize_timestamp_to_utc(as_of_timestamp)
+            if cutoff.tzinfo is not None:
+                cutoff = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+            query = query.filter(DecisionSnapshot.effective_timestamp <= cutoff)
+        rows = (
+            query.order_by(
+                DecisionSnapshot.effective_timestamp.desc(),
+                DecisionSnapshot.id.desc(),
+            )
+            .limit(max(0, int(limit)))
+            .all()
+        )
+        return [self.serialize(row) for row in reversed(rows)]
 
     @staticmethod
     def serialize(row):

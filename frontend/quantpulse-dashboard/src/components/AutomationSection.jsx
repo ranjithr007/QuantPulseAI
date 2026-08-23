@@ -104,44 +104,26 @@ export default function AutomationSection({
               />
 
               <RiskField
-                label="Max risk per trade"
-                value={`${auto.maxRiskPerTrade}%`}
+                label="Per-trade risk cap"
+                value="Not applied"
                 render={() => (
-                  <RangeInput
-                    value={auto.maxRiskPerTrade}
-                    min={0.1}
-                    max={5}
-                    step={0.1}
-                    onChange={(value) => setAuto((current) => ({ ...current, maxRiskPerTrade: value }))}
-                  />
+                  <div className="text-xs text-slate-500">Paper sizing uses the 75% / 85% capital tiers and the governed stop-loss.</div>
                 )}
               />
 
               <RiskField
                 label="Daily loss limit"
-                value={`${auto.dailyLossLimit}%`}
+                value="Monitor only"
                 render={() => (
-                  <RangeInput
-                    value={auto.dailyLossLimit}
-                    min={0.5}
-                    max={4}
-                    step={0.5}
-                    onChange={(value) => setAuto((current) => ({ ...current, dailyLossLimit: value }))}
-                  />
+                  <div className="text-xs text-slate-500">Daily account P&amp;L remains visible but does not block paper entries.</div>
                 )}
               />
 
               <RiskField
-                label="Max open trades"
-                value={auto.maxOpenTrades}
+                label="Account open-trade cap"
+                value="Not applied"
                 render={() => (
-                  <NumberInput
-                    value={auto.maxOpenTrades}
-                    min={1}
-                    max={4}
-                    step={1}
-                    onChange={(value) => setAuto((current) => ({ ...current, maxOpenTrades: value }))}
-                  />
+                  <div className="text-xs text-slate-500">One active trade per coin is still strictly enforced.</div>
                 )}
               />
 
@@ -161,10 +143,10 @@ export default function AutomationSection({
 
               <RiskField
                 label="INR-M paper capital"
-                value={formatInr(auto.paperCapitalInr || 100000)}
+                value={formatInr(auto.paperCapitalInr || 200000)}
                 render={() => (
                   <div className="text-xs text-slate-500">
-                    Positions use {auto.minimumAllocationPercent || 75}% / {auto.maximumAllocationPercent || 85}% notional ({formatInr(auto.maxPositionSize || 85000)} maximum)
+                    Positions use {auto.minimumAllocationPercent || 75}% / {auto.maximumAllocationPercent || 85}% notional ({formatInr(auto.maxPositionSize || 170000)} maximum)
                   </div>
                 )}
               />
@@ -203,9 +185,9 @@ export default function AutomationSection({
                 <MetricCard
                   label="Open trades"
                   value={openTrades.length}
-                  note={`Limit ${auto.maxOpenTrades}`}
+                  note="One active trade per coin"
                   icon={Wallet}
-                  accent={openTrades.length < auto.maxOpenTrades ? "emerald" : "rose"}
+                  accent="emerald"
                   compact
                 />
                 <MetricCard
@@ -258,27 +240,6 @@ function RiskField({ label, value, render }) {
       <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{label}</div>
       <div className="mt-1.5 line-clamp-1 text-sm font-medium text-white">{Array.isArray(value) ? value.join(", ") : value}</div>
       <div className="mt-2.5">{render()}</div>
-    </div>
-  );
-}
-
-function RangeInput({ value, min, max, step, onChange }) {
-  return (
-    <div className="space-y-3">
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(safeNumber(event.target.value, value))}
-        className="w-full accent-cyan-400"
-      />
-      <div className="flex items-center justify-between text-[11px] text-slate-500">
-        <span>{min}</span>
-        <span>{value}</span>
-        <span>{max}</span>
-      </div>
     </div>
   );
 }

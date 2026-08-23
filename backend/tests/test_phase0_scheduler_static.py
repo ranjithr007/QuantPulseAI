@@ -17,8 +17,23 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
                 "deterministic_pipeline",
                 "derivative",
                 "candle_completeness",
+                "liquidations",
+                "whales",
+                "whale_ai",
+                "heatmap",
+                "orderbook",
             ],
         )
+
+    def test_market_evidence_collectors_are_enabled_by_default(self):
+        liquidations = get_job_definition("liquidations")
+        whales = get_job_definition("whales")
+        orderbook = get_job_definition("orderbook")
+
+        self.assertEqual(liquidations.trigger, "date")
+        self.assertEqual(liquidations.function, "run_liquidation_job")
+        self.assertEqual(whales.seconds, 120)
+        self.assertEqual(orderbook.minutes, 1)
 
     def test_deterministic_pipeline_is_registered_for_explicit_promotion(self):
         job = get_job_definition("deterministic_pipeline")

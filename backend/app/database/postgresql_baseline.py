@@ -11,9 +11,15 @@ from app.database import models as _models  # noqa: F401
 
 
 POSTGRESQL_BASELINE_FINGERPRINT = (
-    "5bbaaa6467db1528872c87b124f712e9cc45b4154659207a33417a5f218a152e"
+    "45d0b9a08338df13d554b5280b4e7834b023ed3592fb1d82f5bfb842ffeff7c2"
 )
-POSTGRESQL_POST_BASELINE_TABLES = frozenset({"walk_forward_jobs"})
+POSTGRESQL_POST_BASELINE_TABLES = frozenset(
+    {
+        "walk_forward_jobs",
+        "spot_market_candles",
+        "orderbook_snapshots",
+    }
+)
 
 
 def _baseline_tables():

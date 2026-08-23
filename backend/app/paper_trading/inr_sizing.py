@@ -4,7 +4,7 @@ from app.governance.evidence_policy import FULL_SIZE_ENTRY_CONFIDENCE
 from app.paper_trading.evidence_scope import production_paper_trade_records
 
 
-PAPER_CAPITAL_INR = 100_000.0
+PAPER_CAPITAL_INR = 200_000.0
 MINIMUM_TIER_ALLOCATION_PERCENT = 75.0
 MAXIMUM_TIER_ALLOCATION_PERCENT = 85.0
 PAPER_MAX_POSITION_INR = PAPER_CAPITAL_INR * (

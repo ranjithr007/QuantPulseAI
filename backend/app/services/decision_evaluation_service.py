@@ -8,6 +8,7 @@ from app.engines.smart_money_fusion_engine import SmartMoneyFusionEngine
 from app.intelligence.contradiction_engine import analyze_contradictions
 from app.risk.risk_engine import RiskEngine
 from app.backtesting.replay_parity import build_parity_record
+from app.trading.market_participation_guard import evaluate_market_participation
 
 
 DIRECTIONAL_RISK_RESEARCH_REGIMES = {
@@ -26,6 +27,7 @@ def evaluate_frozen_decision(
     risk_percent=1,
     risk_min_confidence=None,
     risk_confidence_scope=None,
+    market_participation=None,
 ):
     capital = float(capital)
     risk_percent = float(risk_percent)
@@ -145,6 +147,21 @@ def evaluate_frozen_decision(
             "position_size": None,
         }
 
+    participation = None
+    if market_participation is not None:
+        participation = evaluate_market_participation(
+            market_participation,
+            master_signal.get("signal"),
+            as_of_timestamp=derivatives.get("as_of"),
+        )
+        if risk.get("decision") == "APPROVE" and not participation.get("allowed"):
+            risk = {
+                **risk,
+                "decision": "REJECT",
+                "reason": participation.get("reason"),
+                "position_size": None,
+            }
+
     actionable = str(master_signal.get("signal") or "").upper() in {"LONG", "SHORT"}
     executor_verdict = (
         "WOULD_QUEUE"
@@ -169,6 +186,8 @@ def evaluate_frozen_decision(
         },
         "leakage_status": "PASS",
     }
+    if participation is not None:
+        decision["market_participation"] = participation
     parity_inputs = {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -183,5 +202,7 @@ def evaluate_frozen_decision(
         decision["risk_confidence_override_applied"] = risk_override_applies
         parity_inputs["risk_min_confidence"] = float(risk_min_confidence)
         parity_inputs["risk_confidence_scope"] = scope_key
+    if market_participation is not None:
+        parity_inputs["market_participation"] = market_participation
     decision["parity"] = build_parity_record(parity_inputs, decision)
     return decision

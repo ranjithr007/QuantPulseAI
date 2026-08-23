@@ -58,7 +58,7 @@ def test_fresh_final_five_minute_mark_values_open_account_risk(monkeypatch):
     assert snapshot["valuation_complete"] is True
     assert snapshot["current_prices"] == {"BTCUSDT": 99.0}
     assert snapshot["price_evidence"]["BTCUSDT"]["status"] == "FRESH"
-    assert snapshot["daily_pnl_percent"] == -0.8625
+    assert snapshot["daily_pnl_percent"] == -0.4312
 
 
 def test_stale_five_minute_mark_fails_closed_without_entry_fallback(monkeypatch):

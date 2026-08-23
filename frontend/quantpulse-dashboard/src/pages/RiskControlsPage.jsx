@@ -47,9 +47,9 @@ export default function RiskControlsPage({
           <MetricCard
             label="Selected coin trades"
             value={openTrades.length}
-            note={`${view.symbol} · account limit ${auto.maxOpenTrades}`}
+            note={`${view.symbol} - one active trade per coin`}
             icon={Target}
-            accent={openTrades.length < auto.maxOpenTrades ? "emerald" : "rose"}
+            accent={openTrades.length === 0 ? "emerald" : "amber"}
           />
           <MetricCard
             label="Backend decision"
@@ -96,20 +96,20 @@ export default function RiskControlsPage({
               <RiskField label="Minimum confidence" value={`${auto.minConfidence}%`}>
                 <div className="text-xs text-slate-500">Governed execution boundary (full size at 60%)</div>
               </RiskField>
-              <RiskField label="Max risk per trade" value={`${auto.maxRiskPerTrade}%`}>
-                <RangeInput value={auto.maxRiskPerTrade} min={0.1} max={5} step={0.1} onChange={(maxRiskPerTrade) => setAuto((current) => ({ ...current, maxRiskPerTrade }))} />
+              <RiskField label="Per-trade risk cap" value="Not applied">
+                <div className="text-xs text-slate-500">Paper sizing uses the 75% / 85% capital tiers and governed exits.</div>
               </RiskField>
-              <RiskField label="Daily loss limit" value={`${auto.dailyLossLimit}%`}>
-                <RangeInput value={auto.dailyLossLimit} min={0.5} max={4} step={0.5} onChange={(dailyLossLimit) => setAuto((current) => ({ ...current, dailyLossLimit }))} />
+              <RiskField label="Daily loss limit" value="Monitor only">
+                <div className="text-xs text-slate-500">Account P&amp;L is reported but does not block paper entries.</div>
               </RiskField>
-              <RiskField label="Max open trades" value={auto.maxOpenTrades}>
-                <NumberInput value={auto.maxOpenTrades} min={1} max={4} step={1} onChange={(maxOpenTrades) => setAuto((current) => ({ ...current, maxOpenTrades }))} />
+              <RiskField label="Account open-trade cap" value="Not applied">
+                <div className="text-xs text-slate-500">One active trade per coin remains enforced across all timeframes.</div>
               </RiskField>
               <RiskField label="Max leverage" value={`${auto.maxLeverage}x`}>
                 <NumberInput value={auto.maxLeverage} min={1} max={25} step={1} onChange={(maxLeverage) => setAuto((current) => ({ ...current, maxLeverage }))} />
               </RiskField>
-              <RiskField label="INR-M paper capital" value={formatInr(auto.paperCapitalInr || 100000)}>
-                <div className="text-xs text-slate-500">75% minimum tier / 85% maximum tier; {formatInr(auto.maxPositionSize || 85000)} maximum notional</div>
+              <RiskField label="INR-M paper capital" value={formatInr(auto.paperCapitalInr || 200000)}>
+                <div className="text-xs text-slate-500">75% minimum tier / 85% maximum tier; {formatInr(auto.maxPositionSize || 170000)} maximum notional</div>
               </RiskField>
             </div>
           </div>
@@ -191,27 +191,6 @@ function DiagnosticStrip({ label, value, note, tone = "slate" }) {
         <Pill tone={tone}>{value ?? "-"}</Pill>
       </div>
       <div className="mt-1.5 line-clamp-3 text-xs leading-5 text-slate-400" title={note || "-"}>{note || "-"}</div>
-    </div>
-  );
-}
-
-function RangeInput({ value, min, max, step, onChange }) {
-  return (
-    <div className="space-y-2.5">
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(safeNumber(event.target.value, value))}
-        className="w-full accent-cyan-400"
-      />
-      <div className="flex items-center justify-between text-[11px] text-slate-500">
-        <span>{min}</span>
-        <span>{value}</span>
-        <span>{max}</span>
-      </div>
     </div>
   );
 }

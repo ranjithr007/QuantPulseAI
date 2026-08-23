@@ -33,6 +33,9 @@ class AutomationSettingsTests(unittest.TestCase):
             self.assertEqual(40.0, settings["minConfidence"])
             self.assertEqual(4.0, settings["dailyLossLimit"])
             self.assertEqual(4, settings["maxOpenTrades"])
+            self.assertFalse(settings["maxRiskPerTradeEnabled"])
+            self.assertFalse(settings["dailyLossLimitEnabled"])
+            self.assertFalse(settings["maxOpenTradesEnabled"])
             self.assertEqual(
                 40.0,
                 settings["governance"]["min_entry_confidence"],

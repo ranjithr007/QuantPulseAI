@@ -25,14 +25,28 @@ class DerivativeRepository:
         )
 
     def save_funding(self, db, item):
-        db.add(
-            FundingRate(
-                symbol=item["symbol"],
-                rate=item["rate"],
-                funding_time=item["time"],
+        symbol = str(item["symbol"]).upper()
+        existing = (
+            db.query(FundingRate)
+            .filter(
+                FundingRate.symbol == symbol,
+                FundingRate.funding_time == item["time"],
             )
+            .first()
         )
+        if existing is not None:
+            existing.rate = item["rate"]
+            commit_or_rollback(db)
+            return existing
+
+        record = FundingRate(
+            symbol=symbol,
+            rate=item["rate"],
+            funding_time=item["time"],
+        )
+        db.add(record)
         commit_or_rollback(db)
+        return record
 
     def save_open_interest(self, db, item):
         db.add(

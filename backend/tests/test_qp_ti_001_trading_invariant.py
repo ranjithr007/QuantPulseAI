@@ -59,8 +59,8 @@ def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
         "fill_profile": {"fee_bps": 7.5},
         "paper_sizing": {
             "leverage": 5.0,
-            "position_notional_inr": 85_000.0,
-            "margin_used_inr": 17_000.0,
+            "position_notional_inr": 170_000.0,
+            "margin_used_inr": 34_000.0,
         },
     }
 
@@ -86,10 +86,13 @@ def _enabled_automation_settings():
         "emergencyStop": False,
         "allowedSymbols": ["BTCUSDT", "ETHUSDT"],
         "maxRiskPerTrade": 1.0,
+        "maxRiskPerTradeEnabled": False,
         "dailyLossLimit": 4.0,
+        "dailyLossLimitEnabled": False,
         "maxOpenTrades": 4,
+        "maxOpenTradesEnabled": False,
         "maxLeverage": 5,
-        "maxPositionSize": 85_000.0,
+        "maxPositionSize": 170_000.0,
         "minConfidence": 40.0,
         "direction": "BOTH",
         "executionMode": "PAPER",
@@ -105,7 +108,10 @@ def _enabled_automation_settings():
         ({"emergencyStop": True}, "Automation emergency stop is active"),
         ({"allowedSymbols": ["ETHUSDT"]}, "BTCUSDT is not in the automation allowlist"),
         ({"direction": "SHORT"}, "LONG entries are disabled"),
-        ({"maxRiskPerTrade": 0.5}, "risk percentage exceeds"),
+        (
+            {"maxRiskPerTrade": 0.5, "maxRiskPerTradeEnabled": True},
+            "risk percentage exceeds",
+        ),
         ({"maxLeverage": 3}, "leverage exceeds"),
         ({"maxPositionSize": 70_000}, "position size exceeds"),
         ({"minConfidence": 80}, "confidence is below"),
@@ -784,7 +790,11 @@ def test_executor_rechecks_account_capacity_under_lock_for_each_symbol(monkeypat
             open_trades.append(trade)
             return trade
 
-    settings = {**_enabled_automation_settings(), "maxOpenTrades": 1}
+    settings = {
+        **_enabled_automation_settings(),
+        "maxOpenTrades": 1,
+        "maxOpenTradesEnabled": True,
+    }
     monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
     monkeypatch.setattr(
         paper_trade_api,

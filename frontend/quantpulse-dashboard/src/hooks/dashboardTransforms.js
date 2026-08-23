@@ -228,16 +228,16 @@ export function evaluateAutoTrading({ auto, selectedSymbol, signal, risk, perfor
   if (stackState === "MIXED_LIGHT" || stackState === "MIXED_STRONG") warnings.push("Timeframe stack is mixed");
   if (stackState === "MIXED_STRONG") tradeBlockers.push("Timeframe stack is strongly mixed");
   if (confidence < auto.minConfidence) tradeBlockers.push("Confidence below minimum");
-  if (
+  if (auto.maxOpenTradesEnabled && (
     safeNumber(accountRisk?.open_trade_count, openTrades.length) >= auto.maxOpenTrades
     || safeNumber(performance?.open_trades, 0) >= auto.maxOpenTrades
-  ) {
+  )) {
     accountBlockers.push("Account-wide open trade cap reached");
   }
   if (openTrades.some((trade) => String(trade?.symbol || "").toUpperCase() === String(selectedSymbol || "").toUpperCase())) {
     coinBlockers.push("Active trade already exists for this coin");
   }
-  if (accountRisk?.limit_reached === true) accountBlockers.push("Account-wide daily loss limit reached");
+  if (auto.dailyLossLimitEnabled && accountRisk?.limit_reached === true) accountBlockers.push("Account-wide daily loss limit reached");
   if (!accountRisk) warnings.push("Account daily P&L unavailable");
   if (risk?.is_usable === false) tradeBlockers.push("Risk decision not usable");
   if (tradePlan && safeNumber(tradePlan.risk_reward, 0) < 1) tradeBlockers.push("Risk reward is weak");

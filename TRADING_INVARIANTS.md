@@ -238,16 +238,17 @@ timeframe must not be labelled with another timeframe's eligibility.
 
 # INR-M paper-wallet sizing
 
-- Paper trading uses a governed starting wallet of **INR 100,000**. This is
+- Paper trading uses a governed starting wallet of **INR 200,000**. This is
   simulation capital only and never authorizes a live exchange order.
 - Confidence from **40 to below 60** uses **75% position notional**:
-  **INR 75,000 notional**, or **INR 15,000 initial margin at 5x**.
+  **INR 150,000 notional**, or **INR 30,000 initial margin at 5x**.
 - Confidence of **60 or above** uses **85% position notional**:
-  **INR 85,000 notional**, or **INR 17,000 initial margin at 5x**.
-- The account-wide paper margin ceiling is **85% of the INR 100,000 wallet**.
+  **INR 170,000 notional**, or **INR 34,000 initial margin at 5x**.
+- The account-wide paper margin ceiling is **85% of the INR 200,000 wallet**.
   Margin already committed to every open coin is included before a new entry.
-- With the four-open-trade boundary and 5x leverage, four maximum-tier trades
-  commit INR 68,000 margin and preserve INR 32,000 uncommitted capital.
+- Max-risk, daily-loss, and account open-trade count are monitoring fields and
+  do not block paper entries. One active trade per coin remains mandatory, and
+  wallet margin availability must still be sufficient for every new entry.
 - Contract prices may remain USDT-quoted market references, but INR capital is
   never divided directly by a USDT price. INR notional, margin and P&L remain
   separate from quote-price data until an exchange conversion rate is present.

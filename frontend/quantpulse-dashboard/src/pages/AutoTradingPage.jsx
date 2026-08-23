@@ -100,9 +100,9 @@ export default function AutoTradingPage({
             className="col-span-2 xl:col-span-1"
             label="Selected coin trades"
             value={openTrades.length}
-            note={`${view.symbol} · account limit ${auto.maxOpenTrades}`}
+            note={`${view.symbol} - one active trade per coin`}
             icon={Wallet}
-            accent={openTrades.length < auto.maxOpenTrades ? "emerald" : "rose"}
+            accent={openTrades.length === 0 ? "emerald" : "amber"}
           />
         </div>
 

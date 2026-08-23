@@ -13,17 +13,30 @@ from app.utils.network_resilience import is_transient_network_error
 class SpotMarketCollector:
     BASE_URL = "https://data-api.binance.vision/api/v3/klines"
 
-    def get_klines(self, symbol, interval="1h", limit=60):
+    def get_klines(
+        self,
+        symbol,
+        interval="1h",
+        limit=60,
+        *,
+        start_time=None,
+        end_time=None,
+    ):
         last_error = None
         for attempt in range(2):
             try:
+                params = {
+                    "symbol": str(symbol).upper(),
+                    "interval": interval,
+                    "limit": max(1, min(int(limit), 1000)),
+                }
+                if start_time is not None:
+                    params["startTime"] = _milliseconds(start_time)
+                if end_time is not None:
+                    params["endTime"] = _milliseconds(end_time)
                 response = requests.get(
                     self.BASE_URL,
-                    params={
-                        "symbol": str(symbol).upper(),
-                        "interval": interval,
-                        "limit": max(1, min(int(limit), 1000)),
-                    },
+                    params=params,
                     timeout=10,
                 )
                 response.raise_for_status()
@@ -82,3 +95,14 @@ class SpotMarketCollector:
                 }
             )
         return parsed
+
+
+def _milliseconds(value):
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, datetime):
+        timestamp = value
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return int(timestamp.timestamp() * 1000)
+    raise TypeError("start_time and end_time must be datetime or epoch milliseconds")

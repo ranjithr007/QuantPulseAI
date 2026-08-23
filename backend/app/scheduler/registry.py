@@ -5,6 +5,11 @@ DEFAULT_JOB_IDS = [
     "deterministic_pipeline",
     "derivative",
     "candle_completeness",
+    "liquidations",
+    "whales",
+    "whale_ai",
+    "heatmap",
+    "orderbook",
 ]
 
 
@@ -114,13 +119,31 @@ JOB_DEFINITIONS = {
         trigger="interval",
         seconds=40,
     ),
+    "orderbook": SchedulerJobDefinition(
+        id="orderbook",
+        name="Futures order-book snapshot collector",
+        module="app.jobs.orderbook_snapshot_job",
+        function="run_orderbook_snapshot_job",
+        trigger="interval",
+        minutes=1,
+        coalesce=True,
+    ),
+    "liquidations": SchedulerJobDefinition(
+        id="liquidations",
+        name="Binance liquidation WebSocket collector",
+        module="app.jobs.liquidation_job",
+        function="run_liquidation_job",
+        trigger="date",
+        max_instances=1,
+    ),
     "whales": SchedulerJobDefinition(
         id="whales",
         name="Whale collector",
         module="app.jobs.whale_job",
         function="run_whale_job",
         trigger="interval",
-        seconds=20,
+        seconds=120,
+        coalesce=True,
     ),
     "whale_ai": SchedulerJobDefinition(
         id="whale_ai",
