@@ -1,0 +1,70 @@
+{
+  "manifest_version": "walk_forward_loss_hypotheses_v1",
+  "frozen_at": "2026-08-23T16:00:00+00:00",
+  "discovery_cutoff": "2026-08-23T16:00:00+00:00",
+  "evidence_thresholds": {
+    "minimum_calendar_days": 7,
+    "minimum_holdout_trades": 30,
+    "minimum_affected_trades": 10,
+    "minimum_retained_trades": 20,
+    "minimum_retained_percent": 70,
+    "minimum_filtered_profit_factor": 1.0
+  },
+  "hypotheses": [
+    {
+      "id": "H01_SOL_4H_LONG",
+      "label": "Exclude SOLUSDT 4h LONG entries",
+      "exclude_when": {
+        "symbol": "SOLUSDT",
+        "timeframe": "4h",
+        "side": "LONG"
+      },
+      "discovery_note": "Largest pre-registered losing symbol/timeframe/side scope."
+    },
+    {
+      "id": "H02_DOGE_1H_LONG",
+      "label": "Exclude DOGEUSDT 1h LONG entries",
+      "exclude_when": {
+        "symbol": "DOGEUSDT",
+        "timeframe": "1h",
+        "side": "LONG"
+      },
+      "discovery_note": "Second-largest pre-registered losing symbol/timeframe/side scope."
+    },
+    {
+      "id": "H03_LIQUIDITY_GRAB_BULLISH_LONG",
+      "label": "Exclude LONG entries in LIQUIDITY_GRAB_BULLISH",
+      "exclude_when": {
+        "side": "LONG",
+        "regime": "LIQUIDITY_GRAB_BULLISH"
+      },
+      "discovery_note": "Pre-registered weak long-side regime cluster."
+    },
+    {
+      "id": "H04_COMBINED_WEAK_LONG_SCOPES",
+      "label": "Exclude the frozen SOL 4h LONG and DOGE 1h LONG scopes",
+      "exclude_when": {
+        "any_of": [
+          {
+            "symbol": "SOLUSDT",
+            "timeframe": "4h",
+            "side": "LONG"
+          },
+          {
+            "symbol": "DOGEUSDT",
+            "timeframe": "1h",
+            "side": "LONG"
+          }
+        ]
+      },
+      "discovery_note": "Combined scope hypothesis frozen before prospective data."
+    }
+  ],
+  "governance": {
+    "research_only": true,
+    "automatic_activation": false,
+    "paper_policy_change_authorized": false,
+    "live_policy_change_authorized": false,
+    "outcome_fields_may_not_be_selectors": true
+  }
+}

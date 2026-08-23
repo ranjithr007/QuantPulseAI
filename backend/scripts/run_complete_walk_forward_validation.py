@@ -23,6 +23,7 @@ from app.backtesting.phase2_validation_artifacts import (
 )
 from app.backtesting.phase2_validation_report import build_phase2_validation_report
 from app.backtesting.loss_cluster_analysis import generate_loss_cluster_artifacts
+from app.backtesting.prospective_holdout import generate_prospective_holdout_artifacts
 from app.backtesting.trade_simulator import (
     _build_in_memory_stack_resolver,
     _latest_candle_timestamp,
@@ -140,6 +141,7 @@ def main():
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     markdown_path.write_text(_markdown_report(payload), encoding="utf-8")
     loss_analysis = generate_loss_cluster_artifacts(json_path)
+    holdout_analysis = generate_prospective_holdout_artifacts(json_path)
     print(
         json.dumps(
             {
@@ -150,6 +152,9 @@ def main():
                 "markdown_path": str(markdown_path.resolve()),
                 "loss_analysis_json_path": loss_analysis["json_path"],
                 "loss_analysis_markdown_path": loss_analysis["markdown_path"],
+                "prospective_holdout_status": holdout_analysis["report"]["status"],
+                "prospective_holdout_json_path": holdout_analysis["json_path"],
+                "prospective_holdout_markdown_path": holdout_analysis["markdown_path"],
             },
             indent=2,
         ),
