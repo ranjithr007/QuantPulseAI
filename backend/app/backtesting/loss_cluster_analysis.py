@@ -50,9 +50,30 @@ def load_walk_forward_trades(consolidated, *, consolidated_path=None):
     """Load all referenced full artifacts and reject incomplete evidence."""
 
     report_path = Path(consolidated_path) if consolidated_path else None
+    expected_scope_records = int(
+        (consolidated.get("scope") or {}).get("side_run_count") or 0
+    )
+    all_records = list(consolidated.get("records") or [])
+    if str(consolidated.get("status") or "").upper() != "COMPLETED":
+        raise ValueError("Loss analysis requires a COMPLETED walk-forward run")
+    if expected_scope_records and len(all_records) != expected_scope_records:
+        raise ValueError(
+            "Loss analysis scope mismatch: "
+            f"expected={expected_scope_records}, recorded={len(all_records)}"
+        )
+    incomplete_records = [
+        _scope_label(item)
+        for item in all_records
+        if item.get("status") != "COMPLETED"
+    ]
+    if incomplete_records:
+        raise ValueError(
+            "Loss analysis requires every scope to complete; incomplete: "
+            + ", ".join(incomplete_records)
+        )
     records = [
         item
-        for item in consolidated.get("records") or []
+        for item in all_records
         if item.get("status") == "COMPLETED"
     ]
     trades = []
@@ -159,6 +180,7 @@ def build_loss_cluster_report(consolidated, trades, *, ingestion=None):
             "automatic_blockers_added": False,
             "holdout_validation_required": True,
             "promotion_allowed": False,
+            "exit_outcome_used_as_entry_filter": False,
             "note": (
                 "Clusters describe this sample only. Validate hypotheses on a later "
                 "untouched cutoff before changing paper-trade eligibility."
@@ -210,7 +232,8 @@ def markdown_loss_cluster_report(report):
         [
             "## Research hypotheses",
             "",
-            "These are ranked loss clusters, not automatic trading blockers.",
+            "These are ranked pre-entry clusters, not automatic trading blockers. "
+            "Exit paths are outcome attribution only and are never used as entry filters.",
             "",
             "| Rank | Dimension | Cluster | Trades | Win % | Net PnL | PF | Loss contribution % |",
             "|---:|---|---|---:|---:|---:|---:|---:|",
@@ -332,7 +355,7 @@ def _metrics(trades):
 
 def _research_hypotheses(dimensions):
     candidates = []
-    for dimension in ("scope", "regime", "confidence_band", "exit_path"):
+    for dimension in ("scope", "regime", "confidence_band"):
         for item in dimensions[dimension]:
             profit_factor = item.get("profit_factor")
             if (

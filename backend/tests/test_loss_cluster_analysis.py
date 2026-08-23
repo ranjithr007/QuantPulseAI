@@ -56,8 +56,12 @@ def _write_run(tmp_path, trades):
     consolidated_path = run_dir / "consolidated_walk_forward_report.json"
     consolidated = {
         "source": "complete_walk_forward_validation_v4_staged_exit_parity",
+        "status": "COMPLETED",
         "as_of": "2026-08-23T15:00:00+00:00",
-        "scope": {"grid": {"stop_loss_percent": 0.75}},
+        "scope": {
+            "side_run_count": 1,
+            "grid": {"stop_loss_percent": 0.75},
+        },
         "records": [
             {
                 "symbol": "BTCUSDT",
@@ -138,6 +142,11 @@ def test_research_hypotheses_require_minimum_sample_and_do_not_add_blockers():
     )
     assert report["governance"]["automatic_blockers_added"] is False
     assert report["governance"]["holdout_validation_required"] is True
+    assert report["governance"]["exit_outcome_used_as_entry_filter"] is False
+    assert all(
+        item["dimension"] != "exit_path"
+        for item in report["research_hypotheses"]
+    )
 
 
 def test_generate_artifacts_writes_json_and_markdown(tmp_path):
@@ -156,6 +165,7 @@ def test_generate_artifacts_writes_json_and_markdown(tmp_path):
 
 def test_missing_full_artifact_fails_closed(tmp_path):
     consolidated = {
+        "status": "COMPLETED",
         "records": [
             {
                 "status": "COMPLETED",
@@ -172,4 +182,18 @@ def test_missing_full_artifact_fails_closed(tmp_path):
         load_walk_forward_trades(
             consolidated,
             consolidated_path=tmp_path / "run" / "consolidated.json",
+        )
+
+
+def test_partial_walk_forward_run_fails_closed(tmp_path):
+    consolidated = {
+        "status": "PARTIAL",
+        "scope": {"side_run_count": 2},
+        "records": [{"status": "COMPLETED"}],
+    }
+
+    with pytest.raises(ValueError, match="requires a COMPLETED walk-forward run"):
+        load_walk_forward_trades(
+            consolidated,
+            consolidated_path=tmp_path / "consolidated.json",
         )

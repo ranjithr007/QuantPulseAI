@@ -122,7 +122,8 @@ def main():
                 results.append(result)
                 print(
                     f"[{symbol}] worker {result.get('status')} "
-                    f"records={len(result.get('records') or [])}",
+                    f"records={len(result.get('records') or [])}"
+                    + (f" error={result.get('error')}" if result.get("error") else ""),
                     flush=True,
                 )
 
