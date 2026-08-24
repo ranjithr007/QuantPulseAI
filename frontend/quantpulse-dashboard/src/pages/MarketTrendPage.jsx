@@ -25,12 +25,14 @@ export default function MarketTrendPage({ activeSymbol, getSymbolHref }) {
   }, [refreshKey]);
 
   const records = payload?.records || [];
-  const selected = records.find((item) => item.symbol === activeSymbol) || records[0] || null;
+  const normalizedActiveSymbol = String(activeSymbol || "").toUpperCase();
+  const selected = records.find((item) => String(item.symbol || "").toUpperCase() === normalizedActiveSymbol) || records[0] || null;
   const bullish = records.filter((item) => item.direction === "BULLISH").length;
   const bearish = records.filter((item) => item.direction === "BEARISH").length;
   const neutral = records.length - bullish - bearish;
   const breadth = selected?.breadth || {};
   const timeframeRows = selected?.spot?.timeframes || [];
+  const timeframeSummary = summarizeTimeframeDirections(timeframeRows);
   const componentRows = useMemo(
     () => Object.entries(selected?.components || {}).map(([name, score]) => ({ name, score: Number(score || 0) })),
     [selected]
@@ -65,14 +67,14 @@ export default function MarketTrendPage({ activeSymbol, getSymbolHref }) {
           <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <div className="text-sm font-medium text-white">All symbols</div>
-                <div className="text-xs text-slate-500">Separate from the existing regime engine</div>
+                <div className="text-sm font-medium text-white">All symbols — combined trend</div>
+                <div className="text-xs text-slate-500">Final direction after weighting all timeframe evidence and confirmation inputs</div>
               </div>
-              <Pill tone="cyan">±40 execution</Pill>
+              <Pill tone="cyan">Combined ±40</Pill>
             </div>
             <div className="space-y-2">
               {records.map((row) => (
-                <Link key={row.symbol} to={getSymbolHref(row.symbol)} className={row.symbol === activeSymbol ? "block rounded-lg border border-cyan-400/35 bg-cyan-500/10 p-3" : "block rounded-lg border border-white/10 bg-slate-950/70 p-3 hover:border-cyan-400/25"}>
+                <Link key={row.symbol} to={getSymbolHref(row.symbol)} className={String(row.symbol || "").toUpperCase() === normalizedActiveSymbol ? "block rounded-lg border border-cyan-400/35 bg-cyan-500/10 p-3" : "block rounded-lg border border-white/10 bg-slate-950/70 p-3 hover:border-cyan-400/25"}>
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="font-medium text-white">{row.symbol}</div>
@@ -93,7 +95,7 @@ export default function MarketTrendPage({ activeSymbol, getSymbolHref }) {
             <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Selected trend</div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Selected combined execution trend</div>
                   <div className="mt-1 text-lg font-semibold text-white">{selected?.symbol || activeSymbol}</div>
                 </div>
                 <Pill tone={directionTone(selected?.direction)}>{selected?.direction || "WAITING"}</Pill>
@@ -105,19 +107,22 @@ export default function MarketTrendPage({ activeSymbol, getSymbolHref }) {
                 <MiniStat label="Bear breadth" value={percent(breadth?.bearish_percent)} />
               </div>
               <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/70 p-3 text-sm text-slate-300">
-                {selected?.direction === "BULLISH" ? "Eligible to confirm LONG signals only." : selected?.direction === "BEARISH" ? "Eligible to confirm SHORT signals only." : "Neutral participation blocks new paper entries."}
+                <div>{combinedTrendExplanation(selected, timeframeSummary)}</div>
+                <div className="mt-1 text-xs text-slate-500">{timeframeDirectionSummary(timeframeSummary)}</div>
               </div>
             </div>
 
             <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                <div className="flex items-center gap-2 text-sm font-medium text-white"><RadioTower className="h-4 w-4 text-cyan-300" />Timeframe spot evidence</div>
-                <div className="text-xs text-slate-500">Bullish ≥ +15 · Bearish ≤ −15 · otherwise Neutral</div>
+                <div className="flex items-center gap-2 text-sm font-medium text-white"><RadioTower className="h-4 w-4 text-cyan-300" />Per-timeframe spot evidence</div>
+                <div className="text-xs text-slate-500">Evidence only: Bullish ≥ +15 · Bearish ≤ −15 · otherwise Neutral</div>
               </div>
               <div className="mt-3 grid gap-3 2xl:grid-cols-2">
                 {timeframeRows.map((row) => <TimeframeEvidenceCard key={row.timeframe} row={row} />)}
               </div>
-              <div className="mt-3 text-xs text-slate-500">The combined market-participation execution gate remains ±40. Each timeframe score is evidence, not a separate trade trigger.</div>
+              <div className="mt-3 rounded-md border border-cyan-400/15 bg-cyan-500/5 p-2.5 text-xs text-slate-500">
+                These timeframe labels do not override the selected combined trend. The weighted timeframe score plus confirmation inputs must reach +{executionThreshold(selected)} for Bullish or −{executionThreshold(selected)} for Bearish.
+              </div>
             </div>
 
             <div className="rounded-lg border border-white/10 bg-slate-900/70 p-3">
@@ -154,7 +159,7 @@ function TimeframeEvidenceCard({ row }) {
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="text-base font-semibold text-white">{row.timeframe}</span>
-          <Pill tone={directionTone(row.direction)}>{row.direction || "NEUTRAL"}</Pill>
+          <Pill tone={directionTone(row.direction)}>TF {row.direction || "NEUTRAL"}</Pill>
         </div>
         <div className="text-lg font-semibold text-white">{signed(row.score)}</div>
       </div>
@@ -230,4 +235,40 @@ function percent(value) {
 function zone(value) {
   if (!value) return "None";
   return `${Number(value.lower).toLocaleString()}–${Number(value.upper).toLocaleString()} (${value.tests} tests)`;
+}
+
+function executionThreshold(selected) {
+  const threshold = Number(selected?.execution_threshold);
+  return Number.isFinite(threshold) && threshold > 0 ? threshold.toFixed(0) : "40";
+}
+
+function summarizeTimeframeDirections(rows) {
+  return (rows || []).reduce(
+    (summary, row) => {
+      const direction = String(row?.direction || "NEUTRAL").toUpperCase();
+      if (direction === "BULLISH") summary.bullish += 1;
+      else if (direction === "BEARISH") summary.bearish += 1;
+      else summary.neutral += 1;
+      summary.total += 1;
+      return summary;
+    },
+    { bullish: 0, bearish: 0, neutral: 0, total: 0 }
+  );
+}
+
+function timeframeDirectionSummary(summary) {
+  if (!summary.total) return "Waiting for per-timeframe evidence.";
+  return `Timeframe evidence: ${summary.bullish} bullish · ${summary.bearish} bearish · ${summary.neutral} neutral.`;
+}
+
+function combinedTrendExplanation(selected, summary) {
+  if (!selected) return "Waiting for the combined market-participation calculation.";
+  if (selected.direction === "BULLISH") return "Combined score reached the execution threshold. Eligible to confirm LONG signals only.";
+  if (selected.direction === "BEARISH") return "Combined score reached the execution threshold. Eligible to confirm SHORT signals only.";
+
+  const score = Number(selected.score || 0);
+  const threshold = executionThreshold(selected);
+  const evidence = summary.total ? `${summary.bullish}/${summary.total} bullish timeframes` : "available timeframe evidence";
+  const boundary = score >= 0 ? `+${threshold}` : `−${threshold}`;
+  return `${evidence}, but the combined score ${signed(score)} has not reached ${boundary}. The combined execution trend therefore remains NEUTRAL and blocks new paper entries.`;
 }
