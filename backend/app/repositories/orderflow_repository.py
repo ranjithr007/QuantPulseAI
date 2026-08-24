@@ -102,7 +102,7 @@ class OrderFlowRepository:
 
         return record
 
-    def get_last_cvd( db, symbol):
+    def get_last_cvd(self, db, symbol):
         latest_market_orderflow = (
             db.query(MarketOrderFlow)
             .filter(MarketOrderFlow.Symbol == symbol)

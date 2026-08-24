@@ -3,7 +3,7 @@ import asyncio
 import websockets
 from hashlib import sha256
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.utils.network_resilience import classify_network_error
 from app.utils.network_resilience import is_transient_network_error
@@ -11,7 +11,9 @@ from app.utils.network_resilience import is_transient_network_error
 
 class LiquidationCollector:
 
-    URL = "wss://fstream.binance.com" "/ws/!forceOrder@arr"
+    # Binance retired the legacy /ws futures route in April 2026.  It can
+    # complete the WebSocket handshake while silently delivering no frames.
+    URL = "wss://fstream.binance.com/market/ws/!forceOrder@arr"
 
     async def listen(self, callback):
         reconnect_count = 0
@@ -48,13 +50,21 @@ class LiquidationCollector:
 def _parse_liquidation_message(message):
     try:
         data = json.loads(message)
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
         order = data["o"]
         event_time = data.get("E")
         if event_time is None:
             return None
 
-        price = float(order["p"])
-        quantity = float(order["q"])
+        average_price = float(order.get("ap") or 0)
+        accumulated_quantity = float(order.get("z") or 0)
+        price = average_price if average_price > 0 else float(order["p"])
+        quantity = (
+            accumulated_quantity
+            if accumulated_quantity > 0
+            else float(order["q"])
+        )
         event_identity = "|".join(
             str(item)
             for item in (
@@ -75,7 +85,10 @@ def _parse_liquidation_message(message):
             "price": price,
             "quantity": quantity,
             "value_usd": price * quantity,
-            "event_time": datetime.fromtimestamp(int(event_time) / 1000),
+            "event_time": datetime.fromtimestamp(
+                int(event_time) / 1000,
+                tz=timezone.utc,
+            ),
         }
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
