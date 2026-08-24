@@ -2,7 +2,15 @@
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+# Direct execution sets sys.path to /app/scripts rather than /app.  Add the
+# backend root so the documented `python scripts/...py` command works in the
+# Railway image without requiring an external PYTHONPATH setting.
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.backtesting.prospective_holdout_readiness import build_current_data_readiness
 from app.database.sqlserver import SessionLocal

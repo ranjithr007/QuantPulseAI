@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -8,6 +12,7 @@ from app.backtesting.prospective_holdout_readiness import collect_inventory
 
 
 CUTOFF = datetime(2026, 8, 23, 16, tzinfo=timezone.utc)
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _row(
@@ -125,3 +130,24 @@ def test_inventory_reports_missing_schema_without_crashing_or_accessing_outcomes
     assert all(item["query_error"].startswith("MissingTable:") for item in rows)
     assert report["status"] == "DATA_GAPS"
     assert report["outcome_data_accessed"] is False
+
+
+def test_readiness_script_supports_direct_execution_without_pythonpath(tmp_path):
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(BACKEND_ROOT / "scripts" / "check_prospective_holdout_readiness.py"),
+            "--help",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "outcome-blind readiness report" in result.stdout
