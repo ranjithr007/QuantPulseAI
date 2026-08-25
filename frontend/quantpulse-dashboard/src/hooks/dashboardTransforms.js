@@ -682,10 +682,11 @@ function signalInvalidationReason(signal) {
   const probabilityActionable = signal?.probability?.actionable;
   const freshness = signal?.freshness;
   const rawSignal = String(signal?.signal || "").toUpperCase();
+  const contradictionReason = signal?.contradiction?.reasons?.[0] || signal?.contradiction?.summary;
 
   if (freshness?.is_stale) return "Signal data is stale";
-  if (contradictionStatus === "INVALIDATED") return signal?.contradiction?.summary || "Signal invalidated by contradiction engine";
-  if (contradictionTradeAllowed === false) return signal?.contradiction?.summary || "Trade blocked by contradiction engine";
+  if (contradictionStatus === "INVALIDATED") return contradictionReason || "Signal invalidated by contradiction engine";
+  if (contradictionTradeAllowed === false) return contradictionReason || "Trade blocked by contradiction engine";
   if (probabilityActionable === false && rawSignal === "WAIT") return `Probability engine decision: ${probabilityDecision || "WAIT"}`;
   if (probabilityDecision === "WAIT" && rawSignal === "WAIT") return "Probability engine decision: WAIT";
 

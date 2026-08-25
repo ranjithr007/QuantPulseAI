@@ -41,7 +41,16 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         cls._original_current_paper_entry_mark = (
             paper_trade_api._current_paper_entry_mark
         )
+        cls._original_current_signal_validation = (
+            paper_trade_api._current_signal_validation
+        )
         paper_trade_api.SessionLocal = TestSessionLocal
+        paper_trade_api._current_signal_validation = lambda *args, **kwargs: {
+            "status": "VALID",
+            "trade_allowed": True,
+            "signal": "LONG",
+            "reasons": [],
+        }
         paper_trade_api._current_paper_entry_mark = lambda symbol: {
             "symbol": symbol,
             "mark_price": 100.0,
@@ -55,6 +64,9 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         paper_trade_api.SessionLocal = cls._original_session_local
         paper_trade_api._current_paper_entry_mark = (
             cls._original_current_paper_entry_mark
+        )
+        paper_trade_api._current_signal_validation = (
+            cls._original_current_signal_validation
         )
         cls.client.close()
         TEST_ENGINE.dispose()

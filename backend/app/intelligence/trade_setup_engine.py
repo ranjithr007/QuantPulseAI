@@ -164,6 +164,12 @@ def _directional_trigger_conditions(side, permission, lower, confidence_window, 
             "actual": lower.get("bias") if lower else None,
         },
         {
+            "name": "core_input_confirmation",
+            "passed": _core_inputs_allow_trade(lower),
+            "message": _core_input_message(lower),
+            "actual": _core_input_status(lower),
+        },
+        {
             "name": "orderflow_confirmation",
             "passed": _orderflow_supports_side(lower, side),
             "message": orderflow_message,
@@ -220,16 +226,22 @@ def _build_governed_trade_setup_decision(confirmation, timeframes):
         item
         for item in directional
         if _confidence_in_window(item, _confidence_window(item))
+        and _core_inputs_allow_trade(item)
     ]
     if not candidates:
         selected = max(directional, key=_governed_candidate_rank)
+        reason = (
+            _core_input_message(selected)
+            if not _core_inputs_allow_trade(selected)
+            else (
+                f"{selected['timeframe']} confidence must be at least "
+                f"{int(MIN_ENTRY_CONFIDENCE)}%"
+            )
+        )
         return {
             "status": "WAIT",
             "side": _actionable_side(selected),
-            "reason": (
-                f"{selected['timeframe']} confidence must be at least "
-                f"{int(MIN_ENTRY_CONFIDENCE)}%"
-            ),
+            "reason": reason,
             "confidence_window": _confidence_window(selected),
             "entry_timeframe": selected.get("timeframe"),
             "selected_timeframe": selected.get("timeframe"),
@@ -351,6 +363,12 @@ def _governed_trigger_conditions(side, permission, timeframe, confidence_window,
             "actual": timeframe.get("signal"),
         },
         {
+            "name": "core_input_confirmation",
+            "passed": _core_inputs_allow_trade(timeframe),
+            "message": _core_input_message(timeframe),
+            "actual": _core_input_status(timeframe),
+        },
+        {
             "name": "orderflow_confirmation",
             "passed": _orderflow_supports_side(timeframe, side),
             "message": orderflow_message,
@@ -384,6 +402,39 @@ def _governed_trigger_conditions(side, permission, timeframe, confidence_window,
 def _is_governed_timeframe_stack(timeframes):
     labels = tuple(str(item.get("timeframe") or "").lower() for item in (timeframes or []))
     return labels == tuple(OFFICIAL_ENTRY_TIMEFRAMES)
+
+
+def _core_inputs_allow_trade(timeframe):
+    """Make contradiction diagnostics authoritative at setup boundaries."""
+    contradiction = (timeframe or {}).get("contradiction")
+    if not isinstance(contradiction, dict) or not contradiction:
+        return True
+    status = str(contradiction.get("status") or "").upper()
+    return contradiction.get("trade_allowed") is not False and status not in {
+        "INVALIDATED",
+        "FAILED",
+        "ERROR",
+        "UNAVAILABLE",
+    }
+
+
+def _core_input_status(timeframe):
+    contradiction = (timeframe or {}).get("contradiction") or {}
+    return contradiction.get("status") or (
+        "ALLOWED" if _core_inputs_allow_trade(timeframe) else "INVALIDATED"
+    )
+
+
+def _core_input_message(timeframe):
+    contradiction = (timeframe or {}).get("contradiction") or {}
+    reasons = contradiction.get("reasons") or []
+    if reasons:
+        return str(reasons[0])
+    summary = contradiction.get("summary")
+    if summary:
+        return str(summary)
+    label = (timeframe or {}).get("timeframe") or "Entry timeframe"
+    return f"{label} core inputs must be fresh and available"
 
 
 def _actionable_side(timeframe):

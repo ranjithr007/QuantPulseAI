@@ -296,7 +296,8 @@ function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
               <Link
                 key={row.symbol}
                 to={getPageHref("coin-details", { ...view, symbol: row.symbol })}
-                className="flex h-10 min-w-[110px] shrink-0 flex-col justify-center rounded-lg border border-white/5 bg-slate-950/70 px-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-w-[124px]"
+                title={row.reason || `${row.symbol} ${row.type}`}
+                className="flex h-14 min-w-[132px] shrink-0 flex-col justify-center rounded-lg border border-white/5 bg-slate-950/70 px-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-w-[150px]"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-semibold text-white">{row.symbol}</span>
@@ -311,7 +312,12 @@ function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
                 </div>
                 <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px]">
                   <span className="text-slate-400">{formatPrice(row.currentPrice, { fallback: "-", compactSmall: true })}</span>
-                  <span className="text-cyan-200">{formatPercent(row.confidence, 1, "-")}</span>
+                  <span className="text-cyan-200">
+                    {formatPercent(row.confidence, 1, "-")}{row.type === "WAIT" ? " raw" : ""}
+                  </span>
+                </div>
+                <div className="mt-0.5 max-w-[132px] truncate text-[9px] text-slate-500 sm:max-w-[150px]">
+                  {row.type === "WAIT" ? row.reason || "No executable confirmation" : "Executable signal"}
                 </div>
               </Link>
             ))}

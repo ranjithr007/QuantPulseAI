@@ -102,6 +102,38 @@ class Phase1TradeSetupTests(unittest.TestCase):
         self.assertEqual(result["entry_timeframe"], "4h")
         self.assertEqual(len(result["timeframe_candidates"]), 4)
 
+    def test_governed_entry_blocks_directional_score_when_core_input_is_stale(self):
+        stale_orderflow = governed_tf("1h", 53.4)
+        stale_orderflow["contradiction"] = {
+            "status": "INVALIDATED",
+            "trade_allowed": False,
+            "summary": "One or more core inputs are stale or missing",
+            "reasons": ["Orderflow input is stale"],
+        }
+        result = build_entry_trigger_decision(
+            confirmation={
+                "trade_permission": "LONG_ALLOWED",
+                "reason": "Bullish candidates are allowed",
+                "entry_timeframes": [],
+            },
+            timeframes=[
+                stale_orderflow,
+                governed_tf("2h", 0),
+                governed_tf("4h", 0),
+                governed_tf("1d", 0),
+            ],
+        )
+
+        self.assertEqual(result["status"], "WAIT")
+        self.assertEqual(result["side"], "LONG")
+        self.assertEqual(result["reason"], "Orderflow input is stale")
+        core_gate = next(
+            item
+            for item in result["conditions"]
+            if item["name"] == "core_input_confirmation"
+        )
+        self.assertFalse(core_gate["passed"])
+
     def test_governed_score_below_40_waits_even_when_signal_label_is_directional(self):
         weak = governed_tf("1h", 39.99)
         weak["signal"] = "LONG"

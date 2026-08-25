@@ -221,6 +221,14 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 "observed_at": datetime.now(timezone.utc),
                 "source": "TEST_MARK",
             },
+        ), patch(
+            "app.api.v1.paper_trade_api._current_signal_validation",
+            return_value={
+                "status": "VALID",
+                "trade_allowed": True,
+                "signal": "LONG",
+                "reasons": [],
+            },
         ):
             execution = execute_paper_trade_candidates_for_symbol("BTCUSDT", stale_after_seconds=900)
             duplicate = execute_paper_trade_candidates_for_symbol("BTCUSDT", stale_after_seconds=900)
@@ -395,6 +403,14 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 "observed_at": datetime.now(timezone.utc),
                 "source": "TEST_MARK",
             },
+        ), patch(
+            "app.api.v1.paper_trade_api._current_signal_validation",
+            return_value={
+                "status": "VALID",
+                "trade_allowed": True,
+                "signal": "LONG",
+                "reasons": [],
+            },
         ):
             reentry = execute_paper_trade_candidates_for_symbol(
                 "BTCUSDT",
@@ -480,6 +496,14 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 "mark_price": 100.0,
                 "observed_at": datetime.now(timezone.utc),
                 "source": "TEST_MARK",
+            },
+        ), patch(
+            "app.api.v1.paper_trade_api._current_signal_validation",
+            return_value={
+                "status": "VALID",
+                "trade_allowed": True,
+                "signal": "LONG",
+                "reasons": [],
             },
         ):
             execution = execute_paper_trade_candidates_for_symbol(

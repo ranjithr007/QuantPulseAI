@@ -676,6 +676,43 @@ def test_candidate_exposes_post_stop_cooldown_as_coin_level_blocker():
     )
 
 
+def test_candidate_blocks_stale_current_orderflow_at_trade_scope():
+    trade = SimpleNamespace(
+        id=14,
+        symbol="ETHUSDT",
+        side="LONG",
+        status="OPEN",
+        entry_price=100.0,
+        stop_loss=99.25,
+        target1=101.5,
+        target2=102.3,
+        target3=None,
+        risk_reward=2.0,
+        confidence=53.4,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    candidate = paper_trade_api._paper_trade_candidate(
+        trade,
+        None,
+        900,
+        current_signal_validation={
+            "status": "INVALIDATED",
+            "trade_allowed": False,
+            "signal": "LONG",
+            "reasons": ["Orderflow input is stale"],
+        },
+        account_risk={"risk_available": True, "limit_reached": False},
+        paper_wallet={
+            "open_position_count": 0,
+            "remaining_margin_capacity_inr": 85_000,
+        },
+    )
+
+    assert candidate["eligible"] is False
+    assert "Orderflow input is stale" in candidate["blocker_scopes"]["trade"]
+
+
 def test_executor_allows_opposite_side_during_post_stop_cooldown(monkeypatch):
     candidate = _candidate(13, "1h", 64, side="SHORT")
     stopped_trade = SimpleNamespace(

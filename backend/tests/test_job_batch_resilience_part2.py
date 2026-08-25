@@ -11,8 +11,8 @@ def test_run_orderflow_job_continues_after_timeframe_error():
     fake_db = SimpleNamespace(close=Mock())
     symbols = [SimpleNamespace(symbol="BTCUSDT")]
 
-    def generate_orderflow(symbol, timeframe):
-        if timeframe == "5m":
+    def generate_orderflow(symbol, timeframe, context=None):
+        if timeframe == "2h":
             raise RuntimeError("boom")
         return {"symbol": symbol, "timeframe": timeframe}
 
@@ -23,9 +23,33 @@ def test_run_orderflow_job_continues_after_timeframe_error():
         "app.jobs.orderflow_jobs.generate_orderflow",
         side_effect=generate_orderflow,
     ) as generate_orderflow:
-        run_orderflow_job()
+        result = run_orderflow_job()
 
     assert generate_orderflow.called
+    assert result["status"] == "DEGRADED"
+    assert result["expected_count"] == 4
+    assert result["saved_count"] == 3
+    assert result["failed_count"] == 1
+    assert result["errors"][0]["timeframe"] == "2h"
+    assert fake_db.close.called
+
+
+def test_run_orderflow_job_fails_when_no_timeframe_is_saved():
+    fake_db = SimpleNamespace(close=Mock())
+    symbols = [SimpleNamespace(symbol="BTCUSDT")]
+
+    with patch("app.jobs.orderflow_jobs.SessionLocal", return_value=fake_db), patch(
+        "app.jobs.orderflow_jobs.SymbolRepository.get_active_symbols",
+        return_value=symbols,
+    ), patch(
+        "app.jobs.orderflow_jobs.generate_orderflow",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = run_orderflow_job()
+
+    assert result["status"] == "FAILED"
+    assert result["saved_count"] == 0
+    assert result["failed_count"] == 4
     assert fake_db.close.called
 
 

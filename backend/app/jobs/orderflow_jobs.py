@@ -19,7 +19,9 @@ def run_orderflow_job(*, context=None):
     try:
 
         symbols = SymbolRepository().get_active_symbols(db)
-        results=[]
+        results = []
+        errors = []
+        expected_count = len(symbols) * len(TIMEFRAMES)
         for item in symbols:
 
             symbol = item.symbol
@@ -27,19 +29,65 @@ def run_orderflow_job(*, context=None):
             for tf in TIMEFRAMES:
                 try:
                     result = generate_orderflow(symbol, tf, context=context)
-                    results.append(result)
+                    if result is None:
+                        errors.append(
+                            {
+                                "symbol": symbol,
+                                "timeframe": tf,
+                                "error": "Orderflow engine returned no result",
+                            }
+                        )
+                    else:
+                        results.append(result)
                     # print(symbol, tf, result)
                 except Exception as ex:
+                    error = summarize_network_error(ex)
+                    errors.append(
+                        {
+                            "symbol": symbol,
+                            "timeframe": tf,
+                            "error": error,
+                        }
+                    )
                     if not is_transient_network_error(ex):
                         print(
-                            f"Orderflow job error {symbol} {tf}: {summarize_network_error(ex)}"
+                            f"Orderflow job error {symbol} {tf}: {error}"
                         )
                     continue
-        return results
+        completed_count = len(results)
+        return {
+            "source": "orderflow_job",
+            "status": (
+                "OK"
+                if completed_count == expected_count
+                else "DEGRADED"
+                if completed_count
+                else "FAILED"
+            ),
+            "expected_count": expected_count,
+            "processed_count": expected_count,
+            "saved_count": completed_count,
+            "failed_count": len(errors),
+            "rows_written": completed_count,
+            "results": results,
+            "errors": errors,
+        }
     except Exception as ex:
         safe_rollback(db)
+        error = summarize_network_error(ex)
         if not is_transient_network_error(ex):
-            print("Orderflow job error:", summarize_network_error(ex))
+            print("Orderflow job error:", error)
+        return {
+            "source": "orderflow_job",
+            "status": "FAILED",
+            "expected_count": 0,
+            "processed_count": 0,
+            "saved_count": 0,
+            "failed_count": 1,
+            "rows_written": 0,
+            "results": [],
+            "errors": [{"error": error}],
+        }
 
     finally:
 

@@ -31,6 +31,7 @@ from app.paper_trading.validation_policy import build_architecture_paper_gate
 from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
 from app.risk.confidence_sizing import confidence_sizing_profile
+from app.intelligence.contradiction_engine import build_contradiction_report
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.paper_trading.exit_policy import approval_target_for_policy
 from app.paper_trading.exit_policy import build_policy_trade_levels
@@ -52,6 +53,7 @@ from app.repositories.trade_plan_repository import TradePlanRepository
 from app.trading.market_participation_guard import market_participation_blockers
 from app.utils.freshness import freshness_status
 from app.utils.freshness import normalize_timestamp_to_utc
+from app.utils.freshness import stale_after_seconds_for_timeframe
 
 
 router = APIRouter(prefix="/paper-trade", tags=["Paper Trade"])
@@ -66,6 +68,7 @@ PAPER_RISK_MARK_MAX_AGE_SECONDS = 15 * 60
 PAPER_ENTRY_MARK_MAX_AGE_SECONDS = 60
 PAPER_ENTRY_MARK_CLOCK_SKEW_SECONDS = 30
 _MARKET_PARTICIPATION_UNSET = object()
+_CURRENT_SIGNAL_VALIDATION_UNSET = object()
 PAPER_STOP_REENTRY_COOLDOWN_REASON = (
     "Same-direction re-entry is cooling down for "
     f"{PAPER_STOP_REENTRY_COOLDOWN_MINUTES} minutes after stop-loss"
@@ -1341,6 +1344,18 @@ def build_paper_trade_candidates(
         db,
         [trade.symbol for trade in trades],
     )
+    current_signal_validations = {
+        (
+            trade.symbol,
+            str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
+        ): _current_signal_validation(
+            db,
+            trade.symbol,
+            str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
+            stale_after_seconds,
+        )
+        for trade in trades
+    }
     account_trades = PaperTradeRepository().all_trades(db)
     account_risk = _account_risk_snapshot(db, account_trades)
     paper_wallet = _paper_wallet_snapshot(
@@ -1365,6 +1380,12 @@ def build_paper_trade_candidates(
             stale_after_seconds,
             derivative_payloads.get(trade.symbol),
             market_participation=market_participation_payloads.get(trade.symbol),
+            current_signal_validation=current_signal_validations.get(
+                (
+                    trade.symbol,
+                    str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
+                )
+            ),
             account_risk=account_risk,
             paper_wallet=paper_wallet,
             max_open_trades=min(
@@ -2101,6 +2122,7 @@ def _paper_trade_candidate(
     derivatives=None,
     *,
     market_participation=_MARKET_PARTICIPATION_UNSET,
+    current_signal_validation=_CURRENT_SIGNAL_VALIDATION_UNSET,
     account_risk=None,
     paper_wallet=None,
     max_open_trades=4,
@@ -2139,6 +2161,10 @@ def _paper_trade_candidate(
                 market_participation,
                 trade.side,
             )
+        )
+    if current_signal_validation is not _CURRENT_SIGNAL_VALIDATION_UNSET:
+        trade_blockers.extend(
+            _current_signal_blockers(current_signal_validation, trade.side)
         )
     coin_blockers = []
     if coin_has_active_trade:
@@ -2187,8 +2213,76 @@ def _paper_trade_candidate(
             if market_participation is _MARKET_PARTICIPATION_UNSET
             else market_participation
         ),
+        "current_signal_validation": (
+            None
+            if current_signal_validation is _CURRENT_SIGNAL_VALIDATION_UNSET
+            else current_signal_validation
+        ),
         "market_context": _market_context_payload(trade.symbol, derivatives),
     }
+
+
+def _current_signal_validation(db, symbol, timeframe, fallback_stale_after_seconds):
+    freshness_window = stale_after_seconds_for_timeframe(
+        timeframe,
+        fallback=fallback_stale_after_seconds,
+    )
+    try:
+        return build_contradiction_report(
+            db,
+            symbol,
+            timeframe,
+            freshness_window,
+        )
+    except SQLAlchemyError:
+        db.rollback()
+    except Exception:
+        pass
+    return {
+        "source": "contradiction_engine",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "status": "UNAVAILABLE",
+        "trade_allowed": False,
+        "signal": "NO_DATA",
+        "reasons": ["Current signal validation is unavailable"],
+    }
+
+
+def _current_signal_blockers(validation, planned_side):
+    validation = validation or {}
+    reasons = []
+    status = str(validation.get("status") or "UNAVAILABLE").upper()
+    if validation.get("trade_allowed") is False or status in {
+        "INVALIDATED",
+        "FAILED",
+        "ERROR",
+        "UNAVAILABLE",
+    }:
+        reported = validation.get("reasons") or []
+        reasons.append(
+            str(reported[0])
+            if reported
+            else str(validation.get("summary") or "Current signal is invalidated")
+        )
+
+    current_side = _normalized_signal_side(validation.get("signal"))
+    expected_side = _normalized_signal_side(planned_side)
+    if not reasons and current_side != expected_side:
+        reasons.append(
+            f"Current signal {current_side or 'WAIT'} does not match queued "
+            f"{expected_side or planned_side} trade plan"
+        )
+    return reasons
+
+
+def _normalized_signal_side(value):
+    normalized = str(value or "").upper()
+    if normalized in {"LONG", "BUY", "STRONG_LONG"}:
+        return "LONG"
+    if normalized in {"SHORT", "SELL", "STRONG_SHORT"}:
+        return "SHORT"
+    return None
 
 
 def _market_participation_blockers(payload, side):
