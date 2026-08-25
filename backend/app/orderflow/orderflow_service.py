@@ -1,7 +1,6 @@
-from sqlalchemy import true
 from app.database.sqlserver import SessionLocal
 
-from app.repositories.candle_repository import get_latest_candles, get_latest_candle
+from app.repositories.candle_repository import get_latest_candles
 
 from app.repositories.orderflow_repository import OrderFlowRepository
 
@@ -19,7 +18,7 @@ def generate_orderflow(symbol, timeframe, *, context=None):
         if len(candles) < 20:
 
             return None
-        latest_record = OrderFlowRepository.get_last_cvd(db, symbol)
+        latest_record = OrderFlowRepository().get_last_cvd(db, symbol)
         
         result = analyze_orderflow(candles,latest_record,True)
         if context is not None:
