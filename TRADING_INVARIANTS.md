@@ -236,6 +236,43 @@ show that candidate's timeframe, direction, score, confidence, participation
 state, and combined eligibility together. A signal from the currently viewed
 timeframe must not be labelled with another timeframe's eligibility.
 
+## QP-TI-003: Strategy isolation and attribution
+
+**Status:** Core Fusion paper strategy implemented. Additional strategies must
+remain shadow-only until they implement this complete contract.
+
+Every strategy must have an immutable `strategy_id` and `strategy_version`.
+Changing entry rules, confirmation gates, sizing, or exits requires a new
+version; an existing version must never be repurposed. Each strategy evaluation
+must be stored separately with its symbol, selected timeframe, side, score,
+confidence, confirmation result, exact blockers, effective timestamp, and source
+decision snapshot.
+
+When a strategy candidate becomes a trade, the same strategy identifier,
+version, and decision-snapshot identifier must be propagated without substitution
+through the trade plan, risk decision, paper trade, exit, and P&L report. A risk
+decision from another strategy, version, or source snapshot cannot authorize the
+trade.
+
+Strategy separation does not create an independent position lock. QP-TI-001
+remains account-authoritative: all strategies compete for the same normalized
+symbol lock and at most one active position may exist for that coin across all
+strategies, directions, and timeframes. Candidates that are eligible but not
+selected must remain auditable and must not be reported as executed trades.
+
+Performance must be reported per strategy/version using paper-trade evidence,
+including open and closed trades, wins, losses, net INR P&L, fees, funding,
+account return, and maximum drawdown. Aggregate results must not silently mix
+strategy versions. New strategies begin in paper/shadow mode and cannot enable
+live exchange execution.
+
+Required acceptance coverage proves that attribution survives every persistence
+boundary, incomplete or mismatched risk attribution blocks execution, historical
+pre-lineage records are explicitly labelled as legacy rather than falsely counted
+as Core Fusion, the shared symbol lock holds across strategies, strategy metrics
+do not include another strategy/version, and dashboard candidate reasons come
+from persisted strategy evidence.
+
 # INR-M paper-wallet sizing
 
 - Paper trading uses a governed starting wallet of **INR 200,000**. This is

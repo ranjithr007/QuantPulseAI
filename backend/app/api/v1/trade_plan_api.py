@@ -43,6 +43,13 @@ def serialize_trade_plan(trade, stale_after_seconds):
         "target3": trade.target3,
         "risk_reward": trade.risk_reward,
         "confidence": trade.confidence,
+        "strategy_id": getattr(trade, "strategy_id", None),
+        "strategy_version": getattr(trade, "strategy_version", None),
+        "strategy_decision_snapshot_id": getattr(
+            trade,
+            "strategy_decision_snapshot_id",
+            None,
+        ),
         "status": trade.status,
         "exit_price": trade.exit_price,
         "result": trade.result,

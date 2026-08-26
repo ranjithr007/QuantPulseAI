@@ -351,4 +351,7 @@ def test_ready_trade_plan_snapshots_measurement_context():
         "scenario": None,
         "contradiction": None,
         "regime": "TRENDING_BULL",
+        "strategy_id": "CORE_FUSION",
+        "strategy_version": "core_fusion_v1",
+        "strategy_decision_snapshot_id": None,
     }

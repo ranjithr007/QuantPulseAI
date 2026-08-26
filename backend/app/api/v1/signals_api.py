@@ -50,6 +50,9 @@ from app.observability.performance_budget import build_stage_latency_report
 from app.utils.freshness import candle_freshness_timestamp, freshness_status
 from app.utils.freshness import stale_after_seconds_for_timeframe
 from app.utils.signal_validation import validate_trade_plan_direction
+from app.strategies.registry import CORE_FUSION_STRATEGY_ID
+from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
+from app.strategies.registry import CORE_FUSION_DECISION_VERSION
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
@@ -707,14 +710,28 @@ def persist_ready_watchlist_setups_for_stack(
 
         for payload in payloads:
             opportunity_snapshot = _persist_phase2_opportunity_snapshot(db, payload)
+            participation_payload = participation_payloads.get(payload["symbol"])
+            strategy_snapshot = _persist_core_fusion_strategy_snapshot(
+                db,
+                payload,
+                participation_payload,
+            )
             record = _persist_ready_watchlist_payload(
                 db,
                 trade_repo,
                 payload,
                 normalized_side,
-                participation_payloads.get(payload["symbol"]),
+                participation_payload,
+                strategy_snapshot=strategy_snapshot,
             )
             record["opportunity_snapshot"] = opportunity_snapshot
+            record["strategy"] = {
+                "id": CORE_FUSION_STRATEGY_ID,
+                "version": CORE_FUSION_STRATEGY_VERSION,
+                "decision_snapshot_id": strategy_snapshot.get("id"),
+                "decision": strategy_snapshot.get("decision"),
+                "blocked_reasons": strategy_snapshot.get("blocked_reasons") or [],
+            }
             records.append(record)
 
         saved = [
@@ -1482,6 +1499,7 @@ def _persist_ready_watchlist_payload(
     payload,
     side_filter=None,
     market_participation=_MARKET_PARTICIPATION_UNSET,
+    strategy_snapshot=None,
 ):
     symbol = payload["symbol"]
     trigger = payload["trigger"]
@@ -1595,6 +1613,9 @@ def _persist_ready_watchlist_payload(
                 .get("regime", {})
                 .get("value")
             ),
+            "strategy_id": CORE_FUSION_STRATEGY_ID,
+            "strategy_version": CORE_FUSION_STRATEGY_VERSION,
+            "strategy_decision_snapshot_id": (strategy_snapshot or {}).get("id"),
         },
     )
 
@@ -1609,6 +1630,99 @@ def _persist_ready_watchlist_payload(
         "target2": trade.target2,
         "risk_reward": trade.risk_reward,
         "confidence": trade.confidence,
+        "strategy_id": getattr(trade, "strategy_id", CORE_FUSION_STRATEGY_ID),
+        "strategy_version": getattr(
+            trade,
+            "strategy_version",
+            CORE_FUSION_STRATEGY_VERSION,
+        ),
+        "strategy_decision_snapshot_id": getattr(
+            trade,
+            "strategy_decision_snapshot_id",
+            (strategy_snapshot or {}).get("id"),
+        ),
+    }
+
+
+def _persist_core_fusion_strategy_snapshot(db, payload, market_participation):
+    """Persist the complete, versioned Core Fusion entry decision."""
+    timeframes = payload.get("timeframes") or []
+    selected = _selected_timeframe_record(payload)
+    source_timestamp = selected.get("candle_time")
+    timeframe = selected.get("timeframe")
+    trigger = payload.get("trigger") or {}
+    side = trigger.get("side")
+    validation = payload.get("trade_plan_validation") or {}
+    participation = evaluate_market_participation(market_participation, side)
+    blocked_reasons = []
+
+    if trigger.get("status") != "READY":
+        blocked_reasons.append(trigger.get("reason") or "Core signal is not READY")
+    if not participation.get("allowed"):
+        blocked_reasons.append(
+            participation.get("reason")
+            or "Market participation does not confirm the signal"
+        )
+    if not payload.get("trade_plan"):
+        blocked_reasons.append("Core signal did not produce a trade plan")
+    elif not validation.get("is_valid"):
+        blocked_reasons.extend(validation.get("errors") or ["Trade plan is invalid"])
+
+    if not source_timestamp or not timeframe:
+        return {
+            "persisted": False,
+            "id": None,
+            "decision": "BLOCKED",
+            "blocked_reasons": blocked_reasons
+            or ["Selected timeframe candle is unavailable"],
+        }
+
+    decision = "ELIGIBLE" if not blocked_reasons else "BLOCKED"
+    quality_state = (
+        "OK"
+        if all(item.get("status") == "OK" for item in timeframes)
+        else "DEGRADED"
+    )
+    snapshot = build_decision_snapshot(
+        payload["symbol"],
+        timeframe,
+        decision=decision,
+        source_timestamp=source_timestamp,
+        effective_timestamp=(
+            (market_participation or {}).get("effective_timestamp")
+            or source_timestamp
+        ),
+        quality_state=quality_state,
+        confidence=_timeframe_confidence(selected, payload.get("confirmation")),
+        regime=_timeframe_regime(selected, payload.get("confirmation") or {}),
+        signal=trigger,
+        trade_plan=payload.get("trade_plan"),
+        context={
+            "audit_scope": "PAPER_STRATEGY_CANDIDATE",
+            "execution_scope": "PAPER_ONLY",
+            "strategy_id": CORE_FUSION_STRATEGY_ID,
+            "strategy_version": CORE_FUSION_STRATEGY_VERSION,
+            "side": side,
+            "selected_timeframe": timeframe,
+            "selected_score": selected.get("score"),
+            "market_participation": participation,
+            "blocked_reasons": blocked_reasons,
+            "one_active_trade_per_symbol": True,
+        },
+    )
+    snapshot["decision_version"] = CORE_FUSION_DECISION_VERSION
+    snapshot["strategy_id"] = CORE_FUSION_STRATEGY_ID
+    snapshot["strategy_version"] = CORE_FUSION_STRATEGY_VERSION
+    snapshot["data_generation_id"] = (market_participation or {}).get(
+        "data_generation_id"
+    )
+    record = _persist_decision_snapshot_safe(db, snapshot)
+    return {
+        "persisted": record is not None,
+        "id": getattr(record, "id", None),
+        "decision": decision,
+        "blocked_reasons": blocked_reasons,
+        "decision_version": CORE_FUSION_DECISION_VERSION,
     }
 
 

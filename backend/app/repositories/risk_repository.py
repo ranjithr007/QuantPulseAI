@@ -12,6 +12,8 @@ from app.database.models.risk_decision import RiskDecision
 from app.features.point_in_time_feature_service import build_decision_snapshot
 from app.features.point_in_time_feature_service import persist_decision_snapshot
 from app.repositories.trade_thesis_repository import TradeThesisRepository
+from app.strategies.registry import LEGACY_UNATTRIBUTED_STRATEGY_ID
+from app.strategies.registry import LEGACY_UNATTRIBUTED_STRATEGY_VERSION
 
 
 class RiskRepository:
@@ -29,6 +31,20 @@ class RiskRepository:
 
         try:
             targets = data.get("targets") or {}
+            is_trade_plan_approval = (
+                str(data.get("decision_type") or "").upper()
+                == "TRADE_PLAN_APPROVAL"
+            )
+            strategy_id = data.get("strategy_id") or (
+                LEGACY_UNATTRIBUTED_STRATEGY_ID
+                if is_trade_plan_approval
+                else None
+            )
+            strategy_version = data.get("strategy_version") or (
+                LEGACY_UNATTRIBUTED_STRATEGY_VERSION
+                if is_trade_plan_approval
+                else None
+            )
             columns = _risk_decision_columns(db)
             mapped_columns = set(RiskDecision.__table__.columns.keys())
 
@@ -57,6 +73,11 @@ class RiskRepository:
                 "effective_timestamp": data.get("effective_timestamp"),
                 "reason": data.get("reason"),
                 "data_generation_id": data.get("data_generation_id"),
+                "strategy_id": strategy_id,
+                "strategy_version": strategy_version,
+                "strategy_decision_snapshot_id": data.get(
+                    "strategy_decision_snapshot_id"
+                ),
             }
 
             for column_name, value in optional_fields.items():
@@ -128,9 +149,16 @@ class RiskRepository:
                             data.get("feature_timestamp")
                         ),
                         "trade_plan_id": data.get("trade_plan_id"),
+                        "strategy_id": strategy_id,
+                        "strategy_version": strategy_version,
+                        "strategy_decision_snapshot_id": data.get(
+                            "strategy_decision_snapshot_id"
+                        ),
                     },
             )
             decision_snapshot["data_generation_id"] = data.get("data_generation_id")
+            decision_snapshot["strategy_id"] = strategy_id
+            decision_snapshot["strategy_version"] = strategy_version
             persist_decision_snapshot(db, decision_snapshot)
 
             db.flush()

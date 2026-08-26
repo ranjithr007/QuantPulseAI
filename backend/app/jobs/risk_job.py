@@ -592,6 +592,15 @@ class RiskJob:
                     "id",
                     "trade_plan_id",
                 )
+                result["strategy_id"] = self._get_value(trade, "strategy_id")
+                result["strategy_version"] = self._get_value(
+                    trade,
+                    "strategy_version",
+                )
+                result["strategy_decision_snapshot_id"] = self._get_value(
+                    trade,
+                    "strategy_decision_snapshot_id",
+                )
 
                 self._persist_result(db, result)
                 summary["persisted"] += 1

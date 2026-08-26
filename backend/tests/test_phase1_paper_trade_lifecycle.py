@@ -22,6 +22,9 @@ from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
 from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.trading.trade_plan_engine import build_trade_plan
+from app.strategies.registry import CORE_FUSION_DECISION_VERSION
+from app.strategies.registry import CORE_FUSION_STRATEGY_ID
+from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
 
 
 def _enabled_automation_settings():
@@ -105,6 +108,26 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             },
         )
 
+    def _seed_core_fusion_decision(self, db, now, confidence):
+        snapshot = DecisionSnapshot(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            source_timestamp=now,
+            effective_timestamp=now,
+            feature_version="feature_factory_v1",
+            decision_version=CORE_FUSION_DECISION_VERSION,
+            strategy_id=CORE_FUSION_STRATEGY_ID,
+            strategy_version=CORE_FUSION_STRATEGY_VERSION,
+            quality_state="OK",
+            decision="ELIGIBLE",
+            confidence=confidence,
+            snapshot_json="{}",
+            created_at=now,
+        )
+        db.add(snapshot)
+        db.flush()
+        return snapshot
+
     def test_stop_close_persists_exact_exit_reason(self):
         with self.Session() as db:
             trade = PaperTrade(
@@ -169,6 +192,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         now = datetime.utcnow().replace(microsecond=0)
         governed = build_trade_plan("LONG", 100.0, 1.0, confidence=80)
         with self.Session() as db:
+            snapshot = self._seed_core_fusion_decision(db, now, 80.0)
             plan = TradePlan(
                 symbol="BTCUSDT",
                 side="LONG",
@@ -183,6 +207,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 entry_timeframe="1h",
                 timeframe_stack="1h,4h,1d",
                 regime="TRENDING_BULL",
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_decision_snapshot_id=snapshot.id,
                 status="OPEN",
                 created_at=now - timedelta(minutes=2),
             )
@@ -201,6 +228,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     position_size=1.25,
                     risk_percent=1.0,
                     confidence=80.0,
+                    strategy_id=CORE_FUSION_STRATEGY_ID,
+                    strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                    strategy_decision_snapshot_id=snapshot.id,
                     created_at=now - timedelta(minutes=1),
                 )
             )
@@ -350,8 +380,13 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         # The scanner may produce a new plan while the direction remains LONG.
         # Its planned price can still be the prior setup price, but execution
         # must start from the current mark and derive a completely new bracket.
-        decision_time = datetime.utcnow().replace(microsecond=0)
+        decision_time = now + timedelta(seconds=1)
         with self.Session() as db:
+            reentry_snapshot = self._seed_core_fusion_decision(
+                db,
+                decision_time,
+                80.0,
+            )
             new_plan = TradePlan(
                 symbol="BTCUSDT",
                 side="LONG",
@@ -366,6 +401,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 entry_timeframe="1h",
                 timeframe_stack="1h,4h,1d",
                 regime="TRENDING_BULL",
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_decision_snapshot_id=reentry_snapshot.id,
                 status="OPEN",
                 created_at=decision_time - timedelta(seconds=2),
             )
@@ -384,6 +422,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     position_size=1.25,
                     risk_percent=1.0,
                     confidence=80.0,
+                    strategy_id=CORE_FUSION_STRATEGY_ID,
+                    strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                    strategy_decision_snapshot_id=reentry_snapshot.id,
                     created_at=decision_time - timedelta(seconds=1),
                 )
             )
@@ -446,6 +487,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             timeframe="1h",
         )
         with self.Session() as db:
+            snapshot = self._seed_core_fusion_decision(db, now, 50.0)
             plan = TradePlan(
                 symbol="BTCUSDT",
                 side="LONG",
@@ -459,6 +501,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 exit_policy=governed["exit_policy"],
                 target1_fraction=governed["target1_fraction"],
                 max_hold_hours=governed["max_hold_hours"],
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_decision_snapshot_id=snapshot.id,
                 status="OPEN",
                 created_at=now - timedelta(minutes=2),
             )
@@ -477,6 +522,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     position_size=1.0,
                     risk_percent=0.5,
                     confidence=50.0,
+                    strategy_id=CORE_FUSION_STRATEGY_ID,
+                    strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                    strategy_decision_snapshot_id=snapshot.id,
                     created_at=now - timedelta(minutes=1),
                 )
             )

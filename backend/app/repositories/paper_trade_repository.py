@@ -335,6 +335,18 @@ class PaperTradeRepository:
             timeframe_stack=trade_plan.get("timeframe_stack"),
             regime=trade_plan.get("regime"),
             data_generation_id=trade_plan.get("data_generation_id"),
+            strategy_id=(
+                trade_plan.get("strategy_id")
+                or authorization_risk.get("strategy_id")
+            ),
+            strategy_version=(
+                trade_plan.get("strategy_version")
+                or authorization_risk.get("strategy_version")
+            ),
+            strategy_decision_snapshot_id=(
+                trade_plan.get("strategy_decision_snapshot_id")
+                or authorization_risk.get("strategy_decision_snapshot_id")
+            ),
             exit_policy=(
                 policy_levels["name"]
                 if policy_levels is not None

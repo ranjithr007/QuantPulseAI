@@ -72,8 +72,25 @@ def save_decision_snapshot(db, snapshot):
     existing = _get_existing_decision_snapshot(db, snapshot)
     if existing is not None:
         generation_id = snapshot.get("data_generation_id")
+        strategy_id = snapshot.get("strategy_id")
+        strategy_version = snapshot.get("strategy_version")
+        changed = False
         if generation_id and existing.data_generation_id != generation_id:
             existing.data_generation_id = generation_id
+            changed = True
+        if strategy_id and existing.strategy_id != strategy_id:
+            existing.strategy_id = strategy_id
+            changed = True
+        if strategy_version and existing.strategy_version != strategy_version:
+            existing.strategy_version = strategy_version
+            changed = True
+        if changed:
+            existing.source_timestamp = _to_naive_utc(snapshot["source_timestamp"])
+            existing.quality_state = snapshot["quality_state"]
+            existing.decision = snapshot["decision"]
+            existing.confidence = snapshot.get("confidence")
+            existing.regime = snapshot.get("regime")
+            existing.thesis_id = snapshot.get("thesis_id")
             existing.snapshot_json = _snapshot_json(snapshot)
             commit_or_rollback(db)
         return existing
@@ -85,6 +102,8 @@ def save_decision_snapshot(db, snapshot):
         effective_timestamp=_to_naive_utc(snapshot["effective_timestamp"]),
         feature_version=snapshot["feature_version"],
         decision_version=snapshot["decision_version"],
+        strategy_id=snapshot.get("strategy_id"),
+        strategy_version=snapshot.get("strategy_version"),
         quality_state=snapshot["quality_state"],
         decision=snapshot["decision"],
         confidence=snapshot.get("confidence"),

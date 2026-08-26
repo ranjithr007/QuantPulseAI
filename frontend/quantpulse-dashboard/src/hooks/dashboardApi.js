@@ -20,6 +20,7 @@ const PAGE_DATA_NEEDS = {
   signals: { watchlist: true, paper: true, signals: true },
   "market-trend": { signals: true },
   "market-move": { signals: true },
+  strategies: {},
   "coin-details": { signals: true },
   "risk-controls": { paper: true, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },
@@ -67,6 +68,20 @@ export async function loadLiveMarketStatus({ signal } = {}) {
 export async function loadMarketParticipationTrends({ signal } = {}) {
   const response = await requestJson("/market-participation/trends", {}, signal, 20000);
   return response || { source: "market_participation_trends", count: 0, records: [] };
+}
+
+export async function loadStrategySummary({ strategyId, sinceDays = 30, signal } = {}) {
+  const response = await requestJson(
+    "/strategies/summary",
+    {
+      strategy_id: strategyId,
+      since_days: sinceDays,
+      candidate_limit: 24,
+    },
+    signal,
+    30000
+  );
+  return response || { source: "strategy_performance_v1", status: "UNAVAILABLE", records: [] };
 }
 
 export async function startLiveMarketListener({ symbols = [], signal }) {

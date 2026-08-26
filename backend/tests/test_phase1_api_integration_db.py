@@ -31,6 +31,9 @@ from app.main import app
 from app.repositories.automation_settings_repository import update_automation_settings
 from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.trading.trade_plan_engine import build_trade_plan
+from app.strategies.registry import CORE_FUSION_DECISION_VERSION
+from app.strategies.registry import CORE_FUSION_STRATEGY_ID
+from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
 
 
 class Phase1ApiIntegrationDbTests(unittest.TestCase):
@@ -100,6 +103,24 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
             risk_created_at = datetime.utcnow() - timedelta(minutes=1)
             governed = build_trade_plan("LONG", 100.0, 1.0, confidence=50)
 
+            snapshot = DecisionSnapshot(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                source_timestamp=trade_created_at,
+                effective_timestamp=trade_created_at,
+                feature_version="feature_factory_v1",
+                decision_version=CORE_FUSION_DECISION_VERSION,
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                quality_state="OK",
+                decision="ELIGIBLE",
+                confidence=50.0,
+                snapshot_json="{}",
+                created_at=trade_created_at,
+            )
+            db.add(snapshot)
+            db.flush()
+
             trade = TradePlan(
                 symbol="BTCUSDT",
                 side="LONG",
@@ -111,6 +132,9 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
                 risk_reward=governed["risk_reward"],
                 confidence=50.0,
                 entry_timeframe="1h",
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_decision_snapshot_id=snapshot.id,
                 status="OPEN",
                 created_at=trade_created_at,
             )
@@ -129,6 +153,9 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
                 position_size=1.0,
                 risk_percent=1.0,
                 confidence=50.0,
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_decision_snapshot_id=snapshot.id,
                 created_at=risk_created_at,
             )
             db.add(risk)

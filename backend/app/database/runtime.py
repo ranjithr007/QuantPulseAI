@@ -57,10 +57,21 @@ def _build_database_engine(database_url: str):
     )
 
 
-def _build_sqlite_engine():
-    sqlite_path = _workspace_sqlite_path()
+def _build_sqlite_engine(database_url=None):
+    """Build the configured SQLite engine or the emergency fallback engine.
+
+    An explicit SQLite URL is useful for isolated development, replay, and UI
+    acceptance databases.  Historically it was discarded in favour of the
+    shared fallback path, which could make a supposedly clean run reuse an old
+    schema and old evidence.
+    """
+
+    sqlite_url = normalize_database_url(database_url) if database_url else None
+    if sqlite_url is None:
+        sqlite_path = _workspace_sqlite_path()
+        sqlite_url = f"sqlite:///{sqlite_path.as_posix()}"
     return create_engine(
-        f"sqlite:///{sqlite_path.as_posix()}",
+        sqlite_url,
         connect_args={"check_same_thread": False},
     )
 
@@ -75,7 +86,7 @@ def _initialize_engine(database_url=None, settings=None, engine_builder=None):
                 "SQLite evidence storage is disabled. Configure QUANTPULSE_DATABASE_URL "
                 "for the production database."
             )
-        return _build_sqlite_engine(), True
+        return _build_sqlite_engine(configured_url), True
 
     builder = engine_builder or _build_database_engine
     try:

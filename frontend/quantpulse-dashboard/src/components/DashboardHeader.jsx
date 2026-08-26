@@ -30,6 +30,7 @@ const PAGE_ITEMS = [
   { id: "signals", label: "Signals", shortLabel: "Signals", icon: TrendingUp },
   { id: "market-trend", label: "Market Trend", shortLabel: "Trend", icon: RadioTower },
   { id: "market-move", label: "Market Move", shortLabel: "Move", icon: Zap },
+  { id: "strategies", label: "Strategies", shortLabel: "Strategy", icon: Brain },
   { id: "coin-details", label: "Futures Details", shortLabel: "Futures", icon: Activity },
   { id: "risk-controls", label: "Risk Controls", shortLabel: "Risk", icon: ShieldCheck },
   { id: "auto-trading", label: "Auto Trading", shortLabel: "Auto", icon: Lock },

@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.database.models.market_candles import MarketCandle
 from app.database.models.symbols import Symbol
 from app.database.sqlserver import Base
+from app.strategies.registry import LEGACY_UNATTRIBUTED_STRATEGY_ID
+from app.strategies.registry import LEGACY_UNATTRIBUTED_STRATEGY_VERSION
 
 
 DEFAULT_FUTURES_SYMBOLS = (
@@ -21,6 +23,7 @@ def bootstrap_sqlite_demo_data(engine):
 
     Base.metadata.create_all(bind=engine)
     ensure_sqlite_market_candle_schema(engine)
+    ensure_sqlite_strategy_attribution_schema(engine)
 
     with Session(engine) as db:
         existing = {
@@ -102,3 +105,94 @@ def ensure_sqlite_market_candle_schema(engine):
                 """
             )
         )
+
+
+def ensure_sqlite_strategy_attribution_schema(engine):
+    """Upgrade legacy development databases with durable strategy lineage.
+
+    Production databases remain Alembic-managed.  The SQLite fallback is
+    intentionally self-healing because ``metadata.create_all`` cannot alter an
+    existing table and developers commonly keep the same local evidence file
+    across releases.
+    """
+
+    if getattr(engine.dialect, "name", "") != "sqlite":
+        return
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    additions = {
+        "decision_snapshots": {
+            "strategy_id": "VARCHAR(50)",
+            "strategy_version": "VARCHAR(50)",
+        },
+        "trade_plans": {
+            "strategy_id": "VARCHAR(50)",
+            "strategy_version": "VARCHAR(50)",
+            "strategy_decision_snapshot_id": "INTEGER",
+        },
+        "risk_decisions": {
+            "strategy_id": "VARCHAR(50)",
+            "strategy_version": "VARCHAR(50)",
+            "strategy_decision_snapshot_id": "INTEGER",
+        },
+        "paper_trades": {
+            "strategy_id": "VARCHAR(50)",
+            "strategy_version": "VARCHAR(50)",
+            "strategy_decision_snapshot_id": "INTEGER",
+        },
+    }
+
+    with engine.begin() as connection:
+        for table_name, columns in additions.items():
+            if table_name not in tables:
+                continue
+            existing = {
+                column["name"]
+                for column in inspect(engine).get_columns(table_name)
+            }
+            for column_name, definition in columns.items():
+                if column_name not in existing:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table_name} ADD COLUMN "
+                            f"{column_name} {definition}"
+                        )
+                    )
+
+        params = {
+            "strategy_id": LEGACY_UNATTRIBUTED_STRATEGY_ID,
+            "strategy_version": LEGACY_UNATTRIBUTED_STRATEGY_VERSION,
+        }
+        for table_name in ("trade_plans", "risk_decisions", "paper_trades"):
+            if table_name in tables:
+                connection.execute(
+                    text(
+                        f"UPDATE {table_name} "
+                        "SET strategy_id = COALESCE(strategy_id, :strategy_id), "
+                        "strategy_version = COALESCE(strategy_version, :strategy_version)"
+                    ),
+                    params,
+                )
+        if "decision_snapshots" in tables:
+            connection.execute(
+                text(
+                    "UPDATE decision_snapshots "
+                    "SET strategy_id = COALESCE(strategy_id, :strategy_id), "
+                    "strategy_version = COALESCE(strategy_version, :strategy_version) "
+                    "WHERE strategy_id IS NULL OR strategy_version IS NULL"
+                ),
+                params,
+            )
+
+        for table_name, columns in additions.items():
+            if table_name not in tables:
+                continue
+            for column_name in columns:
+                index_name = f"ix_{table_name}_{column_name}"
+                connection.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS {index_name} "
+                        f"ON {table_name} ({column_name})"
+                    )
+                )

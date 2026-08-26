@@ -115,6 +115,21 @@ def test_database_engine_normalizes_provider_postgres_url_before_creation():
     assert create.call_args.args[0] == "postgresql+psycopg://user:pass@host/db"
 
 
+def test_explicit_sqlite_url_is_not_replaced_by_shared_fallback(tmp_path):
+    configured_path = tmp_path / "isolated-acceptance.sqlite"
+    settings = SimpleNamespace(allow_sqlite_fallback=True)
+
+    database_engine, using_fallback = runtime._initialize_engine(
+        database_url=f"sqlite:///{configured_path.as_posix()}",
+        settings=settings,
+    )
+    try:
+        assert using_fallback is True
+        assert database_engine.url.database == configured_path.as_posix()
+    finally:
+        database_engine.dispose()
+
+
 def test_model_package_does_not_import_windows_only_socket_api():
     from pathlib import Path
 

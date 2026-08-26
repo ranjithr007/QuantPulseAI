@@ -34,6 +34,7 @@ from app.api.v1 import scheduler_api
 from app.api.v1 import signals_api
 from app.api.v1 import smc_api
 from app.api.v1 import symbols_api
+from app.api.v1 import strategy_api
 from app.api.v1 import thesis_api
 from app.api.v1 import trade_plan_api
 from app.api.v2 import fusion_ai_api
@@ -282,6 +283,7 @@ app.include_router(risk_api.router)
 app.include_router(scheduler_api.router)
 app.include_router(signals_api.router)
 app.include_router(symbols_api.router)
+app.include_router(strategy_api.router)
 app.include_router(thesis_api.router)
 app.include_router(trade_plan_api.router)
 app.include_router(paper_trade_api.router)

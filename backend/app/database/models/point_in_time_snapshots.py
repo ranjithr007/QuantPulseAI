@@ -48,6 +48,8 @@ class DecisionSnapshot(Base):
     effective_timestamp = Column(DateTime, index=True, nullable=False)
     feature_version = Column(String(40), nullable=False)
     decision_version = Column(String(40), nullable=False)
+    strategy_id = Column(String(50), index=True, nullable=True)
+    strategy_version = Column(String(50), index=True, nullable=True)
     quality_state = Column(String(20), nullable=False, default="UNKNOWN")
     decision = Column(String(20), nullable=False)
     confidence = Column(Float, nullable=True)

@@ -37,4 +37,10 @@ class RiskDecision(Base):
 
     data_generation_id = Column(String(100), index=True, nullable=True)
 
+    strategy_id = Column(String(50), index=True, nullable=True)
+
+    strategy_version = Column(String(50), index=True, nullable=True)
+
+    strategy_decision_snapshot_id = Column(Integer, index=True, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)

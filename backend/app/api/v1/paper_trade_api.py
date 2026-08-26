@@ -12,6 +12,7 @@ from app.api.v1.derivatives_api import build_derivatives_payload
 from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.backtesting.walk_forward_validator import PHASE2_VALIDATION_CONTRACT_VERSION
 from app.database.models.paper_trade import PaperTrade
+from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.database.models.risk_decision import RiskDecision
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
@@ -50,6 +51,7 @@ from app.repositories.point_in_time_snapshot_repository import list_decision_sna
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
+from app.strategies.registry import strategy_definition
 from app.trading.market_participation_guard import market_participation_blockers
 from app.utils.freshness import freshness_status
 from app.utils.freshness import normalize_timestamp_to_utc
@@ -1344,6 +1346,21 @@ def build_paper_trade_candidates(
         db,
         [trade.symbol for trade in trades],
     )
+    strategy_snapshot_ids = {
+        trade.strategy_decision_snapshot_id
+        for trade in trades
+        if getattr(trade, "strategy_decision_snapshot_id", None) is not None
+    }
+    strategy_snapshots = {
+        row.id: row
+        for row in (
+            db.query(DecisionSnapshot)
+            .filter(DecisionSnapshot.id.in_(strategy_snapshot_ids))
+            .all()
+            if strategy_snapshot_ids
+            else []
+        )
+    }
     current_signal_validations = {
         (
             trade.symbol,
@@ -1385,6 +1402,9 @@ def build_paper_trade_candidates(
                     trade.symbol,
                     str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
                 )
+            ),
+            strategy_snapshot=strategy_snapshots.get(
+                getattr(trade, "strategy_decision_snapshot_id", None)
             ),
             account_risk=account_risk,
             paper_wallet=paper_wallet,
@@ -1923,6 +1943,13 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
         "timeframe_stack": paper_trade.timeframe_stack,
         "regime": paper_trade.regime,
         "data_generation_id": getattr(paper_trade, "data_generation_id", None),
+        "strategy_id": getattr(paper_trade, "strategy_id", None),
+        "strategy_version": getattr(paper_trade, "strategy_version", None),
+        "strategy_decision_snapshot_id": getattr(
+            paper_trade,
+            "strategy_decision_snapshot_id",
+            None,
+        ),
         "exit_policy": exit_levels["exit_policy"],
         "exit_levels_source": exit_levels["source"],
         "initial_stop_loss": exit_levels["initial_stop_loss"],
@@ -2130,6 +2157,7 @@ def _paper_trade_candidate(
     daily_loss_limit_enabled=False,
     coin_has_active_trade=False,
     stop_reentry_cooldown=None,
+    strategy_snapshot=None,
 ):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
     paper_sizing = build_inr_paper_sizing(
@@ -2154,6 +2182,7 @@ def _paper_trade_candidate(
         risk_payload,
         derivatives,
         fill_profile=fill_profile,
+        strategy_snapshot=strategy_snapshot,
     )
     if market_participation is not _MARKET_PARTICIPATION_UNSET:
         trade_blockers.extend(
@@ -2306,6 +2335,13 @@ def _trade_plan_payload(trade):
         "timeframe_stack": getattr(trade, "timeframe_stack", None),
         "regime": getattr(trade, "regime", None),
         "data_generation_id": getattr(trade, "data_generation_id", None),
+        "strategy_id": getattr(trade, "strategy_id", None),
+        "strategy_version": getattr(trade, "strategy_version", None),
+        "strategy_decision_snapshot_id": getattr(
+            trade,
+            "strategy_decision_snapshot_id",
+            None,
+        ),
         "exit_policy": getattr(trade, "exit_policy", None),
         "target1_fraction": getattr(trade, "target1_fraction", None),
         "max_hold_hours": getattr(trade, "max_hold_hours", None),
@@ -2342,6 +2378,13 @@ def _risk_decision_payload(risk, stale_after_seconds):
         "position_tier": sizing_profile["position_tier"],
         "full_size_confidence": risk_engine.FULL_SIZE_CONFIDENCE,
         "confidence": risk.confidence,
+        "strategy_id": getattr(risk, "strategy_id", None),
+        "strategy_version": getattr(risk, "strategy_version", None),
+        "strategy_decision_snapshot_id": getattr(
+            risk,
+            "strategy_decision_snapshot_id",
+            None,
+        ),
         "created_at": risk.created_at,
         "freshness": freshness_status(risk.created_at, stale_after_seconds),
     }
@@ -2353,11 +2396,71 @@ def _paper_trade_blocked_reasons(
     risk_payload,
     derivatives=None,
     fill_profile=None,
+    strategy_snapshot=None,
 ):
     reasons = []
 
     if risk is None:
         return ["No risk decision found for trade plan"]
+
+    plan_strategy_id = getattr(trade, "strategy_id", None)
+    plan_strategy_version = getattr(trade, "strategy_version", None)
+    plan_strategy_snapshot_id = getattr(
+        trade,
+        "strategy_decision_snapshot_id",
+        None,
+    )
+    definition = strategy_definition(plan_strategy_id)
+    if (
+        definition is None
+        or definition.get("status") != "ACTIVE"
+        or definition.get("execution_scope") != "PAPER_ONLY"
+        or definition.get("version") != plan_strategy_version
+    ):
+        reasons.append("Trade plan strategy is not enabled for paper execution")
+    if plan_strategy_snapshot_id is None:
+        reasons.append("Trade plan has no strategy decision snapshot")
+    elif strategy_snapshot is None:
+        reasons.append("Strategy decision snapshot was not found")
+    else:
+        snapshot_checks = (
+            (
+                getattr(strategy_snapshot, "id", None) == plan_strategy_snapshot_id,
+                "Strategy decision snapshot ID does not match trade plan",
+            ),
+            (
+                getattr(strategy_snapshot, "strategy_id", None)
+                == plan_strategy_id,
+                "Strategy decision snapshot strategy does not match trade plan",
+            ),
+            (
+                getattr(strategy_snapshot, "strategy_version", None)
+                == plan_strategy_version,
+                "Strategy decision snapshot version does not match trade plan",
+            ),
+            (
+                definition is not None
+                and getattr(strategy_snapshot, "decision_version", None)
+                == definition.get("decision_version"),
+                "Strategy decision snapshot contract is not executable",
+            ),
+            (
+                str(getattr(strategy_snapshot, "symbol", "")).upper()
+                == str(getattr(trade, "symbol", "")).upper(),
+                "Strategy decision snapshot coin does not match trade plan",
+            ),
+            (
+                str(getattr(strategy_snapshot, "timeframe", "")).lower()
+                == str(getattr(trade, "entry_timeframe", "")).lower(),
+                "Strategy decision snapshot timeframe does not match trade plan",
+            ),
+            (
+                str(getattr(strategy_snapshot, "decision", "")).upper()
+                == "ELIGIBLE",
+                "Strategy decision snapshot is not ELIGIBLE",
+            ),
+        )
+        reasons.extend(message for valid, message in snapshot_checks if not valid)
 
     if risk.decision != "APPROVE":
         rejection_reason = _risk_reason(risk)
@@ -2373,6 +2476,16 @@ def _paper_trade_blocked_reasons(
 
     if risk.signal != trade.side:
         reasons.append("Risk signal does not match trade side")
+
+    for field, label in (
+        ("strategy_id", "strategy"),
+        ("strategy_version", "strategy version"),
+        ("strategy_decision_snapshot_id", "strategy decision snapshot"),
+    ):
+        plan_value = getattr(trade, field, None)
+        risk_value = getattr(risk, field, None)
+        if risk_value != plan_value:
+            reasons.append(f"Risk {label} does not match trade plan")
 
     if not _same_price(risk.entry_price, trade.entry_price):
         reasons.append("Risk entry does not match trade entry")

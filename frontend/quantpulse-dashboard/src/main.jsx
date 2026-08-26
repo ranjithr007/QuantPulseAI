@@ -20,6 +20,7 @@ const importRotationPage = () => import("./pages/RotationPage");
 const importRsRankingPage = () => import("./pages/RsRankingPage");
 const importSignalsPage = () => import("./pages/SignalsPage");
 const importStageAnalysisPage = () => import("./pages/StageAnalysisPage");
+const importStrategiesPage = () => import("./pages/StrategiesPage");
 
 const AutoTradingPage = React.lazy(importAutoTradingPage);
 const BacktestPage = React.lazy(importBacktestPage);
@@ -34,6 +35,7 @@ const RotationPage = React.lazy(importRotationPage);
 const RsRankingPage = React.lazy(importRsRankingPage);
 const SignalsPage = React.lazy(importSignalsPage);
 const StageAnalysisPage = React.lazy(importStageAnalysisPage);
+const StrategiesPage = React.lazy(importStrategiesPage);
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
 // Entry scanning and active trading decisions use the higher-timeframe stack.
@@ -60,6 +62,7 @@ const PAGES = [
   "rotation",
   "rs-ranking",
   "stage-analysis",
+  "strategies",
 ];
 
 const ROUTE_PRELOADERS = [
@@ -76,6 +79,7 @@ const ROUTE_PRELOADERS = [
   importRotationPage,
   importRsRankingPage,
   importStageAnalysisPage,
+  importStrategiesPage,
 ];
 
 function normalizeView(view) {
@@ -117,6 +121,7 @@ function getPageFromPath(pathname) {
   if (path.startsWith("/rotation")) return "rotation";
   if (path.startsWith("/rs-ranking")) return "rs-ranking";
   if (path.startsWith("/stage-analysis")) return "stage-analysis";
+  if (path.startsWith("/strategies")) return "strategies";
   if (path.startsWith("/signals")) return "signals";
   if (path.startsWith("/market-trend")) return "market-trend";
   if (path.startsWith("/market-move")) return "market-move";
@@ -145,6 +150,7 @@ function buildPageUrl(page, view) {
   if (page === "rotation") return `/rotation?${params.toString()}`;
   if (page === "rs-ranking") return `/rs-ranking?${params.toString()}`;
   if (page === "stage-analysis") return `/stage-analysis?${params.toString()}`;
+  if (page === "strategies") return `/strategies?${params.toString()}`;
   if (page === "signals") return `/signals?${params.toString()}`;
   if (page === "market-trend") return `/market-trend?${params.toString()}`;
   if (page === "market-move") return `/market-move?${params.toString()}`;
@@ -557,6 +563,7 @@ function DashboardLayout({
                 />
               }
             />
+            <Route path="/strategies" element={<StrategiesPage />} />
             <Route
               path="/contracts/:symbol"
               element={
