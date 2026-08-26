@@ -58,6 +58,42 @@ def test_latest_for_symbols_handles_empty_input_without_querying():
     assert RiskRepository().latest_for_symbols(None, []) == {}
 
 
+def test_latest_for_trade_plans_keeps_strategy_authorizations_separate():
+    engine = create_engine("sqlite:///:memory:")
+    RiskDecision.__table__.create(bind=engine)
+    session = sessionmaker(bind=engine)()
+    now = datetime.utcnow()
+    try:
+        session.add_all(
+            [
+                RiskDecision(
+                    symbol="BNBUSDT",
+                    trade_plan_id=11,
+                    strategy_id="CORE_SIGNAL",
+                    decision="APPROVE",
+                    created_at=now - timedelta(seconds=1),
+                ),
+                RiskDecision(
+                    symbol="BNBUSDT",
+                    trade_plan_id=22,
+                    strategy_id="MARKET_MOVE",
+                    decision="REJECT",
+                    created_at=now,
+                ),
+            ]
+        )
+        session.commit()
+
+        latest = RiskRepository().latest_for_trade_plans(session, [11, 22])
+
+        assert latest[11].strategy_id == "CORE_SIGNAL"
+        assert latest[11].decision == "APPROVE"
+        assert latest[22].strategy_id == "MARKET_MOVE"
+        assert latest[22].decision == "REJECT"
+    finally:
+        session.close()
+
+
 def test_save_persists_point_in_time_decision_snapshot():
     fake_db = make_fake_db()
     fake_db.add = lambda *args, **kwargs: None
@@ -209,4 +245,3 @@ def make_fake_db():
         rollback=Mock(),
         close=Mock(),
     )
-

@@ -53,6 +53,10 @@ from app.utils.signal_validation import validate_trade_plan_direction
 from app.strategies.registry import CORE_FUSION_STRATEGY_ID
 from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
 from app.strategies.registry import CORE_FUSION_DECISION_VERSION
+from app.strategies.registry import CORE_SIGNAL_STRATEGY_ID
+from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
+from app.strategies.registry import STRATEGY_REGISTRY
+from app.strategies.registry import strategy_definition
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
@@ -81,6 +85,7 @@ WATCHLIST_PERMISSION_PRIORITY = {
     "SHORT_ALLOWED": 1,
     "WAIT": 3,
 }
+STRATEGY_TIMEFRAME_PRIORITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
 WATCHLIST_CACHE_TTL_SECONDS = 15.0
 WATCHLIST_LATENCY_BUDGET = LatencyBudget(p50_ms=250.0, p95_ms=750.0, p99_ms=1500.0)
 PHASE2_OPPORTUNITY_DECISION_VERSION = "phase2_opportunity_ledger_v1"
@@ -711,28 +716,43 @@ def persist_ready_watchlist_setups_for_stack(
         for payload in payloads:
             opportunity_snapshot = _persist_phase2_opportunity_snapshot(db, payload)
             participation_payload = participation_payloads.get(payload["symbol"])
-            strategy_snapshot = _persist_core_fusion_strategy_snapshot(
+            strategy_candidates = _persist_strategy_candidates(
                 db,
                 payload,
                 participation_payload,
             )
-            record = _persist_ready_watchlist_payload(
-                db,
-                trade_repo,
-                payload,
-                normalized_side,
-                participation_payload,
-                strategy_snapshot=strategy_snapshot,
-            )
-            record["opportunity_snapshot"] = opportunity_snapshot
-            record["strategy"] = {
-                "id": CORE_FUSION_STRATEGY_ID,
-                "version": CORE_FUSION_STRATEGY_VERSION,
-                "decision_snapshot_id": strategy_snapshot.get("id"),
-                "decision": strategy_snapshot.get("decision"),
-                "blocked_reasons": strategy_snapshot.get("blocked_reasons") or [],
-            }
-            records.append(record)
+            for candidate in strategy_candidates:
+                definition = candidate["definition"]
+                strategy_snapshot = candidate["snapshot"]
+                candidate_participation = (
+                    participation_payload
+                    if definition.get(
+                        "requires_market_participation_confirmation",
+                        False,
+                    )
+                    else _MARKET_PARTICIPATION_UNSET
+                )
+                record = _persist_ready_watchlist_payload(
+                    db,
+                    trade_repo,
+                    candidate["payload"],
+                    normalized_side,
+                    candidate_participation,
+                    strategy_snapshot=strategy_snapshot,
+                    strategy=definition,
+                )
+                record["opportunity_snapshot"] = opportunity_snapshot
+                record["strategy"] = {
+                    "id": definition["id"],
+                    "version": definition["version"],
+                    "type": definition.get("strategy_type"),
+                    "decision_snapshot_id": strategy_snapshot.get("id"),
+                    "decision": strategy_snapshot.get("decision"),
+                    "blocked_reasons": (
+                        strategy_snapshot.get("blocked_reasons") or []
+                    ),
+                }
+                records.append(record)
 
         saved = [
             item
@@ -753,6 +773,8 @@ def persist_ready_watchlist_setups_for_stack(
                 "side": normalized_side,
             },
             "total_count": len(records),
+            "symbol_count": len(payloads),
+            "strategy_count": len(STRATEGY_REGISTRY),
             "saved_count": len(saved),
             "skipped_count": len(skipped),
             "opportunity_snapshot_count": sum(
@@ -1500,7 +1522,11 @@ def _persist_ready_watchlist_payload(
     side_filter=None,
     market_participation=_MARKET_PARTICIPATION_UNSET,
     strategy_snapshot=None,
+    strategy=None,
 ):
+    strategy = strategy or strategy_definition(CORE_FUSION_STRATEGY_ID)
+    strategy_id = strategy["id"]
+    strategy_version = strategy["version"]
     symbol = payload["symbol"]
     trigger = payload["trigger"]
     side = trigger["side"]
@@ -1511,6 +1537,8 @@ def _persist_ready_watchlist_payload(
 
     base = {
         "symbol": symbol,
+        "strategy_id": strategy_id,
+        "strategy_version": strategy_version,
         "status": trigger["status"],
         "side": side,
         "reason": trigger["reason"],
@@ -1524,6 +1552,14 @@ def _persist_ready_watchlist_payload(
         }
 
     if trigger["status"] != "READY":
+        _invalidate_strategy_open_plan(
+            db,
+            trade_repo,
+            symbol,
+            strategy_id,
+            strategy_version,
+            reason="Strategy signal is no longer READY",
+        )
         return {
             **base,
             "action": "skipped_not_ready",
@@ -1537,6 +1573,14 @@ def _persist_ready_watchlist_payload(
     if market_participation is not _MARKET_PARTICIPATION_UNSET:
         participation = evaluate_market_participation(market_participation, side)
         if not participation["allowed"]:
+            _invalidate_strategy_open_plan(
+                db,
+                trade_repo,
+                symbol,
+                strategy_id,
+                strategy_version,
+                reason="Strategy confirmation no longer allows execution",
+            )
             return {
                 **base,
                 "action": "skipped_market_participation",
@@ -1545,6 +1589,14 @@ def _persist_ready_watchlist_payload(
             }
 
     if not trade_plan:
+        _invalidate_strategy_open_plan(
+            db,
+            trade_repo,
+            symbol,
+            strategy_id,
+            strategy_version,
+            reason="Strategy no longer produces a trade plan",
+        )
         return {
             **base,
             "action": "skipped_missing_trade_plan",
@@ -1552,23 +1604,33 @@ def _persist_ready_watchlist_payload(
         }
 
     if not validation or not validation["is_valid"]:
+        _invalidate_strategy_open_plan(
+            db,
+            trade_repo,
+            symbol,
+            strategy_id,
+            strategy_version,
+            reason="Strategy trade plan is no longer valid",
+        )
         return {
             **base,
             "action": "skipped_invalid_trade_plan",
             "validation_errors": validation["errors"] if validation else [],
         }
 
-    if hasattr(db, "query") and PaperTradeRepository().has_open_trade(db, symbol):
-        return {
-            **base,
-            "action": "skipped_active_symbol_trade",
-            "message": "An active paper trade already holds the symbol lock",
-        }
-
     replaced_trade_plan_id = None
     get_open_trade = getattr(trade_repo, "get_open_trade", None)
     if callable(get_open_trade):
-        existing_trade = get_open_trade(db, symbol, side)
+        try:
+            existing_trade = get_open_trade(
+                db,
+                symbol,
+                side,
+                strategy_id,
+                strategy_version,
+            )
+        except TypeError:
+            existing_trade = get_open_trade(db, symbol, side)
     else:
         existing_trade = None
         if trade_repo.has_open_trade(db, symbol, side):
@@ -1613,8 +1675,8 @@ def _persist_ready_watchlist_payload(
                 .get("regime", {})
                 .get("value")
             ),
-            "strategy_id": CORE_FUSION_STRATEGY_ID,
-            "strategy_version": CORE_FUSION_STRATEGY_VERSION,
+            "strategy_id": strategy_id,
+            "strategy_version": strategy_version,
             "strategy_decision_snapshot_id": (strategy_snapshot or {}).get("id"),
         },
     )
@@ -1630,11 +1692,11 @@ def _persist_ready_watchlist_payload(
         "target2": trade.target2,
         "risk_reward": trade.risk_reward,
         "confidence": trade.confidence,
-        "strategy_id": getattr(trade, "strategy_id", CORE_FUSION_STRATEGY_ID),
+        "strategy_id": getattr(trade, "strategy_id", strategy_id),
         "strategy_version": getattr(
             trade,
             "strategy_version",
-            CORE_FUSION_STRATEGY_VERSION,
+            strategy_version,
         ),
         "strategy_decision_snapshot_id": getattr(
             trade,
@@ -1642,6 +1704,321 @@ def _persist_ready_watchlist_payload(
             (strategy_snapshot or {}).get("id"),
         ),
     }
+
+
+def _invalidate_strategy_open_plan(
+    db,
+    trade_repo,
+    symbol,
+    strategy_id,
+    strategy_version,
+    *,
+    reason,
+):
+    """Close only the stale candidate owned by this strategy version."""
+    get_open_trade = getattr(trade_repo, "get_open_trade", None)
+    invalidate_trade = getattr(trade_repo, "invalidate_trade", None)
+    if not callable(get_open_trade) or not callable(invalidate_trade):
+        return None
+    try:
+        trade = get_open_trade(
+            db,
+            symbol,
+            None,
+            strategy_id,
+            strategy_version,
+        )
+    except TypeError:
+        return None
+    if trade is None:
+        return None
+    return invalidate_trade(db, trade, reason=reason)
+
+
+def _persist_strategy_candidates(db, payload, market_participation):
+    """Evaluate every active strategy independently for one coin scan."""
+    market_move_payload = _build_market_move_strategy_payload(
+        payload,
+        market_participation,
+    )
+    core_snapshot = _persist_core_signal_strategy_snapshot(db, payload)
+    market_move_snapshot = _persist_market_move_strategy_snapshot(
+        db,
+        market_move_payload,
+        market_participation,
+    )
+    fusion_snapshot = _persist_core_fusion_strategy_snapshot(
+        db,
+        payload,
+        market_participation,
+    )
+    return [
+        {
+            "definition": strategy_definition(CORE_SIGNAL_STRATEGY_ID),
+            "payload": payload,
+            "snapshot": core_snapshot,
+        },
+        {
+            "definition": strategy_definition(MARKET_MOVE_STRATEGY_ID),
+            "payload": market_move_payload,
+            "snapshot": market_move_snapshot,
+        },
+        {
+            "definition": strategy_definition(CORE_FUSION_STRATEGY_ID),
+            "payload": payload,
+            "snapshot": fusion_snapshot,
+        },
+    ]
+
+
+def _build_market_move_strategy_payload(core_payload, market_participation):
+    symbol = core_payload["symbol"]
+    raw = market_participation or {}
+    direction = str(raw.get("direction") or "NEUTRAL").upper()
+    side = (
+        "LONG"
+        if direction == "BULLISH"
+        else "SHORT"
+        if direction == "BEARISH"
+        else None
+    )
+    participation = evaluate_market_participation(raw, side)
+    raw_timeframes = (raw.get("spot") or {}).get("timeframes") or []
+    normalized_timeframes = [
+        {
+            **item,
+            "status": "OK" if item.get("status") == "READY" else item.get("status"),
+            "candle_time": item.get("source_timestamp"),
+            "confidence": abs(float(item.get("score") or 0)),
+            "bias": item.get("direction"),
+        }
+        for item in raw_timeframes
+    ]
+    expected_sign = 1 if side == "LONG" else -1 if side == "SHORT" else 0
+    aligned = [
+        item
+        for item in normalized_timeframes
+        if item.get("status") == "OK"
+        and float(item.get("score") or 0) * expected_sign > 0
+    ]
+    selection_pool = aligned or [
+        item for item in normalized_timeframes if item.get("status") == "OK"
+    ]
+    selected = max(
+        selection_pool,
+        key=lambda item: (
+            abs(float(item.get("score") or 0)),
+            STRATEGY_TIMEFRAME_PRIORITY.get(
+                str(item.get("timeframe") or "").lower(),
+                0,
+            ),
+        ),
+        default=None,
+    )
+    if selected is None:
+        core_selected = _selected_timeframe_record(core_payload)
+        if core_selected:
+            selected = {
+                "timeframe": core_selected.get("timeframe"),
+                "status": "NO_MARKET_MOVE_TIMEFRAME",
+                "candle_time": core_selected.get("candle_time"),
+                "source_timestamp": core_selected.get("candle_time"),
+                "score": 0.0,
+                "confidence": 0.0,
+                "bias": "NEUTRAL",
+                "spot_price": None,
+            }
+            normalized_timeframes = [selected]
+
+    entry_timeframe = (selected or {}).get("timeframe")
+    current_price = (selected or {}).get("spot_price")
+    confidence = float(raw.get("confidence") or 0)
+    trade_plan = None
+    validation = {"is_valid": False, "errors": []}
+    if participation.get("allowed") and current_price and float(current_price) > 0:
+        trade_plan = build_trade_plan(
+            side,
+            float(current_price),
+            confidence=confidence,
+            symbol=symbol,
+            timeframe=entry_timeframe,
+        )
+        validation = validate_trade_plan_direction(
+            side,
+            trade_plan.get("entry"),
+            trade_plan.get("target1"),
+        )
+    else:
+        if not participation.get("allowed"):
+            validation["errors"].append(participation.get("reason"))
+        if not current_price:
+            validation["errors"].append(
+                "Market Move selected timeframe price is unavailable"
+            )
+    validation["errors"] = [
+        item for item in validation["errors"] if item
+    ]
+    ready = bool(
+        participation.get("allowed")
+        and trade_plan
+        and validation.get("is_valid")
+    )
+    return {
+        "symbol": symbol,
+        "source": "market_move_strategy",
+        "mode": core_payload.get("mode") or "intraday",
+        "timeframes_used": [
+            item.get("timeframe") for item in normalized_timeframes
+        ],
+        "timeframes": normalized_timeframes,
+        "confirmation": {
+            "confidence": confidence,
+            "overall_bias": direction,
+        },
+        "trigger": {
+            "status": "READY" if ready else "WAIT",
+            "side": side,
+            "entry_timeframe": entry_timeframe,
+            "reason": participation.get("reason"),
+            "conditions": [],
+        },
+        "trade_plan": trade_plan,
+        "trade_plan_validation": validation,
+        "market_participation": participation,
+        "data_generation_id": raw.get("data_generation_id"),
+    }
+
+
+def _persist_core_signal_strategy_snapshot(db, payload):
+    trigger = payload.get("trigger") or {}
+    validation = payload.get("trade_plan_validation") or {}
+    blocked_reasons = []
+    if trigger.get("status") != "READY":
+        blocked_reasons.append(trigger.get("reason") or "Core signal is not READY")
+    if not payload.get("trade_plan"):
+        blocked_reasons.append("Core signal did not produce a trade plan")
+    elif not validation.get("is_valid"):
+        blocked_reasons.extend(validation.get("errors") or ["Trade plan is invalid"])
+    return _persist_governed_strategy_snapshot(
+        db,
+        payload,
+        strategy_definition(CORE_SIGNAL_STRATEGY_ID),
+        blocked_reasons,
+    )
+
+
+def _persist_governed_strategy_snapshot(
+    db,
+    payload,
+    definition,
+    blocked_reasons,
+    *,
+    market_participation=None,
+    effective_timestamp=None,
+    data_generation_id=None,
+):
+    timeframes = payload.get("timeframes") or []
+    selected = _selected_timeframe_record(payload)
+    source_timestamp = (
+        selected.get("candle_time") or selected.get("source_timestamp")
+    )
+    timeframe = selected.get("timeframe")
+    trigger = payload.get("trigger") or {}
+    side = trigger.get("side")
+    if not source_timestamp or not timeframe:
+        return {
+            "persisted": False,
+            "id": None,
+            "decision": "BLOCKED",
+            "blocked_reasons": list(blocked_reasons)
+            or ["Selected timeframe evidence is unavailable"],
+            "decision_version": definition["decision_version"],
+        }
+
+    decision = "ELIGIBLE" if not blocked_reasons else "BLOCKED"
+    quality_state = (
+        "OK"
+        if timeframes
+        and all(item.get("status") in {"OK", "READY"} for item in timeframes)
+        else "DEGRADED"
+    )
+    confidence = _timeframe_confidence(
+        selected,
+        payload.get("confirmation"),
+    )
+    snapshot = build_decision_snapshot(
+        payload["symbol"],
+        timeframe,
+        decision=decision,
+        source_timestamp=source_timestamp,
+        effective_timestamp=effective_timestamp or source_timestamp,
+        quality_state=quality_state,
+        confidence=confidence,
+        regime=_timeframe_regime(
+            selected,
+            payload.get("confirmation") or {},
+        ),
+        signal=trigger,
+        trade_plan=payload.get("trade_plan"),
+        context={
+            "audit_scope": "PAPER_STRATEGY_CANDIDATE",
+            "execution_scope": "PAPER_ONLY",
+            "strategy_id": definition["id"],
+            "strategy_version": definition["version"],
+            "strategy_type": definition.get("strategy_type"),
+            "side": side,
+            "selected_timeframe": timeframe,
+            "selected_score": selected.get("score"),
+            "market_participation": market_participation or {},
+            "blocked_reasons": list(blocked_reasons),
+            "one_active_trade_per_symbol": True,
+        },
+    )
+    snapshot["decision_version"] = definition["decision_version"]
+    snapshot["strategy_id"] = definition["id"]
+    snapshot["strategy_version"] = definition["version"]
+    snapshot["data_generation_id"] = (
+        data_generation_id or payload.get("data_generation_id")
+    )
+    record = _persist_decision_snapshot_safe(db, snapshot)
+    return {
+        "persisted": record is not None,
+        "id": getattr(record, "id", None),
+        "decision": decision,
+        "blocked_reasons": list(blocked_reasons),
+        "decision_version": definition["decision_version"],
+    }
+
+
+def _persist_market_move_strategy_snapshot(
+    db,
+    payload,
+    market_participation,
+):
+    trigger = payload.get("trigger") or {}
+    validation = payload.get("trade_plan_validation") or {}
+    blocked_reasons = []
+    if trigger.get("status") != "READY":
+        blocked_reasons.append(
+            trigger.get("reason") or "Market Move signal is not READY"
+        )
+    if not payload.get("trade_plan"):
+        blocked_reasons.append("Market Move did not produce a trade plan")
+    elif not validation.get("is_valid"):
+        blocked_reasons.extend(validation.get("errors") or ["Trade plan is invalid"])
+    return _persist_governed_strategy_snapshot(
+        db,
+        payload,
+        strategy_definition(MARKET_MOVE_STRATEGY_ID),
+        blocked_reasons,
+        market_participation=(payload.get("market_participation") or {}),
+        effective_timestamp=(market_participation or {}).get(
+            "effective_timestamp"
+        ),
+        data_generation_id=(market_participation or {}).get(
+            "data_generation_id"
+        ),
+    )
 
 
 def _persist_core_fusion_strategy_snapshot(db, payload, market_participation):

@@ -51,6 +51,9 @@ from app.repositories.point_in_time_snapshot_repository import list_decision_sna
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
+from app.repositories.strategy_shadow_trade_repository import (
+    StrategyShadowTradeRepository,
+)
 from app.strategies.registry import strategy_definition
 from app.trading.market_participation_guard import market_participation_blockers
 from app.utils.freshness import freshness_status
@@ -806,6 +809,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             auto = DEFAULT_AUTOMATION_SETTINGS
         executed = []
         skipped = []
+        shadow_execution = _execute_strategy_shadow_candidates(db, records, auto)
 
         eligible_by_symbol = defaultdict(list)
         for candidate in records:
@@ -887,6 +891,8 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                     "side": candidate["side"],
                     "action": "skipped_weaker_symbol_candidate",
                     "selected_trade_plan_id": winner["trade_plan"]["id"],
+                    "selected_strategy_id": winner["trade_plan"].get("strategy_id"),
+                    "candidate_strategy_id": candidate["trade_plan"].get("strategy_id"),
                 }
                 for candidate in candidates
                 if candidate is not winner
@@ -1039,6 +1045,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             "skipped_count": len(skipped),
             "executed": executed,
             "skipped": skipped,
+            "shadow_execution": shadow_execution,
         }
 
     except SQLAlchemyError as exc:
@@ -1292,15 +1299,18 @@ def _paper_trade_candidate_rank(candidate):
     """Deterministically rank eligible candidates for one symbol.
 
     Validated risk confidence is authoritative, followed by plan confidence,
-    reward/risk, higher-timeframe durability, recency, and plan id.
+    strategy priority, reward/risk, higher-timeframe durability, recency, and
+    plan id.
     """
     risk = candidate.get("risk_decision") or {}
     plan = candidate.get("trade_plan") or {}
+    definition = strategy_definition(plan.get("strategy_id")) or {}
     created_at = plan.get("created_at")
     created_rank = created_at.timestamp() if hasattr(created_at, "timestamp") else 0.0
     return (
         float(risk.get("confidence") or 0),
         float(plan.get("confidence") or 0),
+        int(definition.get("execution_priority") or 0),
         float(plan.get("risk_reward") or 0),
         QP_TI_001_TIMEFRAME_PRIORITY.get(str(plan.get("entry_timeframe") or "").lower(), 0),
         created_rank,
@@ -1333,6 +1343,178 @@ def build_paper_trade_candidates(
     latest_risks = risk_repo.latest_for_symbols(
         db,
         [trade.symbol for trade in trades],
+    )
+    return _finish_paper_trade_candidates(
+        db,
+        trades,
+        risk_repo,
+        latest_risks,
+        normalized_symbol,
+        stale_after_seconds,
+    )
+
+
+def _execute_strategy_shadow_candidates(db, records, auto):
+    """Fill every trade-valid strategy in an isolated forward-test ledger."""
+    executed = []
+    skipped = []
+    if not hasattr(db, "get_bind") or not hasattr(db, "query"):
+        return {
+            "source": "strategy_shadow_execution_v1",
+            "status": "UNAVAILABLE",
+            "candidate_count": len(records),
+            "executed_count": 0,
+            "skipped_count": len(records),
+            "executed": [],
+            "skipped": [],
+        }
+    repo = StrategyShadowTradeRepository()
+    shadow_history = repo.all_trades(db)
+    live_marks = {}
+
+    for candidate in records:
+        plan = candidate.get("trade_plan") or {}
+        strategy_id = plan.get("strategy_id")
+        strategy_version = plan.get("strategy_version")
+        trade_blockers = list(
+            (candidate.get("blocker_scopes") or {}).get("trade") or []
+        )
+        automation_blockers = _automation_execution_blockers(auto, candidate)
+        if trade_blockers or automation_blockers:
+            skipped.append(
+                {
+                    "symbol": candidate.get("symbol"),
+                    "strategy_id": strategy_id,
+                    "action": "skipped_shadow_not_eligible",
+                    "blocked_reasons": trade_blockers + automation_blockers,
+                }
+            )
+            continue
+        if not strategy_definition(strategy_id):
+            skipped.append(
+                {
+                    "symbol": candidate.get("symbol"),
+                    "strategy_id": strategy_id,
+                    "action": "skipped_shadow_strategy_unregistered",
+                }
+            )
+            continue
+        if repo.has_open_trade(
+            db,
+            strategy_id,
+            strategy_version,
+            candidate["symbol"],
+        ):
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_existing_open_shadow_trade",
+                }
+            )
+            continue
+        if repo.has_trade_for_plan(db, plan.get("id")):
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_existing_shadow_trade_for_plan",
+                }
+            )
+            continue
+        cooldown = same_side_stop_reentry_cooldown(
+            [
+                item
+                for item in shadow_history
+                if item.strategy_id == strategy_id
+                and item.strategy_version == strategy_version
+            ],
+            candidate["symbol"],
+            candidate["side"],
+        )
+        if cooldown.get("active"):
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_shadow_same_side_stop_cooldown",
+                    "blocked_reasons": [PAPER_STOP_REENTRY_COOLDOWN_REASON],
+                }
+            )
+            continue
+
+        symbol = str(candidate["symbol"]).upper()
+        if symbol not in live_marks:
+            live_marks[symbol] = _current_paper_entry_mark(symbol)
+        repriced, error = _rebase_paper_trade_candidate(
+            candidate,
+            live_marks[symbol],
+        )
+        if error:
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "strategy_id": strategy_id,
+                    "action": "skipped_shadow_execution_price_unavailable",
+                    "blocked_reasons": [error],
+                }
+            )
+            continue
+        try:
+            trade = repo.save_candidate(db, repriced)
+        except IntegrityError:
+            db.rollback()
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "strategy_id": strategy_id,
+                    "action": "skipped_concurrent_open_shadow_trade",
+                }
+            )
+            continue
+        executed.append(_strategy_shadow_trade_payload(trade))
+        shadow_history.append(trade)
+
+    return {
+        "source": "strategy_shadow_execution_v1",
+        "candidate_count": len(records),
+        "executed_count": len(executed),
+        "skipped_count": len(skipped),
+        "executed": executed,
+        "skipped": skipped,
+    }
+
+
+def _strategy_shadow_trade_payload(trade):
+    return {
+        "id": trade.id,
+        "trade_plan_id": trade.trade_plan_id,
+        "symbol": trade.symbol,
+        "side": trade.side,
+        "strategy_id": trade.strategy_id,
+        "strategy_version": trade.strategy_version,
+        "strategy_decision_snapshot_id": trade.strategy_decision_snapshot_id,
+        "entry_timeframe": trade.entry_timeframe,
+        "entry_price": trade.entry_price,
+        "stop_loss": trade.stop_loss,
+        "target1": trade.target1,
+        "target2": trade.target2,
+        "status": trade.status,
+        "opened_at": trade.opened_at,
+    }
+
+
+def _finish_paper_trade_candidates(
+    db,
+    trades,
+    risk_repo,
+    latest_risks,
+    normalized_symbol,
+    stale_after_seconds,
+):
+    latest_risks_by_plan = risk_repo.latest_for_trade_plans(
+        db,
+        [getattr(trade, "id", None) for trade in trades],
     )
     derivative_payloads = {
         trade_symbol: _safe_derivatives_payload(
@@ -1393,15 +1575,27 @@ def build_paper_trade_candidates(
     records = [
         _paper_trade_candidate(
             trade,
-            latest_risks.get(trade.symbol),
+            _strategy_plan_risk(
+                trade,
+                latest_risks_by_plan,
+                latest_risks,
+            ),
             stale_after_seconds,
             derivative_payloads.get(trade.symbol),
-            market_participation=market_participation_payloads.get(trade.symbol),
-            current_signal_validation=current_signal_validations.get(
-                (
-                    trade.symbol,
-                    str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
-                )
+            market_participation=_strategy_market_participation_input(
+                trade,
+                market_participation_payloads.get(trade.symbol),
+            ),
+            current_signal_validation=_strategy_core_signal_input(
+                trade,
+                current_signal_validations.get(
+                    (
+                        trade.symbol,
+                        str(
+                            getattr(trade, "entry_timeframe", None) or "1h"
+                        ).lower(),
+                    )
+                ),
             ),
             strategy_snapshot=strategy_snapshots.get(
                 getattr(trade, "strategy_decision_snapshot_id", None)
@@ -1425,6 +1619,29 @@ def build_paper_trade_candidates(
     ]
 
     return normalized_symbol, records
+
+
+def _strategy_market_participation_input(trade, payload):
+    definition = strategy_definition(getattr(trade, "strategy_id", None)) or {}
+    if not definition.get("requires_market_participation_confirmation", False):
+        return _MARKET_PARTICIPATION_UNSET
+    return payload
+
+
+def _strategy_plan_risk(trade, risks_by_plan, legacy_risks_by_symbol):
+    exact = risks_by_plan.get(getattr(trade, "id", None))
+    if exact is not None:
+        return exact
+    if strategy_definition(getattr(trade, "strategy_id", None)) is not None:
+        return None
+    return legacy_risks_by_symbol.get(getattr(trade, "symbol", None))
+
+
+def _strategy_core_signal_input(trade, payload):
+    definition = strategy_definition(getattr(trade, "strategy_id", None)) or {}
+    if not definition.get("requires_core_signal", False):
+        return _CURRENT_SIGNAL_VALIDATION_UNSET
+    return payload
 
 
 def _official_timeframe_records(records):
@@ -2378,6 +2595,7 @@ def _risk_decision_payload(risk, stale_after_seconds):
         "position_tier": sizing_profile["position_tier"],
         "full_size_confidence": risk_engine.FULL_SIZE_CONFIDENCE,
         "confidence": risk.confidence,
+        "trade_plan_id": getattr(risk, "trade_plan_id", None),
         "strategy_id": getattr(risk, "strategy_id", None),
         "strategy_version": getattr(risk, "strategy_version", None),
         "strategy_decision_snapshot_id": getattr(
@@ -2476,6 +2694,9 @@ def _paper_trade_blocked_reasons(
 
     if risk.signal != trade.side:
         reasons.append("Risk signal does not match trade side")
+
+    if getattr(risk, "trade_plan_id", None) != getattr(trade, "id", None):
+        reasons.append("Risk decision does not match the exact trade plan")
 
     for field, label in (
         ("strategy_id", "strategy"),

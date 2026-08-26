@@ -46,6 +46,9 @@ def test_legacy_sqlite_strategy_tables_are_upgraded_backfilled_and_indexed():
         if table_name != "decision_snapshots":
             assert "strategy_decision_snapshot_id" in columns
             assert f"ix_{table_name}_strategy_decision_snapshot_id" in indexes
+        if table_name == "risk_decisions":
+            assert "trade_plan_id" in columns
+            assert "ix_risk_decisions_trade_plan_id" in indexes
 
         with engine.connect() as connection:
             row = connection.execute(

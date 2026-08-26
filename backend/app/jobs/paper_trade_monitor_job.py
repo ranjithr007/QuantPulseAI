@@ -8,6 +8,9 @@ from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
 from app.repositories.candle_repository import get_final_candles_after
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.strategy_shadow_trade_repository import (
+    StrategyShadowTradeRepository,
+)
 from app.repositories._db_utils import safe_rollback
 from app.utils.freshness import normalize_timestamp_to_utc
 from app.utils.network_resilience import is_transient_network_error
@@ -228,7 +231,12 @@ def run_paper_trade_monitor_job():
                 )
                 continue
 
-        if summary["errors"] or summary["overdue_unresolved"]:
+        summary["shadow"] = _run_strategy_shadow_monitor(db)
+        if (
+            summary["errors"]
+            or summary["overdue_unresolved"]
+            or summary["shadow"]["errors"]
+        ):
             summary["status"] = "FAILED"
         print("Paper Trade Monitor Completed", summary)
         return summary
@@ -243,6 +251,128 @@ def run_paper_trade_monitor_job():
 
     finally:
         db.close()
+
+
+def _run_strategy_shadow_monitor(db):
+    summary = {
+        "source": "strategy_shadow_monitor_v1",
+        "processed": 0,
+        "closed": 0,
+        "partial_closes": 0,
+        "stop_moves": 0,
+        "still_open": 0,
+        "errors": [],
+        "records": [],
+    }
+    if not hasattr(db, "get_bind") or not hasattr(db, "query"):
+        return summary
+    repo = StrategyShadowTradeRepository()
+    for trade in repo.get_open_trades(db):
+        summary["processed"] += 1
+        try:
+            candles, timeframe, _used_fallback, source_available = _exit_candles(
+                db,
+                trade,
+            )
+            if not candles and _maximum_hold_due(trade):
+                catchup, error = _deadline_catchup_candle(db, trade, timeframe)
+                if catchup is not None:
+                    candles = [catchup]
+                    source_available = True
+                elif error:
+                    summary["errors"].append(f"{trade.strategy_id} {trade.symbol}: {error}")
+            if not candles:
+                live_mark = _current_mark_candle(trade)
+                if live_mark is not None:
+                    candles = [live_mark]
+                    source_available = True
+            if not source_available:
+                summary["errors"].append(
+                    f"{trade.strategy_id} {trade.symbol}: EXIT_EVIDENCE_UNAVAILABLE"
+                )
+                continue
+
+            closed = False
+            last_checkpoint = None
+            for candle in candles:
+                decision = evaluate_paper_trade_exit(trade, candle)
+                last_checkpoint = _candle_checkpoint(candle)
+                action = decision["action"]
+                if action == "HOLD":
+                    continue
+                if action == "MOVE_STOP":
+                    repo.move_stop_loss(
+                        db,
+                        trade,
+                        decision["new_stop_loss"],
+                        evaluated_at=last_checkpoint,
+                    )
+                    summary["stop_moves"] += 1
+                    continue
+                if action == "PARTIAL_CLOSE":
+                    trade = repo.apply_target1(
+                        db,
+                        trade,
+                        decision["exit_price"],
+                        candle_time=decision.get("candle_time"),
+                        evaluated_at=last_checkpoint,
+                    )
+                    summary["partial_closes"] += 1
+                    # A live mark may already be beyond both targets. Recheck
+                    # immediately after persisting T1 so the remaining leg exits.
+                    if getattr(candle, "live_mark", False):
+                        decision = evaluate_paper_trade_exit(trade, candle)
+                        if decision["action"] == "CLOSE":
+                            trade = repo.close_trade(
+                                db,
+                                trade,
+                                decision["exit_price"],
+                                decision["result"],
+                                fill_profile=decision.get("fill_profile"),
+                            )
+                            closed = True
+                        elif decision["action"] == "MOVE_STOP":
+                            trade = repo.move_stop_loss(
+                                db,
+                                trade,
+                                decision["new_stop_loss"],
+                                evaluated_at=last_checkpoint,
+                            )
+                            summary["stop_moves"] += 1
+                    if not closed:
+                        continue
+                elif action == "CLOSE":
+                    trade = repo.close_trade(
+                        db,
+                        trade,
+                        decision["exit_price"],
+                        decision["result"],
+                        fill_profile=decision.get("fill_profile"),
+                    )
+                    closed = True
+
+                if closed:
+                    summary["closed"] += 1
+                    summary["records"].append(
+                        {
+                            "shadow_trade_id": trade.id,
+                            "strategy_id": trade.strategy_id,
+                            "symbol": trade.symbol,
+                            "result": trade.result,
+                            "pnl_percent": trade.pnl_percent,
+                        }
+                    )
+                    break
+            if not closed:
+                if last_checkpoint is not None:
+                    repo.mark_exit_evaluated(db, trade, last_checkpoint)
+                summary["still_open"] += 1
+        except Exception as exc:
+            safe_rollback(db)
+            summary["errors"].append(
+                f"{trade.strategy_id} {trade.symbol}: {summarize_network_error(exc)}"
+            )
+    return summary
 
 
 def _exit_candles(db, trade):

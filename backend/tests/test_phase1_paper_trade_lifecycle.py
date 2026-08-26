@@ -218,6 +218,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             db.add(
                 RiskDecision(
                     symbol="BTCUSDT",
+                    trade_plan_id=plan.id,
                     signal="LONG",
                     decision="APPROVE",
                     entry_price=100.0,
@@ -412,6 +413,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             db.add(
                 RiskDecision(
                     symbol="BTCUSDT",
+                    trade_plan_id=new_plan.id,
                     signal="LONG",
                     decision="APPROVE",
                     entry_price=100.0,
@@ -512,6 +514,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             db.add(
                 RiskDecision(
                     symbol="BTCUSDT",
+                    trade_plan_id=plan.id,
                     signal="LONG",
                     decision="APPROVE",
                     entry_price=governed["entry"],

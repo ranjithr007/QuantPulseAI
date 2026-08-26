@@ -132,6 +132,7 @@ def ensure_sqlite_strategy_attribution_schema(engine):
             "strategy_decision_snapshot_id": "INTEGER",
         },
         "risk_decisions": {
+            "trade_plan_id": "INTEGER",
             "strategy_id": "VARCHAR(50)",
             "strategy_version": "VARCHAR(50)",
             "strategy_decision_snapshot_id": "INTEGER",

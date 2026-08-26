@@ -6,12 +6,12 @@ from fastapi import APIRouter, Query
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.database.models.risk_decision import RiskDecision
+from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
 from app.strategies.registry import STRATEGY_REGISTRY
-from app.strategies.registry import CORE_FUSION_DECISION_VERSION
 from app.strategies.registry import strategy_definition
 
 
@@ -52,6 +52,7 @@ def get_strategy_summary(
             "since_days": since_days,
             "one_active_trade_per_symbol": True,
             "strategy_count": len(records),
+            "comparison": _shadow_comparison(records),
             "records": records,
         }
     finally:
@@ -65,7 +66,10 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
         db.query(DecisionSnapshot)
         .filter(DecisionSnapshot.strategy_id == strategy_id)
         .filter(DecisionSnapshot.strategy_version == strategy_version)
-        .filter(DecisionSnapshot.decision_version == CORE_FUSION_DECISION_VERSION)
+        .filter(
+            DecisionSnapshot.decision_version
+            == definition["decision_version"]
+        )
         .filter(DecisionSnapshot.created_at >= cutoff)
         .order_by(DecisionSnapshot.created_at.desc(), DecisionSnapshot.id.desc())
         .limit(2000)
@@ -93,7 +97,23 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
         .order_by(PaperTrade.created_at.asc(), PaperTrade.id.asc())
         .all()
     )
-    candidates = _latest_candidates(snapshots, plans, trades, candidate_limit)
+    shadow_trades = (
+        db.query(StrategyShadowTrade)
+        .filter(StrategyShadowTrade.strategy_id == strategy_id)
+        .filter(StrategyShadowTrade.strategy_version == strategy_version)
+        .filter(StrategyShadowTrade.created_at >= cutoff)
+        .order_by(StrategyShadowTrade.created_at.asc(), StrategyShadowTrade.id.asc())
+        .all()
+    )
+    candidates = _latest_candidates(
+        snapshots,
+        plans,
+        trades,
+        shadow_trades,
+        candidate_limit,
+    )
+    official_performance = _strategy_performance(trades)
+    shadow_performance = _strategy_performance(shadow_trades)
     return {
         **definition,
         "coverage": {
@@ -101,6 +121,7 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
             "trade_plans": len(plans),
             "risk_decisions": len(risks),
             "paper_trades": len(trades),
+            "shadow_trades": len(shadow_trades),
             "eligible_signals": sum(
                 1 for item in snapshots if str(item.decision).upper() == "ELIGIBLE"
             ),
@@ -108,12 +129,18 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
                 1 for item in snapshots if str(item.decision).upper() == "BLOCKED"
             ),
         },
-        "performance": _strategy_performance(trades),
+        # The headline comparison uses isolated shadow results because every
+        # strategy receives the same opportunity to trade. Official results
+        # contain only the one winner selected for the shared portfolio.
+        "performance": shadow_performance,
+        "shadow_performance": shadow_performance,
+        "official_performance": official_performance,
+        "forward_test_readiness": _forward_test_readiness(shadow_performance),
         "candidates": candidates,
     }
 
 
-def _latest_candidates(snapshots, plans, trades, limit):
+def _latest_candidates(snapshots, plans, trades, shadow_trades, limit):
     latest_by_symbol = {}
     for row in snapshots:
         if row.symbol not in latest_by_symbol:
@@ -129,6 +156,16 @@ def _latest_candidates(snapshots, plans, trades, limit):
         for trade in trades
         if trade.strategy_decision_snapshot_id is not None
     }
+    shadow_by_snapshot = {
+        trade.strategy_decision_snapshot_id: trade
+        for trade in shadow_trades
+        if trade.strategy_decision_snapshot_id is not None
+    }
+    open_shadow_by_symbol = {
+        trade.symbol: trade
+        for trade in shadow_trades
+        if trade.status == "OPEN"
+    }
     records = []
     for row in list(latest_by_symbol.values())[:limit]:
         payload = _json(row.snapshot_json)
@@ -136,6 +173,9 @@ def _latest_candidates(snapshots, plans, trades, limit):
         participation = context.get("market_participation") or {}
         plan = plan_by_snapshot.get(row.id)
         trade = trade_by_snapshot.get(row.id)
+        shadow_trade = shadow_by_snapshot.get(row.id) or open_shadow_by_symbol.get(
+            row.symbol
+        )
         lifecycle = "SIGNAL_BLOCKED"
         if trade is not None:
             lifecycle = "POSITION_OPEN" if trade.status == "OPEN" else "POSITION_CLOSED"
@@ -143,6 +183,13 @@ def _latest_candidates(snapshots, plans, trades, limit):
             lifecycle = "PLAN_OPEN" if plan.status == "OPEN" else "PLAN_CLOSED"
         elif str(row.decision).upper() == "ELIGIBLE":
             lifecycle = "ELIGIBLE_NOT_SELECTED"
+        shadow_lifecycle = "SHADOW_NOT_OPENED"
+        if shadow_trade is not None:
+            shadow_lifecycle = (
+                "SHADOW_OPEN"
+                if shadow_trade.status == "OPEN"
+                else "SHADOW_CLOSED"
+            )
         records.append(
             {
                 "decision_snapshot_id": row.id,
@@ -162,6 +209,8 @@ def _latest_candidates(snapshots, plans, trades, limit):
                 },
                 "trade_plan_id": getattr(plan, "id", None),
                 "paper_trade_id": getattr(trade, "id", None),
+                "shadow_trade_id": getattr(shadow_trade, "id", None),
+                "shadow_lifecycle": shadow_lifecycle,
                 "effective_timestamp": row.effective_timestamp,
                 "created_at": row.created_at,
             }
@@ -210,6 +259,64 @@ def _strategy_performance(trades):
         "fees_percent": fees_percent,
         "funding_cost_percent": funding_percent,
         "max_drawdown_percent": _max_drawdown_percent(closed),
+        "profit_factor": _profit_factor(closed),
+        "expectancy_inr": round(net_pnl_inr / len(closed), 2) if closed else 0.0,
+    }
+
+
+def _profit_factor(closed):
+    gains = sum(max(float(item.realized_pnl_inr or 0), 0) for item in closed)
+    losses = abs(sum(min(float(item.realized_pnl_inr or 0), 0) for item in closed))
+    if losses == 0:
+        return None if gains == 0 else 999.0
+    return round(gains / losses, 4)
+
+
+def _forward_test_readiness(performance, minimum_closed_trades=30):
+    closed = int(performance.get("closed_trades") or 0)
+    return {
+        "status": "COMPARABLE" if closed >= minimum_closed_trades else "COLLECTING",
+        "closed_trades": closed,
+        "minimum_closed_trades": minimum_closed_trades,
+        "remaining_trades": max(0, minimum_closed_trades - closed),
+        "authorizes_live_execution": False,
+    }
+
+
+def _shadow_comparison(records):
+    ranked = sorted(
+        records,
+        key=lambda item: (
+            float((item.get("shadow_performance") or {}).get("profit_factor") or 0),
+            float((item.get("shadow_performance") or {}).get("expectancy_inr") or 0),
+            float((item.get("shadow_performance") or {}).get("net_pnl_inr") or 0),
+            float((item.get("shadow_performance") or {}).get("win_rate") or 0),
+            -float(
+                (item.get("shadow_performance") or {}).get(
+                    "max_drawdown_percent"
+                )
+                or 0
+            ),
+            int((item.get("shadow_performance") or {}).get("closed_trades") or 0),
+        ),
+        reverse=True,
+    )
+    comparable = [
+        item
+        for item in ranked
+        if (item.get("forward_test_readiness") or {}).get("status") == "COMPARABLE"
+    ]
+    return {
+        "status": "COMPARABLE" if len(comparable) == len(records) else "COLLECTING",
+        "minimum_closed_trades_per_strategy": 30,
+        "research_leader_strategy_id": (
+            comparable[0]["id"] if len(comparable) == len(records) and comparable else None
+        ),
+        "authorizes_live_execution": False,
+        "ranking_method": (
+            "profit_factor_then_expectancy_then_net_pnl_then_win_rate_then_drawdown"
+        ),
+        "ranking": [item["id"] for item in ranked],
     }
 
 

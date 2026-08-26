@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).parents[2]
 def test_postgresql_baseline_fingerprint_is_reviewed_and_stable():
     statements = postgresql_baseline.compiled_postgresql_schema()
 
-    assert len(statements) == 144
+    assert len(statements) == 155
     assert postgresql_baseline.postgresql_schema_fingerprint() == (
         postgresql_baseline.POSTGRESQL_BASELINE_FINGERPRINT
     )
@@ -69,7 +69,9 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260815_inr_wallet_ledger.py",
         "pg_20260819_paper_trade_exit_reason.py",
         "pg_20260823_backtest_market_evidence.py",
+        "pg_20260826_multi_strategy.py",
         "pg_20260826_strategy_attribution.py",
+        "pg_20260826_strategy_shadow.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -124,3 +126,11 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     strategy = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260826_strategy_attribution.py").read_text(encoding="utf-8")
     assert 'down_revision = "pg_20260823_evidence"' in strategy
     assert 'revision = "pg_20260826_strategy"' in strategy
+
+    multi_strategy = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260826_multi_strategy.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260826_strategy"' in multi_strategy
+    assert 'revision = "pg_20260826_multi"' in multi_strategy
+
+    shadow = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260826_strategy_shadow.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260826_multi"' in shadow
+    assert 'revision = "pg_20260826_shadow"' in shadow

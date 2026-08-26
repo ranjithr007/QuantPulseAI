@@ -64,6 +64,7 @@ class RiskRepository:
             }
 
             optional_fields = {
+                "trade_plan_id": data.get("trade_plan_id"),
                 "thesis_id": data.get("thesis_id"),
                 "timeframe": data.get("timeframe"),
                 "source_type": data.get("source_type"),
@@ -228,6 +229,49 @@ class RiskRepository:
         ).all()
 
         return {row._mapping["symbol"]: _row_to_namespace(row) for row in rows}
+
+    def latest_for_trade_plans(self, db, trade_plan_ids):
+        """Return the newest risk authorization for every strategy plan.
+
+        Multi-strategy execution must never reuse the newest risk row for a
+        coin when that row belongs to another strategy's plan.
+        """
+        normalized_ids = sorted(
+            {
+                int(item)
+                for item in trade_plan_ids or []
+                if item is not None
+            }
+        )
+        if not normalized_ids or "trade_plan_id" not in _risk_decision_columns(db):
+            return {}
+
+        table = RiskDecision.__table__
+        columns = _risk_decision_select_columns(db)
+        latest_created = (
+            select(
+                table.c.trade_plan_id.label("trade_plan_id"),
+                func.max(table.c.created_at).label("created_at"),
+            )
+            .where(table.c.trade_plan_id.in_(normalized_ids))
+            .group_by(table.c.trade_plan_id)
+            .subquery()
+        )
+        rows = db.execute(
+            select(*columns).select_from(
+                table.join(
+                    latest_created,
+                    and_(
+                        table.c.trade_plan_id == latest_created.c.trade_plan_id,
+                        table.c.created_at == latest_created.c.created_at,
+                    ),
+                )
+            )
+        ).all()
+        return {
+            row._mapping["trade_plan_id"]: _row_to_namespace(row)
+            for row in rows
+        }
 
 
 def _risk_decision_columns(db):

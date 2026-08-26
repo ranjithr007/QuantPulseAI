@@ -143,6 +143,7 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
 
             risk = RiskDecision(
                 symbol="BTCUSDT",
+                trade_plan_id=trade.id,
                 signal="LONG",
                 decision="APPROVE",
                 entry_price=100.0,

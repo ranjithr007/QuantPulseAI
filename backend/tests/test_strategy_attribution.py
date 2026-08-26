@@ -172,6 +172,7 @@ def test_core_fusion_attribution_survives_snapshot_plan_risk_and_paper_trade():
 def test_mismatched_strategy_risk_cannot_authorize_paper_trade():
     now = datetime.utcnow()
     trade = SimpleNamespace(
+        id=7,
         side="LONG",
         entry_price=100.0,
         stop_loss=99.25,
@@ -182,6 +183,7 @@ def test_mismatched_strategy_risk_cannot_authorize_paper_trade():
         strategy_decision_snapshot_id=10,
     )
     risk = SimpleNamespace(
+        trade_plan_id=8,
         decision="APPROVE",
         signal="LONG",
         entry_price=100.0,
@@ -201,11 +203,13 @@ def test_mismatched_strategy_risk_cannot_authorize_paper_trade():
     assert "Risk strategy does not match trade plan" in reasons
     assert "Risk strategy version does not match trade plan" in reasons
     assert "Risk strategy decision snapshot does not match trade plan" in reasons
+    assert "Risk decision does not match the exact trade plan" in reasons
 
 
 def test_unversioned_or_legacy_plan_cannot_reach_paper_execution():
     now = datetime.utcnow()
     trade = SimpleNamespace(
+        id=7,
         side="LONG",
         entry_price=100.0,
         stop_loss=99.25,
@@ -216,6 +220,7 @@ def test_unversioned_or_legacy_plan_cannot_reach_paper_execution():
         strategy_decision_snapshot_id=None,
     )
     risk = SimpleNamespace(
+        trade_plan_id=7,
         decision="APPROVE",
         signal="LONG",
         entry_price=100.0,
@@ -246,6 +251,7 @@ def test_active_core_fusion_lineage_passes_strategy_execution_boundary():
         "strategy_decision_snapshot_id": 42,
     }
     trade = SimpleNamespace(
+        id=7,
         symbol="BTCUSDT",
         entry_timeframe="1h",
         side="SHORT",
@@ -256,6 +262,7 @@ def test_active_core_fusion_lineage_passes_strategy_execution_boundary():
         **shared,
     )
     risk = SimpleNamespace(
+        trade_plan_id=7,
         decision="APPROVE",
         signal="SHORT",
         entry_price=100.0,
@@ -357,8 +364,13 @@ def test_strategy_summary_excludes_other_strategy_version(monkeypatch):
         since_days=30,
         candidate_limit=24,
     )
-    record = payload["records"][0]
+    record = next(
+        item
+        for item in payload["records"]
+        if item["id"] == CORE_FUSION_STRATEGY_ID
+    )
     assert record["coverage"]["decision_snapshots"] == 1
-    assert record["performance"]["total_trades"] == 1
-    assert record["performance"]["net_pnl_inr"] == 1500.0
+    assert record["performance"]["total_trades"] == 0
+    assert record["official_performance"]["total_trades"] == 1
+    assert record["official_performance"]["net_pnl_inr"] == 1500.0
     assert [item["symbol"] for item in record["candidates"]] == ["BTCUSDT"]

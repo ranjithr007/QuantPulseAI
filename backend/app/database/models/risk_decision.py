@@ -33,6 +33,8 @@ class RiskDecision(Base):
 
     confidence = Column(Float)
 
+    trade_plan_id = Column(Integer, nullable=True, index=True)
+
     thesis_id = Column(Integer, nullable=True, index=True)
 
     data_generation_id = Column(String(100), index=True, nullable=True)

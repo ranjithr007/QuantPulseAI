@@ -12,15 +12,29 @@ class TradePlanRepository:
     def get_open_trades(self, db):
         return db.query(TradePlan).filter(TradePlan.status == "OPEN").all()
 
-    def get_open_trade(self, db, symbol, side=None):
-        """Get the symbol's open plan; direction is not part of the lock key."""
-        return (
+    def get_open_trade(
+        self,
+        db,
+        symbol,
+        side=None,
+        strategy_id=None,
+        strategy_version=None,
+    ):
+        """Get one open plan, optionally scoped to a strategy version.
+
+        Multiple strategies may hold candidate plans for the same coin. The
+        shared position lock is enforced on ``paper_trades``, not here.
+        """
+        query = (
             db.query(TradePlan)
             .filter(TradePlan.symbol == str(symbol).upper())
             .filter(TradePlan.status == "OPEN")
-            .order_by(TradePlan.created_at.desc())
-            .first()
         )
+        if strategy_id is not None:
+            query = query.filter(TradePlan.strategy_id == strategy_id)
+        if strategy_version is not None:
+            query = query.filter(TradePlan.strategy_version == strategy_version)
+        return query.order_by(TradePlan.created_at.desc()).first()
 
     def invalidate_open_trades_below_confidence(self, db, min_confidence):
         open_trades = self.get_open_trades(db)
@@ -43,8 +57,24 @@ class TradePlanRepository:
 
         return invalidated
 
-    def has_open_trade(self, db, symbol, side=None):
-        return self.get_open_trade(db, symbol, side) is not None
+    def has_open_trade(
+        self,
+        db,
+        symbol,
+        side=None,
+        strategy_id=None,
+        strategy_version=None,
+    ):
+        return (
+            self.get_open_trade(
+                db,
+                symbol,
+                side,
+                strategy_id,
+                strategy_version,
+            )
+            is not None
+        )
 
     def close_trade(self, db, trade, price, result):
         trade.status = "CLOSED"

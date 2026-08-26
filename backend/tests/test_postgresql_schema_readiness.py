@@ -9,7 +9,7 @@ from app.database.sqlserver import Base
 def test_all_orm_tables_and_indexes_compile_for_postgresql():
     dialect = postgresql.dialect()
 
-    assert len(Base.metadata.tables) == 43
+    assert len(Base.metadata.tables) == 44
     for table in Base.metadata.sorted_tables:
         str(CreateTable(table).compile(dialect=dialect))
         for index in table.indexes:

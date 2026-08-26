@@ -238,8 +238,39 @@ timeframe must not be labelled with another timeframe's eligibility.
 
 ## QP-TI-003: Strategy isolation and attribution
 
-**Status:** Core Fusion paper strategy implemented. Additional strategies must
-remain shadow-only until they implement this complete contract.
+**Status:** Core Signal, Market Move, and Core Fusion paper strategies are
+implemented under one shared execution contract. Live exchange execution remains
+disabled.
+
+Every scan must evaluate all registered active strategies independently:
+
+- `CORE_SIGNAL` uses the governed multi-timeframe Core signal without requiring
+  Market Move confirmation.
+- `MARKET_MOVE` uses the independent market-participation decision without
+  requiring the Core signal to be READY.
+- `CORE_FUSION` is the combined strategy and is eligible only when both Core
+  Signal and Market Move independently permit the same direction.
+
+Each eligible result owns a separate candidate plan. Those plans compete for one
+paper execution; they do not create simultaneous positions for the same coin.
+
+For forward strategy comparison, every trade-level-eligible strategy also opens
+an isolated **shadow paper position**. A strategy may hold at most one open
+shadow position per symbol across `1h`, `2h`, `4h`, and `1d`. Shadow positions:
+
+- use the same fresh execution mark, costs, staged targets, stop-loss, funding,
+  and maximum-hold policy as official paper positions;
+- do not consume the official INR wallet, account capacity, account daily-loss
+  limit, or the QP-TI-001 official symbol lock;
+- are stored and reported separately and can never be presented as official
+  paper executions;
+- never authorize live exchange execution.
+
+The official paper portfolio still selects one deterministic winner and permits
+only one active official position per symbol across every strategy, direction,
+and timeframe. Strategy comparison requires at least 30 closed shadow trades per
+active strategy before a research leader is reported. That ranking is evidence
+for a later human production decision and never enables live orders automatically.
 
 Every strategy must have an immutable `strategy_id` and `strategy_version`.
 Changing entry rules, confirmation gates, sizing, or exits requires a new
@@ -251,8 +282,8 @@ decision snapshot.
 When a strategy candidate becomes a trade, the same strategy identifier,
 version, and decision-snapshot identifier must be propagated without substitution
 through the trade plan, risk decision, paper trade, exit, and P&L report. A risk
-decision from another strategy, version, or source snapshot cannot authorize the
-trade.
+decision from another strategy, version, source snapshot, or trade-plan ID cannot
+authorize the trade. Risk authorization must reference the exact candidate plan.
 
 Strategy separation does not create an independent position lock. QP-TI-001
 remains account-authoritative: all strategies compete for the same normalized
@@ -269,9 +300,10 @@ live exchange execution.
 Required acceptance coverage proves that attribution survives every persistence
 boundary, incomplete or mismatched risk attribution blocks execution, historical
 pre-lineage records are explicitly labelled as legacy rather than falsely counted
-as Core Fusion, the shared symbol lock holds across strategies, strategy metrics
-do not include another strategy/version, and dashboard candidate reasons come
-from persisted strategy evidence.
+as a current strategy, all three active strategies can produce separate candidate
+plans, Market Move can proceed when Core Signal is WAIT, the shared symbol lock
+holds across strategies, strategy metrics do not include another strategy/version,
+and dashboard candidate reasons come from persisted strategy evidence.
 
 # INR-M paper-wallet sizing
 
