@@ -203,6 +203,21 @@ def test_execution_gate_requires_monitor_and_risk_without_errors():
     failed["risk"] = {"status": "COMPLETED", "errors": ["risk repository unavailable"]}
     assert _execution_ready(failed) is False
 
+    partially_degraded = dict(required)
+    partially_degraded["risk"] = {
+        "status": "DEGRADED",
+        "errors": ["ETHUSDT risk input unavailable"],
+        "trade_plans": {"approved": 1, "rejected": 1},
+    }
+    assert _execution_ready(partially_degraded) is True
+
+    fatal_risk = dict(required)
+    fatal_risk["risk"] = {
+        "status": "FAILED",
+        "errors": ["risk repository unavailable"],
+    }
+    assert _execution_ready(fatal_risk) is False
+
     missing = dict(required)
     del missing["paper_trade_monitor"]
     assert _execution_ready(missing) is False

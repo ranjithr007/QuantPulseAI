@@ -314,6 +314,7 @@ def test_run_risk_job_continues_after_one_signal_error():
     assert summary["persisted"] == 2
 
     assert summary["failed"] == 0
+    assert summary["status"] == "COMPLETED"
 
     # One rejection plus one approved risk decision.
     assert risk_repo.save.call_count == 2
@@ -321,4 +322,37 @@ def test_run_risk_job_continues_after_one_signal_error():
 
     engine.analyze.assert_called_once()
     approve.assert_called_once_with(fake_db)
+    fake_db.close.assert_called_once()
+
+
+def test_risk_job_reports_partial_trade_plan_errors_as_degraded():
+    fake_db = Mock()
+    master_repo = Mock()
+    master_repo.get_latest_signals.return_value = []
+    trade_plan_summary = {
+        "processed": 2,
+        "persisted": 2,
+        "approved": 1,
+        "rejected": 1,
+        "failed": 0,
+        "errors": ["ETHUSDT SHORT: risk validation failed"],
+    }
+    job = RiskJob(
+        session_factory=Mock(return_value=fake_db),
+        master_repo=master_repo,
+        risk_repo=Mock(),
+        trade_plan_repo=Mock(),
+        engine=Mock(),
+    )
+
+    with patch.object(
+        job,
+        "_approve_trade_plans",
+        return_value=trade_plan_summary,
+    ):
+        summary = job.run()
+
+    assert summary["status"] == "DEGRADED"
+    assert summary["trade_plans"]["approved"] == 1
+    assert summary["trade_plans"]["rejected"] == 1
     fake_db.close.assert_called_once()

@@ -146,6 +146,14 @@ class RiskJob:
             if self.config.validate_trade_plans:
                 summary["trade_plans"] = self._approve_trade_plans(db)
 
+            trade_plan_errors = (summary.get("trade_plans") or {}).get(
+                "errors"
+            ) or []
+            summary["status"] = (
+                "DEGRADED"
+                if summary["errors"] or trade_plan_errors
+                else "COMPLETED"
+            )
             print("Risk Engine Completed", summary)
             return summary
 
@@ -154,6 +162,7 @@ class RiskJob:
 
             error_message = summarize_network_error(ex)
             summary["errors"].append(error_message)
+            summary["status"] = "FAILED"
 
             if not is_transient_network_error(ex):
                 print("Risk job error:", error_message)

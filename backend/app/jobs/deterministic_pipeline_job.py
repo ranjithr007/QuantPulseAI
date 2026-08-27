@@ -228,9 +228,12 @@ def _execution_ready(results):
         if result is None:
             return False
         if isinstance(result, dict):
-            if str(result.get("status") or "").upper() in {"FAILED", "ERROR", "BLOCKED"}:
+            stage_status = str(result.get("status") or "").upper()
+            if stage_status in {"FAILED", "ERROR", "BLOCKED"}:
                 return False
-            if result.get("errors"):
+            if result.get("errors") and not (
+                name == "risk" and stage_status == "DEGRADED"
+            ):
                 return False
             continue
         if isinstance(result, list):
