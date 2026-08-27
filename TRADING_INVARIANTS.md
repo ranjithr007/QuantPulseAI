@@ -238,9 +238,9 @@ timeframe must not be labelled with another timeframe's eligibility.
 
 ## QP-TI-003: Strategy isolation and attribution
 
-**Status:** Core Signal, Market Move, and Core Fusion paper strategies are
-implemented under one shared execution contract. Live exchange execution remains
-disabled.
+**Status:** Core Signal, Market Move, Regime Trend, Order Flow SMC, Liquidation
+Carry, and Core Fusion paper strategies are implemented under one shared
+execution contract. Live exchange execution remains disabled.
 
 Every scan must evaluate all registered active strategies independently:
 
@@ -250,26 +250,37 @@ Every scan must evaluate all registered active strategies independently:
   requiring the Core signal to be READY.
 - `CORE_FUSION` is the combined strategy and is eligible only when both Core
   Signal and Market Move independently permit the same direction.
+- `REGIME_TREND` requires aligned, fresh Feature and Regime evidence and does
+  not inherit Order Flow, SMC, or Market Move blockers.
+- `ORDERFLOW_SMC` requires aligned, fresh Order Flow and SMC evidence and does
+  not inherit Feature, Regime, or Market Move blockers.
+- `LIQUIDATION_CARRY` requires fresh funding and open-interest evidence plus
+  observed liquidation pressure. Estimated or missing liquidation evidence is
+  never executable.
 
 Each eligible result owns a separate candidate plan. Those plans compete for one
 paper execution; they do not create simultaneous positions for the same coin.
 
 For forward strategy comparison, every trade-level-eligible strategy also opens
-an isolated **shadow paper position**. A strategy may hold at most one open
-shadow position per symbol across `1h`, `2h`, `4h`, and `1d`. Shadow positions:
+an isolated **Strategy Paper position**. The legacy `strategy_shadow_trades`
+table name is retained only to preserve historical continuity. A strategy may
+hold at most one open Strategy Paper position per symbol across `1h`, `2h`,
+`4h`, and `1d`. Strategy Paper positions:
 
 - use the same fresh execution mark, costs, staged targets, stop-loss, funding,
   and maximum-hold policy as official paper positions;
-- do not consume the official INR wallet, account capacity, account daily-loss
-  limit, or the QP-TI-001 official symbol lock;
-- are stored and reported separately and can never be presented as official
-  paper executions;
+- use an independent INR 200,000 virtual wallet per immutable strategy version,
+  including that book's own margin capacity, optional daily-loss gate, and
+  open-position accounting;
+- do not consume the consolidated INR wallet or the QP-TI-001 consolidated
+  symbol lock;
+- are stored and reported separately from the consolidated winner portfolio;
 - never authorize live exchange execution.
 
 The official paper portfolio still selects one deterministic winner and permits
-only one active official position per symbol across every strategy, direction,
-and timeframe. Strategy comparison requires at least 30 closed shadow trades per
-active strategy before a research leader is reported. That ranking is evidence
+only one active consolidated position per symbol across every strategy,
+direction, and timeframe. Strategy comparison requires at least 30 closed
+Strategy Paper trades per active strategy before a research leader is reported. That ranking is evidence
 for a later human production decision and never enables live orders automatically.
 
 Every strategy must have an immutable `strategy_id` and `strategy_version`.
@@ -291,16 +302,16 @@ symbol lock and at most one active position may exist for that coin across all
 strategies, directions, and timeframes. Candidates that are eligible but not
 selected must remain auditable and must not be reported as executed trades.
 
-Performance must be reported per strategy/version using paper-trade evidence,
+Performance must be reported per strategy/version using Strategy Paper evidence,
 including open and closed trades, wins, losses, net INR P&L, fees, funding,
 account return, and maximum drawdown. Aggregate results must not silently mix
-strategy versions. New strategies begin in paper/shadow mode and cannot enable
+strategy versions. New strategies begin in Strategy Paper mode and cannot enable
 live exchange execution.
 
 Required acceptance coverage proves that attribution survives every persistence
 boundary, incomplete or mismatched risk attribution blocks execution, historical
 pre-lineage records are explicitly labelled as legacy rather than falsely counted
-as a current strategy, all three active strategies can produce separate candidate
+as a current strategy, all registered active strategies can produce separate candidate
 plans, Market Move can proceed when Core Signal is WAIT, the shared symbol lock
 holds across strategies, strategy metrics do not include another strategy/version,
 and dashboard candidate reasons come from persisted strategy evidence.

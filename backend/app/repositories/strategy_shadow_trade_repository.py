@@ -14,7 +14,7 @@ from app.repositories._db_utils import commit_or_rollback, flush_or_rollback
 
 
 class StrategyShadowTradeRepository:
-    """Isolated forward-test ledger; it never consumes official paper capital."""
+    """Isolated Strategy Paper ledger with its own normalized virtual capital."""
 
     def ensure_table(self, db):
         if not USING_SQLITE_FALLBACK:

@@ -99,6 +99,61 @@ def test_opportunity_recovery_runs_after_upstream_failure():
     assert result["results"]["risk"]["status"] == "BLOCKED"
 
 
+def test_optional_market_participation_failure_does_not_block_core_signal_path():
+    calls = []
+
+    def market_participation():
+        calls.append("market_participation_trend")
+        return {"status": "FAILED", "error": "spot evidence unavailable"}
+
+    def watchlist():
+        calls.append("watchlist_persist")
+        return {"status": "OK", "saved_count": 1}
+
+    def risk():
+        calls.append("risk")
+        return {"status": "OK", "approved": 1}
+
+    stages = [
+        ("market_participation_trend", market_participation),
+        ("watchlist_persist", watchlist),
+        ("risk", risk),
+    ]
+    with patch("app.jobs.deterministic_pipeline_job.STAGE_ORDER", stages):
+        result = run_deterministic_pipeline_job()
+
+    assert result["status"] == "COMPLETED"
+    assert result["degraded_stages"] == ["market_participation_trend"]
+    assert calls == ["market_participation_trend", "watchlist_persist", "risk"]
+    assert result["results"]["market_participation_trend"]["blocking"] is False
+    assert result["results"]["watchlist_persist"]["status"] == "OK"
+    assert result["results"]["risk"]["status"] == "OK"
+
+
+def test_optional_market_participation_exception_does_not_block_core_signal_path():
+    calls = []
+
+    def market_participation():
+        calls.append("market_participation_trend")
+        raise RuntimeError("spot collector crashed")
+
+    def watchlist():
+        calls.append("watchlist_persist")
+        return {"status": "OK", "saved_count": 1}
+
+    stages = [
+        ("market_participation_trend", market_participation),
+        ("watchlist_persist", watchlist),
+    ]
+    with patch("app.jobs.deterministic_pipeline_job.STAGE_ORDER", stages):
+        result = run_deterministic_pipeline_job()
+
+    assert result["status"] == "COMPLETED"
+    assert result["degraded_stages"] == ["market_participation_trend"]
+    assert calls == ["market_participation_trend", "watchlist_persist"]
+    assert result["results"]["market_participation_trend"]["blocking"] is False
+
+
 def test_execution_gate_requires_all_upstream_stages_without_errors():
     required = {
         name: {"status": "COMPLETED"}

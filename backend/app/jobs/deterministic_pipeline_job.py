@@ -1,8 +1,9 @@
 """Dependency-aware paper pipeline cycle.
 
 The existing interval jobs remain available for compatibility, but this entry
-point is the R2 reference order.  A failed stage blocks all downstream stages
-and every attempted stage is recorded in the pipeline/job ledger.
+point is the R2 reference order.  A failed required stage blocks downstream
+execution. Optional strategy branches are recorded as failed without blocking
+independent strategies that do not consume that branch.
 """
 
 from datetime import datetime, timezone
@@ -42,6 +43,11 @@ STAGE_ORDER = (
 ALWAYS_RUN_SAFETY_STAGES = frozenset(
     {"paper_trade_monitor", "opportunity_coverage_recovery"}
 )
+# Market participation is required by MARKET_MOVE and CORE_FUSION, but it is
+# deliberately not an input to CORE_SIGNAL. Its failure must therefore remain
+# visible without preventing watchlist persistence, risk evaluation, or paper
+# execution for an otherwise valid Core Signal candidate.
+NON_BLOCKING_STRATEGY_STAGES = frozenset({"market_participation_trend"})
 STALE_PIPELINE_AFTER_SECONDS = 1800
 
 
@@ -53,6 +59,7 @@ def run_deterministic_pipeline_job():
     )
     results = {}
     blocked = False
+    degraded_stages = []
     ledger_db = None
     pipeline_record = None
     ledger = PipelineRunRepository()
@@ -112,8 +119,15 @@ def run_deterministic_pipeline_job():
                 result = _invoke_stage(job, context)
                 stage_failed = _failed(result)
                 if stage_failed:
-                    blocked = True
-                    result = {"status": "FAILED", "result": result}
+                    is_blocking_failure = name not in NON_BLOCKING_STRATEGY_STAGES
+                    blocked = blocked or is_blocking_failure
+                    if not is_blocking_failure:
+                        degraded_stages.append(name)
+                    result = {
+                        "status": "FAILED",
+                        "blocking": is_blocking_failure,
+                        "result": result,
+                    }
                 results[name] = result
                 if job_record is not None:
                     ledger.finish_job(
@@ -122,11 +136,24 @@ def run_deterministic_pipeline_job():
                         status="FAILED" if stage_failed else "COMPLETED",
                         rows_written=_rows_written(result),
                         output_generation_id=generation_id,
-                        error_category="UPSTREAM_STAGE_FAILED" if blocked else None,
+                        error_category=(
+                            "UPSTREAM_STAGE_FAILED"
+                            if stage_failed and name not in NON_BLOCKING_STRATEGY_STAGES
+                            else "OPTIONAL_STRATEGY_STAGE_FAILED"
+                            if stage_failed
+                            else None
+                        ),
                     )
             except Exception as exc:
-                blocked = True
-                results[name] = {"status": "FAILED", "error": summarize_network_error(exc)}
+                is_blocking_failure = name not in NON_BLOCKING_STRATEGY_STAGES
+                blocked = blocked or is_blocking_failure
+                if not is_blocking_failure:
+                    degraded_stages.append(name)
+                results[name] = {
+                    "status": "FAILED",
+                    "blocking": is_blocking_failure,
+                    "error": summarize_network_error(exc),
+                }
                 if job_record is not None:
                     ledger.finish_job(
                         ledger_db,
@@ -145,6 +172,7 @@ def run_deterministic_pipeline_job():
             "generation_id": generation_id,
             "pipeline_run_id": getattr(pipeline_record, "id", None),
             "status": status,
+            "degraded_stages": degraded_stages,
             "order": [name for name, _ in STAGE_ORDER],
             "results": results,
         }

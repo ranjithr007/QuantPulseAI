@@ -6,7 +6,11 @@ from app.database.sqlserver import Base
 
 
 class StrategyShadowTrade(Base):
-    """Hypothetical paper position owned by one immutable strategy version."""
+    """Isolated Strategy Paper position owned by one immutable strategy version.
+
+    The legacy table name is retained so existing forward-test history remains
+    continuous across the user-facing Shadow -> Strategy Paper rename.
+    """
 
     __tablename__ = "strategy_shadow_trades"
 

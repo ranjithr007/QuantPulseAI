@@ -97,23 +97,26 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
         .order_by(PaperTrade.created_at.asc(), PaperTrade.id.asc())
         .all()
     )
-    shadow_trades = (
+    strategy_book_trades = (
         db.query(StrategyShadowTrade)
         .filter(StrategyShadowTrade.strategy_id == strategy_id)
         .filter(StrategyShadowTrade.strategy_version == strategy_version)
-        .filter(StrategyShadowTrade.created_at >= cutoff)
         .order_by(StrategyShadowTrade.created_at.asc(), StrategyShadowTrade.id.asc())
         .all()
     )
+    shadow_trades = [
+        item for item in strategy_book_trades if item.created_at >= cutoff
+    ]
     candidates = _latest_candidates(
         snapshots,
         plans,
         trades,
-        shadow_trades,
+        strategy_book_trades,
         candidate_limit,
     )
     official_performance = _strategy_performance(trades)
     shadow_performance = _strategy_performance(shadow_trades)
+    strategy_book_performance = _strategy_performance(strategy_book_trades)
     return {
         **definition,
         "coverage": {
@@ -122,6 +125,8 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
             "risk_decisions": len(risks),
             "paper_trades": len(trades),
             "shadow_trades": len(shadow_trades),
+            "strategy_paper_trades": len(shadow_trades),
+            "strategy_paper_lifetime_trades": len(strategy_book_trades),
             "eligible_signals": sum(
                 1 for item in snapshots if str(item.decision).upper() == "ELIGIBLE"
             ),
@@ -134,6 +139,21 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
         # contain only the one winner selected for the shared portfolio.
         "performance": shadow_performance,
         "shadow_performance": shadow_performance,
+        "strategy_paper_performance": shadow_performance,
+        "strategy_paper_lifetime_performance": strategy_book_performance,
+        "strategy_paper_wallet": {
+            "initial_capital_inr": PAPER_CAPITAL_INR,
+            "realized_pnl_inr": strategy_book_performance["net_pnl_inr"],
+            "wallet_balance_inr": round(
+                PAPER_CAPITAL_INR + strategy_book_performance["net_pnl_inr"],
+                2,
+            ),
+            "open_position_count": strategy_book_performance["open_trades"],
+        },
+        "strategy_paper_history": [
+            _strategy_paper_trade_payload(item)
+            for item in reversed(strategy_book_trades[-20:])
+        ],
         "official_performance": official_performance,
         "forward_test_readiness": _forward_test_readiness(shadow_performance),
         "candidates": candidates,
@@ -242,6 +262,10 @@ def _latest_candidates(snapshots, plans, trades, shadow_trades, limit):
                 "paper_trade_id": getattr(trade, "id", None),
                 "shadow_trade_id": getattr(shadow_trade, "id", None),
                 "shadow_lifecycle": shadow_lifecycle,
+                "strategy_paper_trade_id": getattr(shadow_trade, "id", None),
+                "strategy_paper_lifecycle": shadow_lifecycle.replace(
+                    "SHADOW", "STRATEGY_PAPER"
+                ),
                 "effective_timestamp": row.effective_timestamp,
                 "created_at": row.created_at,
             }
@@ -303,6 +327,29 @@ def _strategy_performance(trades):
     }
 
 
+def _strategy_paper_trade_payload(trade):
+    return {
+        "id": trade.id,
+        "symbol": trade.symbol,
+        "side": trade.side,
+        "entry_timeframe": trade.entry_timeframe,
+        "entry_price": trade.entry_price,
+        "stop_loss": trade.stop_loss,
+        "target1": trade.target1,
+        "target2": trade.target2,
+        "status": trade.status,
+        "exit_price": trade.exit_price,
+        "exit_reason": trade.exit_reason,
+        "result": trade.result,
+        "pnl_percent": trade.pnl_percent,
+        "realized_pnl_inr": trade.realized_pnl_inr,
+        "fees_percent": trade.fees_percent,
+        "funding_cost_percent": trade.funding_cost_percent,
+        "opened_at": trade.opened_at,
+        "closed_at": trade.closed_at,
+    }
+
+
 def _profit_factor(closed):
     gains = sum(max(float(item.realized_pnl_inr or 0), 0) for item in closed)
     losses = abs(sum(min(float(item.realized_pnl_inr or 0), 0) for item in closed))
@@ -347,6 +394,7 @@ def _shadow_comparison(records):
     ]
     return {
         "status": "COMPARABLE" if len(comparable) == len(records) else "COLLECTING",
+        "execution_book": "STRATEGY_PAPER",
         "minimum_closed_trades_per_strategy": 30,
         "research_leader_strategy_id": (
             comparable[0]["id"] if len(comparable) == len(records) and comparable else None

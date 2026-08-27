@@ -15,6 +15,7 @@ from app.api.v1.signals_api import _persist_core_fusion_strategy_snapshot
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.database.models.risk_decision import RiskDecision
+from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.sqlserver import Base
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
@@ -468,3 +469,46 @@ def test_latest_snapshot_does_not_reuse_opposite_side_open_position():
 
     assert records[0]["paper_trade_id"] is None
     assert records[0]["lifecycle"] == "ELIGIBLE_NOT_SELECTED"
+
+
+def test_strategy_paper_wallet_keeps_positions_older_than_reporting_window(monkeypatch):
+    Session = _session_factory()
+    db = Session()
+    old_opened_at = datetime.utcnow() - timedelta(days=45)
+    db.add(
+        StrategyShadowTrade(
+            trade_plan_id=501,
+            risk_decision_id=601,
+            symbol="BTCUSDT",
+            side="LONG",
+            strategy_id=CORE_FUSION_STRATEGY_ID,
+            strategy_version=CORE_FUSION_STRATEGY_VERSION,
+            strategy_decision_snapshot_id=701,
+            entry_price=100.0,
+            stop_loss=99.25,
+            initial_stop_loss=99.25,
+            target1=101.5,
+            target2=102.3,
+            position_notional_inr=150_000.0,
+            margin_used_inr=30_000.0,
+            entry_timeframe="1h",
+            status="OPEN",
+            opened_at=old_opened_at,
+            created_at=old_opened_at,
+        )
+    )
+    db.commit()
+    db.close()
+    monkeypatch.setattr(strategy_api, "SessionLocal", Session)
+
+    payload = strategy_api.get_strategy_summary(
+        strategy_id=CORE_FUSION_STRATEGY_ID,
+        since_days=30,
+        candidate_limit=24,
+    )
+    record = payload["records"][0]
+
+    assert record["strategy_paper_performance"]["total_trades"] == 0
+    assert record["strategy_paper_lifetime_performance"]["total_trades"] == 1
+    assert record["strategy_paper_wallet"]["open_position_count"] == 1
+    assert record["strategy_paper_history"][0]["symbol"] == "BTCUSDT"

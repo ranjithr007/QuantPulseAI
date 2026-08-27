@@ -14,6 +14,15 @@ CORE_SIGNAL_DECISION_VERSION = "core_signal_strategy_v1"
 MARKET_MOVE_STRATEGY_ID = "MARKET_MOVE"
 MARKET_MOVE_STRATEGY_VERSION = "market_move_v1"
 MARKET_MOVE_DECISION_VERSION = "market_move_strategy_v1"
+REGIME_TREND_STRATEGY_ID = "REGIME_TREND"
+REGIME_TREND_STRATEGY_VERSION = "regime_trend_v1"
+REGIME_TREND_DECISION_VERSION = "regime_trend_strategy_v1"
+ORDERFLOW_SMC_STRATEGY_ID = "ORDERFLOW_SMC"
+ORDERFLOW_SMC_STRATEGY_VERSION = "orderflow_smc_v1"
+ORDERFLOW_SMC_DECISION_VERSION = "orderflow_smc_strategy_v1"
+LIQUIDATION_CARRY_STRATEGY_ID = "LIQUIDATION_CARRY"
+LIQUIDATION_CARRY_STRATEGY_VERSION = "liquidation_carry_v1"
+LIQUIDATION_CARRY_DECISION_VERSION = "liquidation_carry_strategy_v1"
 LEGACY_UNATTRIBUTED_STRATEGY_ID = "LEGACY_UNATTRIBUTED"
 LEGACY_UNATTRIBUTED_STRATEGY_VERSION = "pre_strategy_lineage_v0"
 
@@ -59,6 +68,72 @@ MARKET_MOVE_STRATEGY = {
     "execution_priority": 20,
 }
 
+REGIME_TREND_STRATEGY = {
+    "id": REGIME_TREND_STRATEGY_ID,
+    "version": REGIME_TREND_STRATEGY_VERSION,
+    "decision_version": REGIME_TREND_DECISION_VERSION,
+    "name": "Regime Trend",
+    "description": (
+        "Independent trend-following strategy requiring aligned, fresh Feature "
+        "and Regime evidence on the selected governed timeframe."
+    ),
+    "strategy_type": "INDIVIDUAL",
+    "execution_scope": "PAPER_ONLY",
+    "status": "ACTIVE",
+    "signal_threshold": 40.0,
+    "full_size_threshold": 60.0,
+    "official_timeframes": ["1h", "2h", "4h", "1d"],
+    "required_components": ["feature", "regime"],
+    "requires_core_signal": False,
+    "requires_market_participation_confirmation": False,
+    "one_active_trade_per_symbol": True,
+    "execution_priority": 20,
+}
+
+ORDERFLOW_SMC_STRATEGY = {
+    "id": ORDERFLOW_SMC_STRATEGY_ID,
+    "version": ORDERFLOW_SMC_STRATEGY_VERSION,
+    "decision_version": ORDERFLOW_SMC_DECISION_VERSION,
+    "name": "Order Flow SMC",
+    "description": (
+        "Independent structure strategy requiring aligned, fresh Order Flow "
+        "and Smart Money Concepts evidence."
+    ),
+    "strategy_type": "INDIVIDUAL",
+    "execution_scope": "PAPER_ONLY",
+    "status": "ACTIVE",
+    "signal_threshold": 40.0,
+    "full_size_threshold": 60.0,
+    "official_timeframes": ["1h", "2h", "4h", "1d"],
+    "required_components": ["orderflow", "smc"],
+    "requires_core_signal": False,
+    "requires_market_participation_confirmation": False,
+    "one_active_trade_per_symbol": True,
+    "execution_priority": 20,
+}
+
+LIQUIDATION_CARRY_STRATEGY = {
+    "id": LIQUIDATION_CARRY_STRATEGY_ID,
+    "version": LIQUIDATION_CARRY_STRATEGY_VERSION,
+    "decision_version": LIQUIDATION_CARRY_DECISION_VERSION,
+    "name": "Liquidation Carry",
+    "description": (
+        "Independent futures-positioning strategy requiring observed liquidation "
+        "pressure plus fresh funding and open-interest evidence."
+    ),
+    "strategy_type": "INDIVIDUAL",
+    "execution_scope": "PAPER_ONLY",
+    "status": "ACTIVE",
+    "signal_threshold": 40.0,
+    "full_size_threshold": 60.0,
+    "official_timeframes": ["1h", "2h", "4h", "1d"],
+    "required_components": ["funding", "open_interest", "liquidation"],
+    "requires_core_signal": False,
+    "requires_market_participation_confirmation": False,
+    "one_active_trade_per_symbol": True,
+    "execution_priority": 20,
+}
+
 CORE_FUSION_STRATEGY = {
     "id": CORE_FUSION_STRATEGY_ID,
     "version": CORE_FUSION_STRATEGY_VERSION,
@@ -83,6 +158,9 @@ CORE_FUSION_STRATEGY = {
 STRATEGY_REGISTRY = {
     CORE_SIGNAL_STRATEGY_ID: CORE_SIGNAL_STRATEGY,
     MARKET_MOVE_STRATEGY_ID: MARKET_MOVE_STRATEGY,
+    REGIME_TREND_STRATEGY_ID: REGIME_TREND_STRATEGY,
+    ORDERFLOW_SMC_STRATEGY_ID: ORDERFLOW_SMC_STRATEGY,
+    LIQUIDATION_CARRY_STRATEGY_ID: LIQUIDATION_CARRY_STRATEGY,
     CORE_FUSION_STRATEGY_ID: CORE_FUSION_STRATEGY,
 }
 

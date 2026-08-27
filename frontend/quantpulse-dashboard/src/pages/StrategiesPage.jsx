@@ -43,7 +43,7 @@ export default function StrategiesPage() {
             <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Paper strategy laboratory</div>
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Strategies</h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-400">
-              Core Signal and Market Move run independently, while Core Fusion evaluates their combined confirmation. Every eligible plan competes for one shared paper position per coin.
+              Every strategy runs an isolated Strategy Paper book for fair comparison, while eligible plans also compete for one consolidated paper position per coin.
             </p>
           </div>
           <button
@@ -76,7 +76,7 @@ function ComparisonBanner({ comparison }) {
       <div>
         <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Forward-test comparison</div>
         <div className="mt-1 text-sm font-medium text-white">
-          {ready ? `Research leader: ${comparison.research_leader_strategy_id || "calculating"}` : `Collecting ${comparison.minimum_closed_trades_per_strategy || 30} closed shadow trades per strategy`}
+          {ready ? `Strategy Paper leader: ${comparison.research_leader_strategy_id || "calculating"}` : `Collecting ${comparison.minimum_closed_trades_per_strategy || 30} closed Strategy Paper trades per strategy`}
         </div>
         <div className="mt-1 text-xs text-slate-500">Current ranking: {(comparison.ranking || []).join(" → ") || "waiting for data"}</div>
       </div>
@@ -86,8 +86,9 @@ function ComparisonBanner({ comparison }) {
 }
 
 function StrategyPanel({ strategy }) {
-  const performance = strategy.performance || {};
+  const performance = strategy.strategy_paper_performance || strategy.performance || {};
   const officialPerformance = strategy.official_performance || {};
+  const wallet = strategy.strategy_paper_wallet || {};
   const coverage = strategy.coverage || {};
   const readiness = strategy.forward_test_readiness || {};
   return (
@@ -116,31 +117,73 @@ function StrategyPanel({ strategy }) {
           <Metric label="Evaluations" value={coverage.decision_snapshots || 0} icon={Activity} />
           <Metric label="Eligible scans" value={coverage.eligible_signals || 0} icon={CheckCircle2} tone="emerald" />
           <Metric label="Blocked scans" value={coverage.blocked_signals || 0} icon={AlertTriangle} tone="amber" />
-          <Metric label="Shadow trades" value={performance.total_trades || 0} icon={Layers3} />
+          <Metric label="Strategy Paper trades" value={performance.total_trades || 0} icon={Layers3} />
           <Metric label="Win rate" value={formatPercent(performance.win_rate || 0, 1)} icon={TrendingUp} tone="emerald" />
           <Metric label="Drawdown" value={formatPercent(performance.max_drawdown_percent || 0, 2)} icon={TrendingDown} tone="rose" />
         </div>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-          <ValueCard label="Shadow net P&L" value={`₹${number(performance.net_pnl_inr, 2)}`} tone={performance.net_pnl_inr >= 0 ? "emerald" : "rose"} />
-          <ValueCard label="Shadow return" value={formatSigned(performance.account_return_percent || 0, 2) + "%"} tone={performance.account_return_percent >= 0 ? "emerald" : "rose"} />
+          <ValueCard label="Strategy Paper net P&L" value={`₹${number(performance.net_pnl_inr, 2)}`} tone={performance.net_pnl_inr >= 0 ? "emerald" : "rose"} />
+          <ValueCard label="Strategy Paper return" value={formatSigned(performance.account_return_percent || 0, 2) + "%"} tone={performance.account_return_percent >= 0 ? "emerald" : "rose"} />
           <ValueCard label="Gross trade P&L" value={formatSigned(performance.gross_trade_pnl_percent || 0, 2) + "%"} />
           <ValueCard label="Fees" value={formatPercent(performance.fees_percent || 0, 2)} tone="amber" />
           <ValueCard label="Funding cost" value={formatPercent(performance.funding_cost_percent || 0, 3)} tone="amber" />
           <ValueCard label="Profit factor" value={performance.profit_factor == null ? "—" : number(performance.profit_factor, 2)} />
-          <ValueCard label="Official winner trades" value={officialPerformance.total_trades || 0} tone="cyan" />
+          <ValueCard label="Consolidated winner trades" value={officialPerformance.total_trades || 0} tone="cyan" />
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <ValueCard label="Strategy capital" value={`₹${number(wallet.initial_capital_inr || 200000, 2)}`} />
+          <ValueCard label="Strategy wallet balance" value={`₹${number(wallet.wallet_balance_inr || 200000, 2)}`} tone={(wallet.realized_pnl_inr || 0) >= 0 ? "emerald" : "rose"} />
+          <ValueCard label="Open Strategy Paper positions" value={wallet.open_position_count || 0} tone="cyan" />
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
-          Forward comparison requires {readiness.minimum_closed_trades || 30} closed shadow trades per strategy; {readiness.remaining_trades || 0} remain for this strategy. Comparison never enables live orders automatically.
+          Forward comparison requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades per strategy; {readiness.remaining_trades || 0} remain for this strategy. Comparison never enables live orders automatically.
         </div>
         <div className="mt-1 text-xs text-slate-500">
           Eligible scans are evaluations, not separate positions. Repeated unchanged signals reuse the matching open plan or position; only one official paper winner may be active per coin.
         </div>
 
         <CandidateTable candidates={strategy.candidates || []} />
+        <StrategyPaperHistory trades={strategy.strategy_paper_history || []} />
       </div>
     </article>
+  );
+}
+
+function StrategyPaperHistory({ trades }) {
+  return (
+    <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
+      <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/60 px-4 py-3">
+        <div className="text-sm font-medium text-white">Recent Strategy Paper trades</div>
+        <div className="text-xs text-slate-500">Isolated ₹200,000 strategy book</div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-[1040px] w-full text-left text-xs">
+          <thead className="bg-slate-950/40 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+            <tr><th className="px-4 py-2.5">Coin</th><th>Side / TF</th><th>Entry</th><th>Stop</th><th>Target 1</th><th>Target 2</th><th>Status</th><th>Exit</th><th>Net P&amp;L</th><th>Opened IST</th></tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {trades.map((trade) => (
+              <tr key={trade.id} className="text-slate-300">
+                <td className="px-4 py-3 font-semibold text-white">{trade.symbol}</td>
+                <td><StatusBadge label={trade.side} tone={trade.side === "LONG" ? "emerald" : "rose"} /> <span className="ml-1">{trade.entry_timeframe || "—"}</span></td>
+                <td>{price(trade.entry_price)}</td>
+                <td>{price(trade.stop_loss)}</td>
+                <td>{price(trade.target1)}</td>
+                <td>{price(trade.target2)}</td>
+                <td><StatusBadge label={trade.status} tone={trade.status === "OPEN" ? "cyan" : trade.result === "WIN" ? "emerald" : "rose"} /></td>
+                <td>{price(trade.exit_price)}</td>
+                <td className={numberTone(trade.realized_pnl_inr)}>{trade.status === "OPEN" ? "Open" : `₹${number(trade.realized_pnl_inr, 2)} · ${formatSigned(trade.pnl_percent || 0, 2)}%`}</td>
+                <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(trade.opened_at)}</span></td>
+              </tr>
+            ))}
+            {!trades.length ? <tr><td colSpan="10" className="px-4 py-8 text-center text-slate-500">No Strategy Paper trades recorded yet.</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -149,12 +192,12 @@ function CandidateTable({ candidates }) {
     <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
       <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/60 px-4 py-3">
         <div className="text-sm font-medium text-white">Latest candidate per coin</div>
-        <div className="text-xs text-slate-500">Signal → shadow portfolio → official winner</div>
+        <div className="text-xs text-slate-500">Signal → Strategy Paper book → consolidated winner</div>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-[1080px] w-full text-left text-xs">
           <thead className="bg-slate-950/40 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            <tr><th className="px-4 py-2.5">Coin</th><th>Side / TF</th><th>Score</th><th>Confidence</th><th>Strategy decision</th><th>Market Move</th><th>Shadow</th><th>Official</th><th>Reason</th><th>Evaluated IST</th></tr>
+            <tr><th className="px-4 py-2.5">Coin</th><th>Side / TF</th><th>Score</th><th>Confidence</th><th>Strategy decision</th><th>Market Move</th><th>Strategy Paper</th><th>Consolidated</th><th>Reason</th><th>Evaluated IST</th></tr>
           </thead>
           <tbody className="divide-y divide-white/5">
             {candidates.map((candidate) => (
@@ -165,7 +208,7 @@ function CandidateTable({ candidates }) {
                 <td>{formatPercent(candidate.confidence || 0, 1)}</td>
                 <td><StatusBadge label={candidate.decision} tone={candidate.decision === "ELIGIBLE" ? "emerald" : "rose"} /></td>
                 <td><StatusBadge label={candidate.market_participation?.direction || candidate.market_participation?.status || "N/A"} tone={directionTone(candidate.market_participation?.direction)} /></td>
-                <td>{candidate.shadow_lifecycle?.replaceAll("_", " ")}</td>
+                <td>{(candidate.strategy_paper_lifecycle || candidate.shadow_lifecycle)?.replaceAll("_", " ")}</td>
                 <td>{candidate.lifecycle?.replaceAll("_", " ")}</td>
                 <td className="max-w-[340px] py-3 pr-3 text-slate-400">{candidate.blocked_reasons?.[0] || candidate.market_participation?.reason || "All current strategy gates passed"}</td>
                 <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(candidate.created_at)}</span></td>
@@ -220,4 +263,11 @@ function numberTone(value) {
 
 function number(value, digits) {
   return Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function price(value) {
+  if (value === null || value === undefined) return "—";
+  const numeric = Number(value);
+  const digits = numeric < 1 ? 6 : numeric < 100 ? 4 : 2;
+  return numeric.toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }

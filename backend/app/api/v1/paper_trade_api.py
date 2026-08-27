@@ -1050,6 +1050,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             "executed": executed,
             "skipped": skipped,
             "shadow_execution": shadow_execution,
+            "strategy_paper_execution": shadow_execution,
         }
 
     except SQLAlchemyError as exc:
@@ -1359,12 +1360,13 @@ def build_paper_trade_candidates(
 
 
 def _execute_strategy_shadow_candidates(db, records, auto):
-    """Fill every trade-valid strategy in an isolated forward-test ledger."""
+    """Fill every trade-valid strategy in its isolated Strategy Paper book."""
     executed = []
     skipped = []
     if not hasattr(db, "get_bind") or not hasattr(db, "query"):
         return {
             "source": "strategy_shadow_execution_v1",
+            "execution_book": "STRATEGY_PAPER",
             "status": "UNAVAILABLE",
             "candidate_count": len(records),
             "executed_count": 0,
@@ -1426,13 +1428,14 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
+        strategy_history = [
+            item
+            for item in shadow_history
+            if item.strategy_id == strategy_id
+            and item.strategy_version == strategy_version
+        ]
         cooldown = same_side_stop_reentry_cooldown(
-            [
-                item
-                for item in shadow_history
-                if item.strategy_id == strategy_id
-                and item.strategy_version == strategy_version
-            ],
+            strategy_history,
             candidate["symbol"],
             candidate["side"],
         )
@@ -1443,6 +1446,75 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                     "strategy_id": strategy_id,
                     "action": "skipped_shadow_same_side_stop_cooldown",
                     "blocked_reasons": [PAPER_STOP_REENTRY_COOLDOWN_REASON],
+                }
+            )
+            continue
+
+        strategy_account_risk = _account_risk_snapshot(db, strategy_history)
+        if not strategy_account_risk.get("risk_available", False):
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_strategy_paper_valuation_unavailable",
+                    "blocked_reasons": [
+                        "Fresh Strategy Paper mark-price valuation is unavailable"
+                    ],
+                }
+            )
+            continue
+        if (
+            auto.get("dailyLossLimitEnabled", False)
+            and strategy_account_risk.get("limit_reached")
+        ):
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_strategy_paper_daily_loss_limit",
+                    "blocked_reasons": [
+                        "Strategy Paper daily loss limit reached"
+                    ],
+                }
+            )
+            continue
+        strategy_wallet = build_inr_paper_wallet(
+            strategy_history,
+            current_prices=strategy_account_risk.get("current_prices") or {},
+            require_open_prices=True,
+        )
+        sizing = candidate.get("paper_sizing") or build_inr_paper_sizing(
+            (candidate.get("execution_risk") or {}).get("confidence")
+            or plan.get("confidence")
+            or 0
+        )
+        candidate_margin = float(sizing.get("margin_used_inr") or 0)
+        effective_max_open_trades = min(
+            int(auto.get("maxOpenTrades", PAPER_MAX_OPEN_TRADES)),
+            PAPER_MAX_OPEN_TRADES,
+        )
+        if (
+            auto.get("maxOpenTradesEnabled", False)
+            and strategy_wallet["open_position_count"] >= effective_max_open_trades
+        ):
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_strategy_paper_open_trade_cap",
+                }
+            )
+            continue
+        if candidate_margin > strategy_wallet["remaining_margin_capacity_inr"]:
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_strategy_paper_margin_cap",
+                    "required_margin_inr": candidate_margin,
+                    "remaining_margin_capacity_inr": strategy_wallet[
+                        "remaining_margin_capacity_inr"
+                    ],
                 }
             )
             continue
@@ -1481,6 +1553,7 @@ def _execute_strategy_shadow_candidates(db, records, auto):
 
     return {
         "source": "strategy_shadow_execution_v1",
+        "execution_book": "STRATEGY_PAPER",
         "candidate_count": len(records),
         "executed_count": len(executed),
         "skipped_count": len(skipped),
@@ -1490,10 +1563,10 @@ def _execute_strategy_shadow_candidates(db, records, auto):
 
 
 def _safe_execute_strategy_shadow_candidates(db, records, auto):
-    """Keep research-ledger failures outside the official execution boundary.
+    """Keep Strategy Paper failures outside the consolidated execution boundary.
 
-    Shadow portfolios are observability and forward-test evidence only. A
-    missing migration, transient database error, or malformed shadow record
+    Strategy Paper books are isolated forward-test evidence. A missing
+    migration, transient database error, or malformed strategy-paper record
     must be reported, but it must never prevent an otherwise eligible official
     paper candidate from reaching the shared one-position-per-coin executor.
     """
@@ -1503,6 +1576,7 @@ def _safe_execute_strategy_shadow_candidates(db, records, auto):
         db.rollback()
         return {
             "source": "strategy_shadow_execution_v1",
+            "execution_book": "STRATEGY_PAPER",
             "status": "DEGRADED",
             "candidate_count": len(records),
             "executed_count": 0,
@@ -1512,7 +1586,7 @@ def _safe_execute_strategy_shadow_candidates(db, records, auto):
                 {
                     "action": "skipped_shadow_execution_unavailable",
                     "blocked_reasons": [
-                        "Research shadow execution is temporarily unavailable"
+                        "Strategy Paper execution is temporarily unavailable"
                     ],
                 }
             ],

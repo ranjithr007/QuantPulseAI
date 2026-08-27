@@ -54,9 +54,15 @@ from app.strategies.registry import CORE_FUSION_STRATEGY_ID
 from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
 from app.strategies.registry import CORE_FUSION_DECISION_VERSION
 from app.strategies.registry import CORE_SIGNAL_STRATEGY_ID
+from app.strategies.registry import LIQUIDATION_CARRY_STRATEGY_ID
 from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
+from app.strategies.registry import ORDERFLOW_SMC_STRATEGY_ID
+from app.strategies.registry import REGIME_TREND_STRATEGY_ID
 from app.strategies.registry import STRATEGY_REGISTRY
 from app.strategies.registry import strategy_definition
+from app.strategies.candidate_builders import build_liquidation_carry_payload
+from app.strategies.candidate_builders import build_orderflow_smc_payload
+from app.strategies.candidate_builders import build_regime_trend_payload
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
@@ -1741,6 +1747,12 @@ def _persist_strategy_candidates(db, payload, market_participation):
         payload,
         market_participation,
     )
+    regime_trend_payload = build_regime_trend_payload(payload)
+    orderflow_smc_payload = build_orderflow_smc_payload(payload)
+    liquidation_carry_payload = build_liquidation_carry_payload(
+        payload,
+        market_participation,
+    )
     core_snapshot = _persist_core_signal_strategy_snapshot(db, payload)
     market_move_snapshot = _persist_market_move_strategy_snapshot(
         db,
@@ -1751,6 +1763,27 @@ def _persist_strategy_candidates(db, payload, market_participation):
         db,
         payload,
         market_participation,
+    )
+    regime_trend_definition = strategy_definition(REGIME_TREND_STRATEGY_ID)
+    orderflow_smc_definition = strategy_definition(ORDERFLOW_SMC_STRATEGY_ID)
+    liquidation_carry_definition = strategy_definition(
+        LIQUIDATION_CARRY_STRATEGY_ID
+    )
+    regime_trend_snapshot = _persist_derived_strategy_snapshot(
+        db,
+        regime_trend_payload,
+        regime_trend_definition,
+    )
+    orderflow_smc_snapshot = _persist_derived_strategy_snapshot(
+        db,
+        orderflow_smc_payload,
+        orderflow_smc_definition,
+    )
+    liquidation_carry_snapshot = _persist_derived_strategy_snapshot(
+        db,
+        liquidation_carry_payload,
+        liquidation_carry_definition,
+        market_participation=market_participation,
     )
     return [
         {
@@ -1764,11 +1797,60 @@ def _persist_strategy_candidates(db, payload, market_participation):
             "snapshot": market_move_snapshot,
         },
         {
+            "definition": regime_trend_definition,
+            "payload": regime_trend_payload,
+            "snapshot": regime_trend_snapshot,
+        },
+        {
+            "definition": orderflow_smc_definition,
+            "payload": orderflow_smc_payload,
+            "snapshot": orderflow_smc_snapshot,
+        },
+        {
+            "definition": liquidation_carry_definition,
+            "payload": liquidation_carry_payload,
+            "snapshot": liquidation_carry_snapshot,
+        },
+        {
             "definition": strategy_definition(CORE_FUSION_STRATEGY_ID),
             "payload": payload,
             "snapshot": fusion_snapshot,
         },
     ]
+
+
+def _persist_derived_strategy_snapshot(
+    db,
+    payload,
+    definition,
+    *,
+    market_participation=None,
+):
+    trigger = payload.get("trigger") or {}
+    validation = payload.get("trade_plan_validation") or {}
+    blocked_reasons = []
+    if trigger.get("status") != "READY":
+        blocked_reasons.append(
+            trigger.get("reason")
+            or f"{definition['name']} signal is not READY"
+        )
+    if not payload.get("trade_plan"):
+        blocked_reasons.append(
+            f"{definition['name']} did not produce a trade plan"
+        )
+    elif not validation.get("is_valid"):
+        blocked_reasons.extend(
+            validation.get("errors") or ["Trade plan is invalid"]
+        )
+    return _persist_governed_strategy_snapshot(
+        db,
+        payload,
+        definition,
+        list(dict.fromkeys(blocked_reasons)),
+        market_participation=market_participation,
+        effective_timestamp=payload.get("effective_timestamp"),
+        data_generation_id=payload.get("data_generation_id"),
+    )
 
 
 def _build_market_move_strategy_payload(core_payload, market_participation):

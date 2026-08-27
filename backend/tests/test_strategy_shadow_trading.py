@@ -32,7 +32,7 @@ def _automation():
         "enabled": True,
         "locked": False,
         "emergencyStop": False,
-        "allowedSymbols": ["BTCUSDT"],
+        "allowedSymbols": ["BTCUSDT", "ETHUSDT"],
         "maxRiskPerTrade": 1.0,
         "maxRiskPerTradeEnabled": False,
         "maxLeverage": 5,
@@ -44,10 +44,10 @@ def _automation():
     }
 
 
-def _candidate(definition, plan_id):
+def _candidate(definition, plan_id, *, symbol="BTCUSDT"):
     plan = {
         "id": plan_id,
-        "symbol": "BTCUSDT",
+        "symbol": symbol,
         "side": "LONG",
         "entry_price": 100.0,
         "stop_loss": 99.25,
@@ -79,7 +79,7 @@ def _candidate(definition, plan_id):
         "strategy_decision_snapshot_id": plan_id + 100,
     }
     return {
-        "symbol": "BTCUSDT",
+        "symbol": symbol,
         "side": "LONG",
         "eligible": False,
         "blocked_reasons": ["Active trade already exists for this coin"],
@@ -231,5 +231,64 @@ def test_database_rejects_two_open_shadow_positions_for_same_strategy_and_coin()
             raise AssertionError("Expected the shadow strategy-symbol lock to fail")
         except IntegrityError:
             db.rollback()
+    finally:
+        db.close()
+
+
+def test_strategy_paper_book_enforces_its_own_inr_margin_capacity():
+    db = _session()
+    definition = next(iter(STRATEGY_REGISTRY.values()))
+    opened_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    try:
+        for index, symbol in enumerate(
+            ("AUSDT", "BUSDT", "CUSDT", "DUSDT", "EUSDT"),
+            start=1,
+        ):
+            db.add(
+                StrategyShadowTrade(
+                    trade_plan_id=1000 + index,
+                    risk_decision_id=2000 + index,
+                    symbol=symbol,
+                    side="LONG",
+                    strategy_id=definition["id"],
+                    strategy_version=definition["version"],
+                    strategy_decision_snapshot_id=3000 + index,
+                    entry_price=100.0,
+                    stop_loss=99.25,
+                    initial_stop_loss=99.25,
+                    target1=101.5,
+                    target2=102.3,
+                    position_notional_inr=170_000.0,
+                    margin_used_inr=34_000.0,
+                    leverage=5.0,
+                    confidence=64.0,
+                    entry_timeframe="1h",
+                    status="OPEN",
+                    opened_at=opened_at,
+                )
+            )
+        db.commit()
+        candidate = _candidate(definition, 99, symbol="ETHUSDT")
+        prices = {
+            item.symbol: 100.0
+            for item in db.query(StrategyShadowTrade).all()
+        }
+        with patch(
+            "app.api.v1.paper_trade_api._account_risk_snapshot",
+            return_value={
+                "risk_available": True,
+                "limit_reached": False,
+                "current_prices": prices,
+            },
+        ):
+            result = _execute_strategy_shadow_candidates(
+                db,
+                [candidate],
+                _automation(),
+            )
+
+        assert result["executed_count"] == 0
+        assert result["skipped"][0]["action"] == "skipped_strategy_paper_margin_cap"
+        assert result["execution_book"] == "STRATEGY_PAPER"
     finally:
         db.close()

@@ -14,6 +14,7 @@ from app.repositories.trade_plan_repository import TradePlanRepository
 from app.strategies.registry import CORE_FUSION_STRATEGY_ID
 from app.strategies.registry import CORE_SIGNAL_STRATEGY_ID
 from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
+from app.strategies.registry import STRATEGY_REGISTRY
 
 
 def _session():
@@ -27,20 +28,49 @@ def _session():
 
 
 def _core_payload(now, *, ready=True):
+    component_scores = {
+        "feature": {
+            "score": 20.0 if ready else 5.0,
+            "value": "BULLISH" if ready else "NEUTRAL",
+            "reason": "Feature trend bullish" if ready else "Feature neutral",
+        },
+        "regime": {
+            "score": 20.0 if ready else 5.0,
+            "value": "TRENDING_BULL" if ready else "RANGE",
+            "reason": "Bull regime" if ready else "Neutral regime",
+        },
+        "orderflow": {
+            "score": 22.0 if ready else 5.0,
+            "value": "BUYERS_CONTROL" if ready else "BALANCED",
+            "reason": "Buyers control flow" if ready else "Balanced flow",
+        },
+        "smc": {
+            "score": 22.0 if ready else 5.0,
+            "value": "LONG" if ready else "NEUTRAL",
+            "reason": "SMC bullish" if ready else "SMC neutral",
+        },
+    }
     return {
         "symbol": "BNBUSDT",
         "mode": "intraday",
         "timeframes_used": ["1h", "2h", "4h", "1d"],
         "timeframes": [
             {
-                "timeframe": "1h",
+                "timeframe": timeframe,
                 "candle_time": now,
                 "status": "OK",
                 "score": 55.0 if ready else 22.0,
                 "confidence": 55.0 if ready else 22.0,
                 "bias": "BULLISH" if ready else "NEUTRAL",
-                "component_scores": {"regime": {"value": "BULLISH"}},
+                "current_price": 700.0,
+                "freshness": {"is_stale": False},
+                "inputs": {
+                    name: {"is_stale": False}
+                    for name in ("feature", "regime", "orderflow", "smc")
+                },
+                "component_scores": component_scores,
             }
+            for timeframe in ("1h", "2h", "4h", "1d")
         ],
         "confirmation": {"confidence": 55.0 if ready else 22.0},
         "trigger": {
@@ -68,8 +98,8 @@ def _core_payload(now, *, ready=True):
     }
 
 
-def _market_move(now):
-    return {
+def _market_move(now, *, carry_ready=False):
+    payload = {
         "status": "READY",
         "quality_state": "OK",
         "direction": "BULLISH",
@@ -96,6 +126,22 @@ def _market_move(now):
             ]
         },
     }
+    if carry_ready:
+        payload.update(
+            {
+                "components": {"derivatives": 8.0, "liquidation": 8.0},
+                "derivatives": {
+                    "funding_rate": 0.0001,
+                    "open_interest_change_percent": 2.0,
+                },
+                "liquidation": {
+                    "status": "READY",
+                    "data_quality": "OBSERVED",
+                    "bias": "HUNT_SHORTS",
+                },
+            }
+        )
+    return payload
 
 
 def _evaluate_and_persist(db, core_payload, market_move):
@@ -131,24 +177,18 @@ def test_individual_and_combined_strategies_create_separate_candidate_plans():
         records = _evaluate_and_persist(
             db,
             _core_payload(now, ready=True),
-            _market_move(now),
+            _market_move(now, carry_ready=True),
         )
 
-        assert {item["strategy_id"] for item in records} == {
-            CORE_SIGNAL_STRATEGY_ID,
-            MARKET_MOVE_STRATEGY_ID,
-            CORE_FUSION_STRATEGY_ID,
-        }
+        assert {item["strategy_id"] for item in records} == set(STRATEGY_REGISTRY)
         assert all(item["action"] == "saved" for item in records)
         plans = db.query(TradePlan).filter(TradePlan.status == "OPEN").all()
-        assert len(plans) == 3
-        assert {item.strategy_id for item in plans} == {
-            CORE_SIGNAL_STRATEGY_ID,
-            MARKET_MOVE_STRATEGY_ID,
-            CORE_FUSION_STRATEGY_ID,
-        }
-        assert len({item.strategy_decision_snapshot_id for item in plans}) == 3
-        assert db.query(DecisionSnapshot).count() == 3
+        assert len(plans) == len(STRATEGY_REGISTRY)
+        assert {item.strategy_id for item in plans} == set(STRATEGY_REGISTRY)
+        assert len({item.strategy_decision_snapshot_id for item in plans}) == len(
+            STRATEGY_REGISTRY
+        )
+        assert db.query(DecisionSnapshot).count() == len(STRATEGY_REGISTRY)
     finally:
         db.close()
 
