@@ -296,11 +296,23 @@ through the trade plan, risk decision, paper trade, exit, and P&L report. A risk
 decision from another strategy, version, source snapshot, or trade-plan ID cannot
 authorize the trade. Risk authorization must reference the exact candidate plan.
 
-Strategy separation does not create an independent position lock. QP-TI-001
-remains account-authoritative: all strategies compete for the same normalized
-symbol lock and at most one active position may exist for that coin across all
-strategies, directions, and timeframes. Candidates that are eligible but not
-selected must remain auditable and must not be reported as executed trades.
+For consolidated execution, strategy separation does not create an independent
+position lock. QP-TI-001 remains account-authoritative: all strategies compete
+for the same normalized symbol lock and at most one consolidated position may
+exist for that coin across all strategies, directions, and timeframes.
+Strategy Paper books retain the explicitly isolated strategy-symbol locks
+defined above. Candidates that are eligible but not selected for the
+consolidated book must remain auditable and must not be reported as consolidated
+executions.
+
+Pipeline failures are scoped to the strategy inputs they affect. A failed
+Feature, Regime, Order Flow, SMC, Fusion, Market Move, market-data, or watchlist
+stage is recorded as pipeline degradation but must not prevent independent
+branches or current risk decisions from being evaluated. The paper-position
+exit monitor and risk authorization stage remain global hard safety gates. The
+executor may run after branch degradation only because each candidate still
+must independently pass fresh evidence, current-direction, exact lineage,
+risk/reward, wallet, and symbol-lock validation.
 
 Performance must be reported per strategy/version using Strategy Paper evidence,
 including open and closed trades, wins, losses, net INR P&L, fees, funding,

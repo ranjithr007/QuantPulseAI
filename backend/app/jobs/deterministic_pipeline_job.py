@@ -43,11 +43,24 @@ STAGE_ORDER = (
 ALWAYS_RUN_SAFETY_STAGES = frozenset(
     {"paper_trade_monitor", "opportunity_coverage_recovery"}
 )
-# Market participation is required by MARKET_MOVE and CORE_FUSION, but it is
-# deliberately not an input to CORE_SIGNAL. Its failure must therefore remain
-# visible without preventing watchlist persistence, risk evaluation, or paper
-# execution for an otherwise valid Core Signal candidate.
-NON_BLOCKING_STRATEGY_STAGES = frozenset({"market_participation_trend"})
+# These stages provide evidence to one or more strategies, but no individual
+# branch is globally authoritative. A failure must be recorded as degradation
+# while later independent branches and the risk refresh are still attempted.
+# Candidate-level gates remain responsible for rejecting any strategy whose
+# own required evidence is missing, stale, contradictory, or incomplete.
+NON_BLOCKING_STRATEGY_STAGES = frozenset(
+    {
+        "market",
+        "feature",
+        "regime",
+        "orderflow",
+        "smc",
+        "fusion",
+        "market_participation_trend",
+        "watchlist_persist",
+        "opportunity_coverage_recovery",
+    }
+)
 STALE_PIPELINE_AFTER_SECONDS = 1800
 
 
@@ -164,7 +177,13 @@ def run_deterministic_pipeline_job():
                         error_message=summarize_network_error(exc),
                     )
 
-        status = "FAILED" if blocked else "COMPLETED"
+        status = (
+            "FAILED"
+            if blocked
+            else "DEGRADED"
+            if degraded_stages
+            else "COMPLETED"
+        )
         if pipeline_record is not None and ledger_db is not None:
             ledger.finish_pipeline(ledger_db, pipeline_record.id, status=status)
         return {
@@ -198,7 +217,12 @@ def _rows_written(result):
 
 
 def _execution_ready(results):
-    required = ("market", "feature", "regime", "orderflow", "smc", "fusion", "risk")
+    # Entry execution has two global hard prerequisites: existing positions
+    # must have been monitored successfully and each plan must have a current
+    # risk decision. Evidence-engine failures are strategy-local and are
+    # enforced by build_paper_trade_candidates against the exact strategy
+    # contract instead of stopping unrelated strategies globally.
+    required = ("paper_trade_monitor", "risk")
     for name in required:
         result = results.get(name)
         if result is None:
