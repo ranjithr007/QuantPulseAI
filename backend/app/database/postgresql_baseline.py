@@ -18,6 +18,7 @@ POSTGRESQL_POST_BASELINE_TABLES = frozenset(
         "walk_forward_jobs",
         "spot_market_candles",
         "orderbook_snapshots",
+        "app_notifications",
     }
 )
 

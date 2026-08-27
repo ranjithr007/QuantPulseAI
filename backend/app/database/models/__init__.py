@@ -51,3 +51,4 @@ from .paper_wallet_ledger import PaperWalletLedgerEntry
 from .automation_settings import AutomationSetting, AutomationSettingsAudit
 from .pipeline_runs import PipelineRun, JobRun
 from .walk_forward_jobs import WalkForwardJob
+from .app_notification import AppNotification

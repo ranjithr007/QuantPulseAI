@@ -84,6 +84,35 @@ export async function loadStrategySummary({ strategyId, sinceDays = 30, signal }
   return response || { source: "strategy_performance_v1", status: "UNAVAILABLE", records: [] };
 }
 
+export async function loadNotifications({ unreadOnly = false, limit = 50, signal } = {}) {
+  return requestJson(
+    "/notifications",
+    { unread_only: unreadOnly, limit },
+    signal,
+    15000
+  );
+}
+
+export async function markNotificationRead(notificationId, { signal } = {}) {
+  return requestJson(
+    `/notifications/${encodeURIComponent(notificationId)}/read`,
+    {},
+    signal,
+    15000,
+    "PATCH"
+  );
+}
+
+export async function markAllNotificationsRead({ signal } = {}) {
+  return requestJson(
+    "/notifications/read-all",
+    {},
+    signal,
+    15000,
+    "POST"
+  );
+}
+
 export async function startLiveMarketListener({ symbols = [], signal }) {
   const response = await requestJson(
     "/live/start",

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -374,3 +375,96 @@ def test_strategy_summary_excludes_other_strategy_version(monkeypatch):
     assert record["official_performance"]["total_trades"] == 1
     assert record["official_performance"]["net_pnl_inr"] == 1500.0
     assert [item["symbol"] for item in record["candidates"]] == ["BTCUSDT"]
+
+
+def test_latest_unchanged_snapshot_reuses_matching_open_position_lifecycle():
+    now = datetime.utcnow()
+    latest_snapshot = SimpleNamespace(
+        id=200,
+        symbol="BTCUSDT",
+        timeframe="1h",
+        confidence=64.0,
+        decision="ELIGIBLE",
+        snapshot_json=json.dumps(
+            {
+                "context": {
+                    "side": "LONG",
+                    "selected_score": 64.0,
+                    "market_participation": {},
+                    "blocked_reasons": [],
+                }
+            }
+        ),
+        effective_timestamp=now,
+        created_at=now,
+    )
+    older_plan = SimpleNamespace(
+        id=10,
+        strategy_decision_snapshot_id=100,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_timeframe="1h",
+        status="OPEN",
+    )
+    open_trade = SimpleNamespace(
+        id=20,
+        strategy_decision_snapshot_id=100,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_timeframe="1h",
+        status="OPEN",
+    )
+
+    records = strategy_api._latest_candidates(
+        [latest_snapshot],
+        [older_plan],
+        [open_trade],
+        [],
+        24,
+    )
+
+    assert records[0]["trade_plan_id"] == 10
+    assert records[0]["paper_trade_id"] == 20
+    assert records[0]["lifecycle"] == "POSITION_OPEN"
+
+
+def test_latest_snapshot_does_not_reuse_opposite_side_open_position():
+    now = datetime.utcnow()
+    latest_snapshot = SimpleNamespace(
+        id=201,
+        symbol="BTCUSDT",
+        timeframe="1h",
+        confidence=64.0,
+        decision="ELIGIBLE",
+        snapshot_json=json.dumps(
+            {
+                "context": {
+                    "side": "SHORT",
+                    "selected_score": -64.0,
+                    "market_participation": {},
+                    "blocked_reasons": [],
+                }
+            }
+        ),
+        effective_timestamp=now,
+        created_at=now,
+    )
+    long_trade = SimpleNamespace(
+        id=21,
+        strategy_decision_snapshot_id=100,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_timeframe="1h",
+        status="OPEN",
+    )
+
+    records = strategy_api._latest_candidates(
+        [latest_snapshot],
+        [],
+        [long_trade],
+        [],
+        24,
+    )
+
+    assert records[0]["paper_trade_id"] is None
+    assert records[0]["lifecycle"] == "ELIGIBLE_NOT_SELECTED"

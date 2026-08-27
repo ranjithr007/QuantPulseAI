@@ -11,6 +11,7 @@ from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
 from app.paper_trading.inr_sizing import PAPER_MAX_POSITION_INR
 from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
+from app.repositories.notification_repository import NotificationRepository
 
 
 PAPER_DAILY_LOSS_LIMIT_CEILING_PERCENT = 4.0
@@ -169,6 +170,22 @@ def update_automation_settings(db, updates, actor="local_ui", action="SETTINGS_U
             new_values=json.dumps(current, sort_keys=True, default=str),
         )
     )
+    if action in {"EMERGENCY_STOP_ACTIVATED", "EMERGENCY_STOP_CLEARED"}:
+        active = action == "EMERGENCY_STOP_ACTIVATED"
+        NotificationRepository().create(
+            db,
+            event_key=f"automation:{row.version}:{action}",
+            category="RISK",
+            event_type=action,
+            severity="CRITICAL" if active else "INFO",
+            title="Emergency stop activated" if active else "Emergency stop cleared",
+            message=(
+                "Official paper-trade execution is locked until the emergency stop is cleared."
+                if active
+                else "The emergency stop was cleared. Automation remains locked until explicitly enabled."
+            ),
+            metadata={"actor": str(actor or "local_ui")[:80], "active": active},
+        )
     commit_or_rollback(db)
     db.refresh(row)
     return automation_settings_payload(row), True

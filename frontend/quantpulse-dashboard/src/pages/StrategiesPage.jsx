@@ -114,8 +114,8 @@ function StrategyPanel({ strategy }) {
       <div className="p-4">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <Metric label="Evaluations" value={coverage.decision_snapshots || 0} icon={Activity} />
-          <Metric label="Eligible" value={coverage.eligible_signals || 0} icon={CheckCircle2} tone="emerald" />
-          <Metric label="Blocked" value={coverage.blocked_signals || 0} icon={AlertTriangle} tone="amber" />
+          <Metric label="Eligible scans" value={coverage.eligible_signals || 0} icon={CheckCircle2} tone="emerald" />
+          <Metric label="Blocked scans" value={coverage.blocked_signals || 0} icon={AlertTriangle} tone="amber" />
           <Metric label="Shadow trades" value={performance.total_trades || 0} icon={Layers3} />
           <Metric label="Win rate" value={formatPercent(performance.win_rate || 0, 1)} icon={TrendingUp} tone="emerald" />
           <Metric label="Drawdown" value={formatPercent(performance.max_drawdown_percent || 0, 2)} icon={TrendingDown} tone="rose" />
@@ -133,6 +133,9 @@ function StrategyPanel({ strategy }) {
 
         <div className="mt-3 text-xs text-slate-500">
           Forward comparison requires {readiness.minimum_closed_trades || 30} closed shadow trades per strategy; {readiness.remaining_trades || 0} remain for this strategy. Comparison never enables live orders automatically.
+        </div>
+        <div className="mt-1 text-xs text-slate-500">
+          Eligible scans are evaluations, not separate positions. Repeated unchanged signals reuse the matching open plan or position; only one official paper winner may be active per coin.
         </div>
 
         <CandidateTable candidates={strategy.candidates || []} />

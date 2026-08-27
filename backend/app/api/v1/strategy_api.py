@@ -161,8 +161,30 @@ def _latest_candidates(snapshots, plans, trades, shadow_trades, limit):
         for trade in shadow_trades
         if trade.strategy_decision_snapshot_id is not None
     }
-    open_shadow_by_symbol = {
-        trade.symbol: trade
+    open_plan_by_signal = {
+        _strategy_signal_key(
+            plan.symbol,
+            plan.side,
+            plan.entry_timeframe,
+        ): plan
+        for plan in plans
+        if plan.status == "OPEN"
+    }
+    open_trade_by_signal = {
+        _strategy_signal_key(
+            trade.symbol,
+            trade.side,
+            trade.entry_timeframe,
+        ): trade
+        for trade in trades
+        if trade.status == "OPEN"
+    }
+    open_shadow_by_signal = {
+        _strategy_signal_key(
+            trade.symbol,
+            trade.side,
+            trade.entry_timeframe,
+        ): trade
         for trade in shadow_trades
         if trade.status == "OPEN"
     }
@@ -171,10 +193,19 @@ def _latest_candidates(snapshots, plans, trades, shadow_trades, limit):
         payload = _json(row.snapshot_json)
         context = payload.get("context") or {}
         participation = context.get("market_participation") or {}
-        plan = plan_by_snapshot.get(row.id)
-        trade = trade_by_snapshot.get(row.id)
-        shadow_trade = shadow_by_snapshot.get(row.id) or open_shadow_by_symbol.get(
-            row.symbol
+        signal_key = _strategy_signal_key(
+            row.symbol,
+            context.get("side"),
+            row.timeframe,
+        )
+        # An unchanged eligible scan produces a new decision snapshot while
+        # intentionally reusing the existing plan/position. Prefer exact
+        # lineage, then fall back only to the same coin, side and timeframe so
+        # the UI reflects the real lifecycle without linking an opposite setup.
+        plan = plan_by_snapshot.get(row.id) or open_plan_by_signal.get(signal_key)
+        trade = trade_by_snapshot.get(row.id) or open_trade_by_signal.get(signal_key)
+        shadow_trade = shadow_by_snapshot.get(row.id) or open_shadow_by_signal.get(
+            signal_key
         )
         lifecycle = "SIGNAL_BLOCKED"
         if trade is not None:
@@ -216,6 +247,14 @@ def _latest_candidates(snapshots, plans, trades, shadow_trades, limit):
             }
         )
     return records
+
+
+def _strategy_signal_key(symbol, side, timeframe):
+    return (
+        str(symbol or "").upper(),
+        str(side or "").upper(),
+        str(timeframe or "").lower(),
+    )
 
 
 def _strategy_performance(trades):

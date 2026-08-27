@@ -18,6 +18,7 @@ from app.repositories._db_utils import commit_or_rollback
 from app.repositories._db_utils import flush_or_rollback
 from app.repositories.trade_thesis_repository import TradeThesisRepository
 from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
+from app.repositories.notification_repository import NotificationRepository
 
 
 class PaperTradeRepository:
@@ -402,6 +403,7 @@ class PaperTradeRepository:
             position_fraction=1.0,
             created_at=opened_at,
         )
+        _notify_trade_opened(db, paper_trade)
 
         if paper_trade.thesis_id:
             TradeThesisRepository().attach_paper_trade(
@@ -469,6 +471,7 @@ class PaperTradeRepository:
             pnl_percent=contribution_percent,
             created_at=trade.target1_hit_at,
         )
+        _notify_target1(db, trade)
         commit_or_rollback(db)
         db.refresh(trade)
         return trade
@@ -489,6 +492,7 @@ class PaperTradeRepository:
         trade.stop_loss = requested_stop
         if evaluated_at is not None:
             trade.last_exit_evaluated_at = evaluated_at
+        _notify_stop_moved(db, trade, current_stop, requested_stop)
         commit_or_rollback(db)
         db.refresh(trade)
         return trade
@@ -569,6 +573,8 @@ class PaperTradeRepository:
                 reason=f"Paper trade closed with result {trade.result}",
                 commit=False,
             )
+
+        _notify_trade_closed(db, trade)
 
         # No plan generated while this position was active may remain queued
         # after the symbol lock is released. The next pipeline stages must
@@ -718,3 +724,140 @@ def _paper_exit_reason(result, fill_profile):
     if str(result or "").strip().upper() == "TIME_EXIT":
         return "TIME_EXIT"
     return None
+
+
+def _notify_trade_opened(db, trade):
+    NotificationRepository().create(
+        db,
+        event_key=f"paper_trade:{trade.id}:ENTRY",
+        category="TRADE",
+        event_type="PAPER_TRADE_OPENED",
+        severity="INFO",
+        title=f"{trade.symbol} {trade.side} paper trade opened",
+        message=(
+            f"Entry {_price_text(trade.entry_price)} | "
+            f"Stop {_price_text(trade.stop_loss)} | "
+            f"T1 {_price_text(trade.target1)} | "
+            f"T2 {_price_text(trade.target2)} | "
+            f"Confidence {float(trade.confidence or 0):.1f}%"
+        ),
+        symbol=trade.symbol,
+        paper_trade_id=trade.id,
+        metadata={
+            "side": trade.side,
+            "entryPrice": trade.entry_price,
+            "stopLoss": trade.stop_loss,
+            "target1": trade.target1,
+            "target2": trade.target2,
+            "confidence": trade.confidence,
+            "timeframe": trade.entry_timeframe,
+            "strategyId": trade.strategy_id,
+            "strategyVersion": trade.strategy_version,
+        },
+        created_at=trade.opened_at,
+    )
+
+
+def _notify_target1(db, trade):
+    fraction = float(trade.target1_fraction or 0) * 100
+    NotificationRepository().create(
+        db,
+        event_key=f"paper_trade:{trade.id}:TARGET1",
+        category="TRADE",
+        event_type="TARGET1_REACHED",
+        severity="SUCCESS",
+        title=f"{trade.symbol} Target 1 reached",
+        message=(
+            f"{fraction:.0f}% closed at {_price_text(trade.target1_exit_price)}. "
+            f"Remaining stop moved to {_price_text(trade.stop_loss)}."
+        ),
+        symbol=trade.symbol,
+        paper_trade_id=trade.id,
+        metadata={
+            "side": trade.side,
+            "target1ExitPrice": trade.target1_exit_price,
+            "closedFraction": trade.target1_fraction,
+            "remainingFraction": trade.remaining_position_fraction,
+            "protectiveStop": trade.stop_loss,
+            "partialRealizedPnlInr": trade.partial_realized_pnl_inr,
+        },
+        created_at=trade.target1_hit_at,
+    )
+
+
+def _notify_stop_moved(db, trade, previous_stop, new_stop):
+    NotificationRepository().create(
+        db,
+        event_key=(
+            f"paper_trade:{trade.id}:STOP_MOVED:"
+            f"{float(new_stop):.10f}"
+        ),
+        category="TRADE",
+        event_type="PROTECTIVE_STOP_MOVED",
+        severity="INFO",
+        title=f"{trade.symbol} protective stop updated",
+        message=(
+            f"Stop moved from {_price_text(previous_stop)} to "
+            f"{_price_text(new_stop)} for the remaining position."
+        ),
+        symbol=trade.symbol,
+        paper_trade_id=trade.id,
+        metadata={
+            "side": trade.side,
+            "previousStop": previous_stop,
+            "newStop": new_stop,
+            "remainingFraction": trade.remaining_position_fraction,
+        },
+    )
+
+
+def _notify_trade_closed(db, trade):
+    reason = str(trade.exit_reason or "EXIT").upper()
+    event_type = {
+        "TARGET2": "TARGET2_REACHED",
+        "STOP": "STOP_LOSS_EXIT",
+        "STOP_LOSS": "STOP_LOSS_EXIT",
+        "TIME_EXIT": "MAX_HOLD_EXIT",
+    }.get(reason, "PAPER_TRADE_CLOSED")
+    reason_label = {
+        "TARGET2": "Target 2 reached",
+        "STOP": "Stop-loss reached",
+        "STOP_LOSS": "Stop-loss reached",
+        "TIME_EXIT": "Maximum holding time reached",
+    }.get(reason, "Position closed")
+    pnl = float(trade.pnl_percent or 0)
+    NotificationRepository().create(
+        db,
+        event_key=f"paper_trade:{trade.id}:CLOSE",
+        category="TRADE",
+        event_type=event_type,
+        severity="SUCCESS" if pnl >= 0 else "WARNING",
+        title=f"{trade.symbol} paper trade closed",
+        message=(
+            f"{reason_label} at {_price_text(trade.exit_price)}. "
+            f"Net P&L {pnl:+.2f}% "
+            f"(INR {float(trade.realized_pnl_inr or 0):+,.2f})."
+        ),
+        symbol=trade.symbol,
+        paper_trade_id=trade.id,
+        metadata={
+            "side": trade.side,
+            "exitReason": reason,
+            "exitPrice": trade.exit_price,
+            "result": trade.result,
+            "pnlPercent": trade.pnl_percent,
+            "realizedPnlInr": trade.realized_pnl_inr,
+            "feesPercent": trade.fees_percent,
+            "fundingCostPercent": trade.funding_cost_percent,
+        },
+        created_at=trade.closed_at,
+    )
+
+
+def _price_text(value):
+    number = float(value or 0)
+    if abs(number) < 1:
+        return f"{number:.6f}"
+    if abs(number) < 100:
+        return f"{number:.4f}"
+    return f"{number:,.2f}"

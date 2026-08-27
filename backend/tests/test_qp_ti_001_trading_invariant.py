@@ -452,6 +452,76 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
     ) == 2
 
 
+def test_shadow_research_failure_never_blocks_official_paper_execution(monkeypatch):
+    candidate = _candidate(4, "1h", 72)
+    saved = []
+
+    class DummyDb:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeRepo:
+        def acquire_account_execution_lock(self, db):
+            return True
+
+        def all_trades(self, db):
+            return []
+
+        def has_open_trade(self, db, symbol, side=None):
+            return False
+
+        def has_trade_for_plan(self, db, trade_plan_id):
+            return False
+
+        def save_candidate(self, db, item):
+            saved.append(item)
+            return SimpleNamespace(id=104)
+
+    monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "build_paper_trade_candidates",
+        lambda *args, **kwargs: (None, [candidate]),
+    )
+    monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_execute_strategy_shadow_candidates",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("shadow ledger unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_wallet_snapshot",
+        lambda db, trades, account_risk=None: {
+            "open_position_count": 0,
+            "remaining_margin_capacity_inr": 85_000,
+        },
+    )
+    monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
+    monkeypatch.setattr(
+        paper_trade_api,
+        "automation_settings_payload",
+        lambda row: _enabled_automation_settings(),
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_trade_payload",
+        lambda trade, fill_profile=None: {"id": trade.id},
+    )
+
+    result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
+
+    assert len(saved) == 1
+    assert result["executed_count"] == 1
+    assert result["shadow_execution"]["status"] == "DEGRADED"
+    assert result["shadow_execution"]["error_category"] == "RuntimeError"
+
+
 def test_new_paper_entry_rebases_fill_stop_and_targets_from_fresh_mark():
     candidate = _candidate(9, "1h", 64)
 

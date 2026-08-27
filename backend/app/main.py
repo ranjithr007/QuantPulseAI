@@ -24,6 +24,7 @@ from app.api.v1 import market_participation_api
 from app.api.v1 import master_ai_api
 from app.api.v1 import ml_api
 from app.api.v1 import ml_label_api
+from app.api.v1 import notification_api
 from app.api.v1 import orderflow_api
 from app.api.v1 import paper_trade_api
 from app.api.v1 import pipeline_api
@@ -278,6 +279,7 @@ app.include_router(backtest_api.router)
 app.include_router(ml_api.router)
 app.include_router(dataset_api.router)
 app.include_router(ml_label_api.router)
+app.include_router(notification_api.router)
 app.include_router(prediction_api.router)
 app.include_router(risk_api.router)
 app.include_router(scheduler_api.router)

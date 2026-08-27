@@ -809,7 +809,11 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             auto = DEFAULT_AUTOMATION_SETTINGS
         executed = []
         skipped = []
-        shadow_execution = _execute_strategy_shadow_candidates(db, records, auto)
+        shadow_execution = _safe_execute_strategy_shadow_candidates(
+            db,
+            records,
+            auto,
+        )
 
         eligible_by_symbol = defaultdict(list)
         for candidate in records:
@@ -1483,6 +1487,37 @@ def _execute_strategy_shadow_candidates(db, records, auto):
         "executed": executed,
         "skipped": skipped,
     }
+
+
+def _safe_execute_strategy_shadow_candidates(db, records, auto):
+    """Keep research-ledger failures outside the official execution boundary.
+
+    Shadow portfolios are observability and forward-test evidence only. A
+    missing migration, transient database error, or malformed shadow record
+    must be reported, but it must never prevent an otherwise eligible official
+    paper candidate from reaching the shared one-position-per-coin executor.
+    """
+    try:
+        return _execute_strategy_shadow_candidates(db, records, auto)
+    except Exception as exc:
+        db.rollback()
+        return {
+            "source": "strategy_shadow_execution_v1",
+            "status": "DEGRADED",
+            "candidate_count": len(records),
+            "executed_count": 0,
+            "skipped_count": len(records),
+            "executed": [],
+            "skipped": [
+                {
+                    "action": "skipped_shadow_execution_unavailable",
+                    "blocked_reasons": [
+                        "Research shadow execution is temporarily unavailable"
+                    ],
+                }
+            ],
+            "error_category": type(exc).__name__,
+        }
 
 
 def _strategy_shadow_trade_payload(trade):

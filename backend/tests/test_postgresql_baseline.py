@@ -72,6 +72,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260826_multi_strategy.py",
         "pg_20260826_strategy_attribution.py",
         "pg_20260826_strategy_shadow.py",
+        "pg_20260827_app_notifications.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -134,3 +135,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     shadow = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260826_strategy_shadow.py").read_text(encoding="utf-8")
     assert 'down_revision = "pg_20260826_multi"' in shadow
     assert 'revision = "pg_20260826_shadow"' in shadow
+
+    notifications = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260827_app_notifications.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260826_shadow"' in notifications
+    assert 'revision = "pg_20260827_notifications"' in notifications

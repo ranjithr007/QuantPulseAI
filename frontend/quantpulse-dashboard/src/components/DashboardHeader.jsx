@@ -23,6 +23,7 @@ import { Link, NavLink } from "react-router-dom";
 import { formatPercent, formatPrice, formatTimeInIst } from "../utils/formatters";
 import { getUnifiedMarketState } from "../utils/liveMarket";
 import { selectWatchlistSignal } from "./MarketSignalTable";
+import NotificationCenter from "./NotificationCenter";
 
 const PAGE_ITEMS = [
   { id: "dashboard", label: "Dashboard", shortLabel: "Home", icon: BarChart3 },
@@ -113,6 +114,7 @@ export default function DashboardHeader({
 
             <div className="flex min-w-0 items-center justify-end gap-2">
               <SourceStrip selectedDetail={selectedDetail} loading={loading} liveStatus={liveStatus} />
+              <NotificationCenter getPageHref={getPageHref} view={view} />
               <button type="button" onClick={onLogout} title={`Sign out ${username}`} aria-label="Sign out" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-slate-900/80 text-slate-400 transition hover:border-rose-400/30 hover:text-rose-200">
                 <LogOut className="h-4 w-4" />
               </button>
