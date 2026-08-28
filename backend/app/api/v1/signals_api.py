@@ -1651,10 +1651,28 @@ def _persist_ready_watchlist_payload(
             trade_plan,
             confidence=confidence or 0,
         ):
+            refresh_lineage = getattr(
+                trade_repo,
+                "refresh_strategy_lineage",
+                None,
+            )
+            if callable(refresh_lineage) and (strategy_snapshot or {}).get("id"):
+                existing_trade = refresh_lineage(
+                    db,
+                    existing_trade,
+                    strategy_decision_snapshot_id=strategy_snapshot["id"],
+                    data_generation_id=payload.get("data_generation_id"),
+                )
             return {
                 **base,
                 "action": "skipped_existing_open",
                 "message": "Open trade plan already exists for symbol and side",
+                "trade_plan_id": getattr(existing_trade, "id", None),
+                "strategy_decision_snapshot_id": getattr(
+                    existing_trade,
+                    "strategy_decision_snapshot_id",
+                    (strategy_snapshot or {}).get("id"),
+                ),
             }
 
         replaced_trade_plan_id = existing_trade.id
@@ -1684,6 +1702,7 @@ def _persist_ready_watchlist_payload(
             "strategy_id": strategy_id,
             "strategy_version": strategy_version,
             "strategy_decision_snapshot_id": (strategy_snapshot or {}).get("id"),
+            "data_generation_id": payload.get("data_generation_id"),
         },
     )
 
@@ -1743,6 +1762,13 @@ def _invalidate_strategy_open_plan(
 
 def _persist_strategy_candidates(db, payload, market_participation):
     """Evaluate every active strategy independently for one coin scan."""
+    # A strategy decision is an evaluation event, not the underlying candle.
+    # Multiple scans can legitimately change from ELIGIBLE to BLOCKED (or the
+    # reverse) while the 1h/2h/4h/1d source candle is unchanged as auxiliary
+    # evidence arrives or expires.  Give every scan its own effective time so
+    # the latest strategy snapshot cannot be a stale copy of the first decision
+    # made for that candle.
+    evaluation_timestamp = datetime.utcnow()
     market_move_payload = _build_market_move_strategy_payload(
         payload,
         market_participation,
@@ -1753,16 +1779,22 @@ def _persist_strategy_candidates(db, payload, market_participation):
         payload,
         market_participation,
     )
-    core_snapshot = _persist_core_signal_strategy_snapshot(db, payload)
+    core_snapshot = _persist_core_signal_strategy_snapshot(
+        db,
+        payload,
+        effective_timestamp=evaluation_timestamp,
+    )
     market_move_snapshot = _persist_market_move_strategy_snapshot(
         db,
         market_move_payload,
         market_participation,
+        effective_timestamp=evaluation_timestamp,
     )
     fusion_snapshot = _persist_core_fusion_strategy_snapshot(
         db,
         payload,
         market_participation,
+        effective_timestamp=evaluation_timestamp,
     )
     regime_trend_definition = strategy_definition(REGIME_TREND_STRATEGY_ID)
     orderflow_smc_definition = strategy_definition(ORDERFLOW_SMC_STRATEGY_ID)
@@ -1773,17 +1805,20 @@ def _persist_strategy_candidates(db, payload, market_participation):
         db,
         regime_trend_payload,
         regime_trend_definition,
+        effective_timestamp=evaluation_timestamp,
     )
     orderflow_smc_snapshot = _persist_derived_strategy_snapshot(
         db,
         orderflow_smc_payload,
         orderflow_smc_definition,
+        effective_timestamp=evaluation_timestamp,
     )
     liquidation_carry_snapshot = _persist_derived_strategy_snapshot(
         db,
         liquidation_carry_payload,
         liquidation_carry_definition,
         market_participation=market_participation,
+        effective_timestamp=evaluation_timestamp,
     )
     return [
         {
@@ -1825,6 +1860,7 @@ def _persist_derived_strategy_snapshot(
     definition,
     *,
     market_participation=None,
+    effective_timestamp=None,
 ):
     trigger = payload.get("trigger") or {}
     validation = payload.get("trade_plan_validation") or {}
@@ -1848,7 +1884,7 @@ def _persist_derived_strategy_snapshot(
         definition,
         list(dict.fromkeys(blocked_reasons)),
         market_participation=market_participation,
-        effective_timestamp=payload.get("effective_timestamp"),
+        effective_timestamp=effective_timestamp or payload.get("effective_timestamp"),
         data_generation_id=payload.get("data_generation_id"),
     )
 
@@ -1971,7 +2007,7 @@ def _build_market_move_strategy_payload(core_payload, market_participation):
     }
 
 
-def _persist_core_signal_strategy_snapshot(db, payload):
+def _persist_core_signal_strategy_snapshot(db, payload, *, effective_timestamp=None):
     trigger = payload.get("trigger") or {}
     validation = payload.get("trade_plan_validation") or {}
     blocked_reasons = []
@@ -1986,6 +2022,7 @@ def _persist_core_signal_strategy_snapshot(db, payload):
         payload,
         strategy_definition(CORE_SIGNAL_STRATEGY_ID),
         blocked_reasons,
+        effective_timestamp=effective_timestamp,
     )
 
 
@@ -2076,6 +2113,8 @@ def _persist_market_move_strategy_snapshot(
     db,
     payload,
     market_participation,
+    *,
+    effective_timestamp=None,
 ):
     trigger = payload.get("trigger") or {}
     validation = payload.get("trade_plan_validation") or {}
@@ -2094,8 +2133,9 @@ def _persist_market_move_strategy_snapshot(
         strategy_definition(MARKET_MOVE_STRATEGY_ID),
         blocked_reasons,
         market_participation=(payload.get("market_participation") or {}),
-        effective_timestamp=(market_participation or {}).get(
-            "effective_timestamp"
+        effective_timestamp=(
+            effective_timestamp
+            or (market_participation or {}).get("effective_timestamp")
         ),
         data_generation_id=(market_participation or {}).get(
             "data_generation_id"
@@ -2103,7 +2143,13 @@ def _persist_market_move_strategy_snapshot(
     )
 
 
-def _persist_core_fusion_strategy_snapshot(db, payload, market_participation):
+def _persist_core_fusion_strategy_snapshot(
+    db,
+    payload,
+    market_participation,
+    *,
+    effective_timestamp=None,
+):
     """Persist the complete, versioned Core Fusion entry decision."""
     timeframes = payload.get("timeframes") or []
     selected = _selected_timeframe_record(payload)
@@ -2148,7 +2194,8 @@ def _persist_core_fusion_strategy_snapshot(db, payload, market_participation):
         decision=decision,
         source_timestamp=source_timestamp,
         effective_timestamp=(
-            (market_participation or {}).get("effective_timestamp")
+            effective_timestamp
+            or (market_participation or {}).get("effective_timestamp")
             or source_timestamp
         ),
         quality_state=quality_state,

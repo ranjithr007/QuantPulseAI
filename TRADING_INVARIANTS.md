@@ -290,6 +290,13 @@ must be stored separately with its symbol, selected timeframe, side, score,
 confidence, confirmation result, exact blockers, effective timestamp, and source
 decision snapshot.
 
+The source timestamp identifies the finalized candle used as evidence. The
+effective timestamp identifies the actual strategy scan. Repeated scans inside
+the same candle must therefore create current evaluation records instead of
+reusing the first result for that candle. An unchanged OPEN candidate plan must
+refresh its decision-snapshot lineage to the latest eligible scan before risk is
+re-approved; a later blocked scan must invalidate that strategy's queued plan.
+
 When a strategy candidate becomes a trade, the same strategy identifier,
 version, and decision-snapshot identifier must be propagated without substitution
 through the trade plan, risk decision, paper trade, exit, and P&L report. A risk

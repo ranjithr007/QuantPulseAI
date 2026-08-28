@@ -215,6 +215,81 @@ def test_market_move_can_produce_a_plan_when_core_signal_is_wait():
         db.close()
 
 
+def test_same_candle_rescan_persists_current_decision_and_queue_state():
+    db = _session()
+    candle_time = datetime.now(timezone.utc)
+    try:
+        ready_records = _evaluate_and_persist(
+            db,
+            _core_payload(candle_time, ready=True),
+            _market_move(candle_time, carry_ready=True),
+        )
+        assert all(item["action"] == "saved" for item in ready_records)
+        assert db.query(TradePlan).filter(TradePlan.status == "OPEN").count() == len(
+            STRATEGY_REGISTRY
+        )
+
+        repeated_ready_records = _evaluate_and_persist(
+            db,
+            _core_payload(candle_time, ready=True),
+            _market_move(candle_time, carry_ready=True),
+        )
+        assert all(
+            item["action"] == "skipped_existing_open"
+            for item in repeated_ready_records
+        )
+        assert db.query(TradePlan).filter(TradePlan.status == "OPEN").count() == len(
+            STRATEGY_REGISTRY
+        )
+        assert db.query(DecisionSnapshot).count() == len(STRATEGY_REGISTRY) * 2
+        latest_snapshot_ids = {}
+        for row in (
+            db.query(DecisionSnapshot)
+            .order_by(
+                DecisionSnapshot.effective_timestamp.desc(),
+                DecisionSnapshot.id.desc(),
+            )
+            .all()
+        ):
+            latest_snapshot_ids.setdefault(row.strategy_id, row.id)
+        for plan in db.query(TradePlan).filter(TradePlan.status == "OPEN").all():
+            assert (
+                plan.strategy_decision_snapshot_id
+                == latest_snapshot_ids[plan.strategy_id]
+            )
+
+        blocked_records = _evaluate_and_persist(
+            db,
+            _core_payload(candle_time, ready=False),
+            {
+                **_market_move(candle_time),
+                "status": "WAIT",
+                "direction": "NEUTRAL",
+                "score": 0.0,
+                "confidence": 0.0,
+            },
+        )
+
+        assert all(item["action"] != "saved" for item in blocked_records)
+        assert db.query(TradePlan).filter(TradePlan.status == "OPEN").count() == 0
+        assert db.query(DecisionSnapshot).count() == len(STRATEGY_REGISTRY) * 3
+
+        latest = (
+            db.query(DecisionSnapshot)
+            .filter(DecisionSnapshot.strategy_id == CORE_SIGNAL_STRATEGY_ID)
+            .order_by(
+                DecisionSnapshot.effective_timestamp.desc(),
+                DecisionSnapshot.id.desc(),
+            )
+            .first()
+        )
+        assert latest.source_timestamp == candle_time.replace(tzinfo=None)
+        assert latest.decision == "BLOCKED"
+        assert latest.effective_timestamp > latest.source_timestamp
+    finally:
+        db.close()
+
+
 def test_combined_strategy_wins_a_true_rank_tie_without_multiple_coin_entries():
     common = {
         "risk_decision": {"confidence": 64.0},

@@ -120,6 +120,27 @@ class TradePlanRepository:
         commit_or_rollback(db)
         return trade
 
+    def refresh_strategy_lineage(
+        self,
+        db,
+        trade,
+        *,
+        strategy_decision_snapshot_id,
+        data_generation_id=None,
+    ):
+        """Attach an unchanged OPEN plan to the strategy's current scan.
+
+        Price levels remain unchanged. Only decision lineage advances so risk
+        approval and the executor validate the exact strategy evaluation that
+        the UI reports as current.
+        """
+        trade.strategy_decision_snapshot_id = strategy_decision_snapshot_id
+        if data_generation_id:
+            trade.data_generation_id = data_generation_id
+        commit_or_rollback(db)
+        db.refresh(trade)
+        return trade
+
     def save_trade_plan(self, db, plan):
         trade = TradePlan(
             symbol=plan["symbol"],
