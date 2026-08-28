@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { useEffect, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -31,6 +32,7 @@ import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNu
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
 const STAGED_EXIT_POLICIES = new Set(["PAPER_STAGED_EXIT_V2", "PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
+const TRADE_HISTORY_PAGE_SIZE = 10;
 
 export default function PnLSection({
   realizedPnl,
@@ -672,6 +674,18 @@ function exitTimeRemainingLabel(trade) {
 }
 
 function TradeHistoryTable({ tradeHistory }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(tradeHistory.length / TRADE_HISTORY_PAGE_SIZE));
+  const pageStart = (currentPage - 1) * TRADE_HISTORY_PAGE_SIZE;
+  const visibleTrades = tradeHistory.slice(pageStart, pageStart + TRADE_HISTORY_PAGE_SIZE);
+  const firstVisibleTrade = tradeHistory.length ? pageStart + 1 : 0;
+  const lastVisibleTrade = Math.min(pageStart + TRADE_HISTORY_PAGE_SIZE, tradeHistory.length);
+  const visiblePageNumbers = paginationPageNumbers(currentPage, totalPages);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
   return (
     <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-slate-900/70 p-3">
       <div className="flex items-center justify-between gap-3">
@@ -695,7 +709,7 @@ function TradeHistoryTable({ tradeHistory }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {tradeHistory.map((trade) => (
+            {visibleTrades.map((trade) => (
               <tr key={trade.id} className="bg-slate-950/35">
                 <td className="px-3 py-2.5 text-white">{trade.symbol}</td>
                 <td className="px-3 py-2.5">
@@ -720,8 +734,62 @@ function TradeHistoryTable({ tradeHistory }) {
           </tbody>
         </table>
       </div>
+      {tradeHistory.length ? (
+        <div className="mt-3 flex flex-col gap-2 border-t border-white/5 pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-slate-500">
+            Showing {firstVisibleTrade}–{lastVisibleTrade} of {tradeHistory.length} closed trades
+          </div>
+          <nav className="flex flex-wrap items-center gap-1" aria-label="Trade history pagination">
+            <PaginationButton
+              disabled={currentPage === 1}
+              label="Previous"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+            />
+            {visiblePageNumbers.map((page) => (
+              <PaginationButton
+                key={page}
+                active={page === currentPage}
+                label={String(page)}
+                onClick={() => setCurrentPage(page)}
+              />
+            ))}
+            <PaginationButton
+              disabled={currentPage === totalPages}
+              label="Next"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+            />
+          </nav>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function PaginationButton({ active = false, disabled = false, label, onClick }) {
+  return (
+    <button
+      type="button"
+      className={clsx(
+        "min-w-8 rounded-md border px-2.5 py-1.5 text-xs font-medium transition",
+        active
+          ? "border-cyan-400/40 bg-cyan-500/15 text-cyan-200"
+          : "border-white/10 bg-slate-950/40 text-slate-300 hover:border-cyan-400/30 hover:text-white",
+        disabled && "cursor-not-allowed opacity-40 hover:border-white/10 hover:text-slate-300"
+      )}
+      disabled={disabled}
+      aria-current={active ? "page" : undefined}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function paginationPageNumbers(currentPage, totalPages) {
+  const maximumVisiblePages = 5;
+  const firstPage = Math.max(1, Math.min(currentPage - 2, totalPages - maximumVisiblePages + 1));
+  const lastPage = Math.min(totalPages, firstPage + maximumVisiblePages - 1);
+  return Array.from({ length: lastPage - firstPage + 1 }, (_, index) => firstPage + index);
 }
 
 function averagePnl(trades, positive) {
