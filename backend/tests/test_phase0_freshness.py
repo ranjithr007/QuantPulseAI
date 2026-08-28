@@ -69,6 +69,11 @@ class Phase0FreshnessTests(unittest.TestCase):
 
         self.assertEqual(normalized.tzinfo, timezone.utc)
 
+    def test_normalize_timestamp_to_utc_handles_iso_strings(self):
+        normalized = normalize_timestamp_to_utc("2025-01-01T05:30:00+05:30")
+
+        self.assertEqual(normalized, datetime(2025, 1, 1, tzinfo=timezone.utc))
+
     def test_core_routes_expose_freshness_controls(self):
         route_files = [
             APP_ROOT / "api" / "v1" / "features_api.py",

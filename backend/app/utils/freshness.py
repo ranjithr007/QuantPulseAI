@@ -110,6 +110,9 @@ def normalize_timestamp_to_utc(timestamp):
 
 
 def _as_utc(timestamp, now=None):
+    if isinstance(timestamp, str):
+        timestamp = datetime.fromisoformat(timestamp.strip().replace("Z", "+00:00"))
+
     if timestamp.tzinfo is None:
         now = now or datetime.now(timezone.utc)
         utc_candidate = timestamp.replace(tzinfo=timezone.utc)

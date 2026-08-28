@@ -215,6 +215,33 @@ def test_market_move_can_produce_a_plan_when_core_signal_is_wait():
         db.close()
 
 
+def test_strategy_scan_accepts_serialized_market_move_timestamps():
+    db = _session()
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    market_move = _market_move(now, carry_ready=True)
+    market_move["effective_timestamp"] = now.isoformat().replace("+00:00", "Z")
+    for timeframe in market_move["spot"]["timeframes"]:
+        timeframe["source_timestamp"] = now.isoformat().replace("+00:00", "Z")
+
+    try:
+        records = _evaluate_and_persist(
+            db,
+            _core_payload(now, ready=True),
+            market_move,
+        )
+
+        assert {item["strategy_id"] for item in records} == set(STRATEGY_REGISTRY)
+        assert db.query(DecisionSnapshot).count() == len(STRATEGY_REGISTRY)
+        market_move_snapshot = (
+            db.query(DecisionSnapshot)
+            .filter(DecisionSnapshot.strategy_id == MARKET_MOVE_STRATEGY_ID)
+            .one()
+        )
+        assert market_move_snapshot.source_timestamp == now.replace(tzinfo=None)
+    finally:
+        db.close()
+
+
 def test_same_candle_rescan_persists_current_decision_and_queue_state():
     db = _session()
     candle_time = datetime.now(timezone.utc)
