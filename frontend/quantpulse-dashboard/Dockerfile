@@ -15,6 +15,7 @@ RUN test -n "$VITE_BACKEND_URL" \
 FROM nginx:1.27-alpine
 
 ENV PORT=8080
+ENV QUANTPULSE_API_UPSTREAM=https://quantpulseai-staging.up.railway.app
 
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html

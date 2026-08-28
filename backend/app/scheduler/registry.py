@@ -287,6 +287,16 @@ JOB_DEFINITIONS = {
         max_instances=1,
         coalesce=True,
     ),
+    "pipeline_retention": SchedulerJobDefinition(
+        id="pipeline_retention",
+        name="Pipeline ledger retention",
+        module="app.jobs.pipeline_retention_job",
+        function="run_pipeline_retention_job",
+        trigger="interval",
+        minutes=24 * 60,
+        max_instances=1,
+        coalesce=True,
+    ),
 }
 
 

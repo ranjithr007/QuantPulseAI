@@ -11,6 +11,7 @@ from app.repositories._db_utils import safe_rollback
 from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
+from app.utils.freshness import candle_freshness_timestamp
 
 TIMEFRAMES = list(OFFICIAL_ENTRY_TIMEFRAMES)
 market_repo = MarketRepository()
@@ -38,6 +39,9 @@ def run_smc_job(*, context=None):
                     result["symbol"] = symbol
 
                     result["timeframe"] = tf
+                    result["source_timestamp"] = candle_freshness_timestamp(
+                        candles[-1]
+                    )
                     if context is not None:
                         result["data_generation_id"] = context.generation_id
 

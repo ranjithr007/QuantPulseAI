@@ -19,6 +19,70 @@ def _json(value):
 
 
 class PipelineRunRepository:
+    def retention_preview(self, db, *, completed_before, batch_size=2500):
+        eligible_ids = self._retention_pipeline_ids(
+            db,
+            completed_before=completed_before,
+            batch_size=batch_size,
+        )
+        job_count = (
+            db.query(JobRun)
+            .filter(JobRun.pipeline_run_id.in_(eligible_ids))
+            .count()
+            if eligible_ids
+            else 0
+        )
+        return {
+            "completed_before": completed_before,
+            "pipeline_count": len(eligible_ids),
+            "job_count": job_count,
+            "batch_size": int(batch_size),
+        }
+
+    def purge_completed_before(self, db, *, completed_before, batch_size=2500):
+        preview = self.retention_preview(
+            db,
+            completed_before=completed_before,
+            batch_size=batch_size,
+        )
+        pipeline_ids = self._retention_pipeline_ids(
+            db,
+            completed_before=completed_before,
+            batch_size=batch_size,
+        )
+        if not pipeline_ids:
+            return {**preview, "deleted_pipelines": 0, "deleted_jobs": 0}
+
+        deleted_jobs = (
+            db.query(JobRun)
+            .filter(JobRun.pipeline_run_id.in_(pipeline_ids))
+            .delete(synchronize_session=False)
+        )
+        deleted_pipelines = (
+            db.query(PipelineRun)
+            .filter(PipelineRun.id.in_(pipeline_ids))
+            .delete(synchronize_session=False)
+        )
+        commit_or_rollback(db)
+        return {
+            **preview,
+            "deleted_pipelines": int(deleted_pipelines or 0),
+            "deleted_jobs": int(deleted_jobs or 0),
+        }
+
+    @staticmethod
+    def _retention_pipeline_ids(db, *, completed_before, batch_size):
+        rows = (
+            db.query(PipelineRun.id)
+            .filter(PipelineRun.completed_at.isnot(None))
+            .filter(PipelineRun.completed_at < completed_before)
+            .filter(PipelineRun.status != "RUNNING")
+            .order_by(PipelineRun.completed_at.asc(), PipelineRun.id.asc())
+            .limit(max(1, min(10_000, int(batch_size))))
+            .all()
+        )
+        return [row[0] for row in rows]
+
     def recover_stale_running(
         self,
         db,

@@ -36,7 +36,11 @@ def generate_features(symbol, timeframe, *, context=None):
         if context is not None:
             features["data_generation_id"] = context.generation_id
             snapshot["data_generation_id"] = context.generation_id
-        save_market_feature(db, features)
+        save_market_feature(
+            db,
+            features,
+            source_timestamp=snapshot["effective_timestamp"],
+        )
         persist_feature_snapshot(db, snapshot)
 
         return features

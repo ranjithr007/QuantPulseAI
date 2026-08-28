@@ -81,6 +81,26 @@ class Settings:
             DEFAULT_SCHEDULER_JOBS,
         )
         self.database_url = os.getenv("QUANTPULSE_DATABASE_URL") or _build_sqlserver_url()
+        self.database_pool_size = int(os.getenv("QUANTPULSE_DATABASE_POOL_SIZE", "5"))
+        self.database_max_overflow = int(
+            os.getenv("QUANTPULSE_DATABASE_MAX_OVERFLOW", "5")
+        )
+        self.database_pool_timeout_seconds = int(
+            os.getenv("QUANTPULSE_DATABASE_POOL_TIMEOUT_SECONDS", "30")
+        )
+        self.database_pool_recycle_seconds = int(
+            os.getenv("QUANTPULSE_DATABASE_POOL_RECYCLE_SECONDS", "1800")
+        )
+        self.pipeline_retention_enabled = _env_bool(
+            "QUANTPULSE_PIPELINE_RETENTION_ENABLED",
+            False,
+        )
+        self.pipeline_retention_days = int(
+            os.getenv("QUANTPULSE_PIPELINE_RETENTION_DAYS", "30")
+        )
+        self.pipeline_retention_batch_size = int(
+            os.getenv("QUANTPULSE_PIPELINE_RETENTION_BATCH_SIZE", "2500")
+        )
         self.binance_api_key = os.getenv("QUANTPULSE_BINANCE_API_KEY")
         self.binance_api_secret = os.getenv("QUANTPULSE_BINANCE_API_SECRET")
         self.fred_api_key = (
@@ -105,6 +125,26 @@ class Settings:
             raise RuntimeError(
                 "QUANTPULSE_RATE_LIMIT_PER_MINUTE and "
                 "QUANTPULSE_ADMIN_RATE_LIMIT_PER_MINUTE must be positive integers."
+            )
+        if self.database_pool_size < 1:
+            raise RuntimeError("QUANTPULSE_DATABASE_POOL_SIZE must be at least 1.")
+        if self.database_max_overflow < 0:
+            raise RuntimeError("QUANTPULSE_DATABASE_MAX_OVERFLOW cannot be negative.")
+        if self.database_pool_timeout_seconds < 1:
+            raise RuntimeError(
+                "QUANTPULSE_DATABASE_POOL_TIMEOUT_SECONDS must be at least 1."
+            )
+        if self.database_pool_recycle_seconds < 1:
+            raise RuntimeError(
+                "QUANTPULSE_DATABASE_POOL_RECYCLE_SECONDS must be at least 1."
+            )
+        if self.pipeline_retention_days < 7:
+            raise RuntimeError(
+                "QUANTPULSE_PIPELINE_RETENTION_DAYS must be at least 7."
+            )
+        if not 1 <= self.pipeline_retention_batch_size <= 10_000:
+            raise RuntimeError(
+                "QUANTPULSE_PIPELINE_RETENTION_BATCH_SIZE must be between 1 and 10000."
             )
         if self.require_app_auth:
             if not self.app_username:

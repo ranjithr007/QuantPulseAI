@@ -25,6 +25,13 @@ def test_production_api_role_is_cloud_safe_by_default(monkeypatch):
     assert settings.rate_limit_enabled is True
     assert settings.rate_limit_per_minute == 120
     assert settings.admin_rate_limit_per_minute == 30
+    assert settings.database_pool_size == 5
+    assert settings.database_max_overflow == 5
+    assert settings.database_pool_timeout_seconds == 30
+    assert settings.database_pool_recycle_seconds == 1800
+    assert settings.pipeline_retention_enabled is False
+    assert settings.pipeline_retention_days == 30
+    assert settings.pipeline_retention_batch_size == 2500
 
 
 def test_worker_role_owns_scheduler_without_live_listener(monkeypatch):
@@ -66,6 +73,25 @@ def test_non_positive_rate_limit_is_rejected(monkeypatch):
     monkeypatch.setenv("QUANTPULSE_RATE_LIMIT_PER_MINUTE", "0")
 
     with pytest.raises(RuntimeError, match="RATE_LIMIT_PER_MINUTE"):
+        Settings().validate_runtime()
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("QUANTPULSE_DATABASE_POOL_SIZE", "0", "DATABASE_POOL_SIZE"),
+        ("QUANTPULSE_DATABASE_MAX_OVERFLOW", "-1", "DATABASE_MAX_OVERFLOW"),
+        ("QUANTPULSE_DATABASE_POOL_TIMEOUT_SECONDS", "0", "POOL_TIMEOUT"),
+        ("QUANTPULSE_DATABASE_POOL_RECYCLE_SECONDS", "0", "POOL_RECYCLE"),
+        ("QUANTPULSE_PIPELINE_RETENTION_DAYS", "6", "RETENTION_DAYS"),
+        ("QUANTPULSE_PIPELINE_RETENTION_BATCH_SIZE", "0", "BATCH_SIZE"),
+        ("QUANTPULSE_PIPELINE_RETENTION_BATCH_SIZE", "10001", "BATCH_SIZE"),
+    ],
+)
+def test_invalid_database_pool_settings_are_rejected(monkeypatch, name, value, message):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(RuntimeError, match=message):
         Settings().validate_runtime()
 
 
@@ -113,6 +139,10 @@ def test_database_engine_normalizes_provider_postgres_url_before_creation():
 
     assert result is sentinel
     assert create.call_args.args[0] == "postgresql+psycopg://user:pass@host/db"
+    assert create.call_args.kwargs["pool_size"] == 5
+    assert create.call_args.kwargs["max_overflow"] == 5
+    assert create.call_args.kwargs["pool_timeout"] == 30
+    assert create.call_args.kwargs["pool_recycle"] == 1800
 
 
 def test_explicit_sqlite_url_is_not_replaced_by_shared_fallback(tmp_path):

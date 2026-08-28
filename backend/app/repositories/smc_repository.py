@@ -1,9 +1,27 @@
 from app.database.models.market_smc import MarketSMCSignal
 from app.repositories._db_utils import commit_or_rollback
+from app.utils.freshness import normalize_timestamp_to_naive_utc
 
 
 class SMCRepository:
     def save_smc_signal(db, symbol, timeframe, result):
+
+        evidence_timestamp = normalize_timestamp_to_naive_utc(
+            result.get("source_timestamp")
+        )
+        if evidence_timestamp is not None:
+            existing = (
+                db.query(MarketSMCSignal)
+                .filter(
+                    MarketSMCSignal.symbol == symbol,
+                    MarketSMCSignal.timeframe == timeframe,
+                    MarketSMCSignal.created_at == evidence_timestamp,
+                )
+                .order_by(MarketSMCSignal.id.desc())
+                .first()
+            )
+            if existing is not None:
+                return existing
 
         record = MarketSMCSignal(
             symbol=symbol,
@@ -20,6 +38,8 @@ class SMCRepository:
             smc_bias=result["bias"],
             confidence=result["confidence"],
         )
+        if evidence_timestamp is not None:
+            record.created_at = evidence_timestamp
 
         db.add(record)
 
@@ -28,6 +48,23 @@ class SMCRepository:
         return record
 
     def save(self, db, data):
+        evidence_timestamp = normalize_timestamp_to_naive_utc(
+            data.get("source_timestamp")
+        )
+        if evidence_timestamp is not None:
+            existing = (
+                db.query(MarketSMCSignal)
+                .filter(
+                    MarketSMCSignal.symbol == data["symbol"],
+                    MarketSMCSignal.timeframe == data["timeframe"],
+                    MarketSMCSignal.created_at == evidence_timestamp,
+                )
+                .order_by(MarketSMCSignal.id.desc())
+                .first()
+            )
+            if existing is not None:
+                return existing
+
         smc_bias = data.get("smc_bias")
         smc_score = data.get("smc_score")
 
@@ -71,6 +108,8 @@ class SMCRepository:
             confidence=data["smc_score"],
             data_generation_id=data.get("data_generation_id"),
         )
+        if evidence_timestamp is not None:
+            signal.created_at = evidence_timestamp
 
         db.add(signal)
 

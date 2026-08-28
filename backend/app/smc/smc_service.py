@@ -5,6 +5,7 @@ from app.repositories.candle_repository import get_latest_candles
 from app.repositories.smc_repository import SMCRepository
 
 from app.smc.smc_engine import analyze_smc
+from app.utils.freshness import candle_freshness_timestamp
 
 
 def run_smc_analysis(symbol, timeframe):
@@ -20,6 +21,7 @@ def run_smc_analysis(symbol, timeframe):
             return None
 
         result = analyze_smc(candles)
+        result["source_timestamp"] = candle_freshness_timestamp(candles[-1])
 
         SMCRepository.save_smc_signal(db, symbol, timeframe, result)
 

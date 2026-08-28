@@ -1,8 +1,23 @@
 from app.database.models.market_features import MarketFeature
 from app.repositories._db_utils import commit_or_rollback
+from app.utils.freshness import normalize_timestamp_to_naive_utc
 
 
-def save_market_feature(db, feature):
+def save_market_feature(db, feature, *, source_timestamp=None):
+    evidence_timestamp = normalize_timestamp_to_naive_utc(source_timestamp)
+    if evidence_timestamp is not None:
+        existing = (
+            db.query(MarketFeature)
+            .filter(
+                MarketFeature.Symbol == feature["symbol"],
+                MarketFeature.Timeframe == feature["timeframe"],
+                MarketFeature.CreatedAt == evidence_timestamp,
+            )
+            .order_by(MarketFeature.Id.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
 
     record = MarketFeature(
         Symbol=feature["symbol"],
@@ -17,6 +32,8 @@ def save_market_feature(db, feature):
         ATR=feature.get("atr", 0),
         data_generation_id=feature.get("data_generation_id"),
     )
+    if evidence_timestamp is not None:
+        record.CreatedAt = evidence_timestamp
 
     db.add(record)
 

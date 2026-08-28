@@ -46,13 +46,14 @@ def _workspace_sqlite_path() -> Path:
     return sqlite_path
 
 
-def _build_database_engine(database_url: str):
+def _build_database_engine(database_url: str, *, settings=None):
+    runtime_settings = settings or get_settings()
     return create_engine(
         normalize_database_url(database_url),
-        pool_size=20,
-        max_overflow=30,
-        pool_timeout=60,
-        pool_recycle=1800,
+        pool_size=runtime_settings.database_pool_size,
+        max_overflow=runtime_settings.database_max_overflow,
+        pool_timeout=runtime_settings.database_pool_timeout_seconds,
+        pool_recycle=runtime_settings.database_pool_recycle_seconds,
         pool_pre_ping=True,
     )
 
@@ -88,9 +89,12 @@ def _initialize_engine(database_url=None, settings=None, engine_builder=None):
             )
         return _build_sqlite_engine(configured_url), True
 
-    builder = engine_builder or _build_database_engine
     try:
-        database_engine = builder(configured_url)
+        database_engine = (
+            engine_builder(configured_url)
+            if engine_builder is not None
+            else _build_database_engine(configured_url, settings=runtime_settings)
+        )
         with database_engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         return database_engine, False

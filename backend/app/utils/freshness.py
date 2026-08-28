@@ -109,6 +109,20 @@ def normalize_timestamp_to_utc(timestamp):
     return normalized
 
 
+def normalize_timestamp_to_naive_utc(timestamp):
+    """Return a database-safe naive UTC timestamp for evidence identities."""
+    if timestamp is None:
+        return None
+    if isinstance(timestamp, str):
+        timestamp = datetime.fromisoformat(timestamp.strip().replace("Z", "+00:00"))
+    if timestamp.tzinfo is None:
+        # Canonical database timestamps are already stored as naive UTC. Do
+        # not apply the display-oriented local-time heuristic used by status
+        # payloads, because that would change the evidence identity.
+        return timestamp
+    return timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def _as_utc(timestamp, now=None):
     if isinstance(timestamp, str):
         timestamp = datetime.fromisoformat(timestamp.strip().replace("Z", "+00:00"))

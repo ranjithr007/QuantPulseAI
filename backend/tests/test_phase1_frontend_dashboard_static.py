@@ -259,6 +259,23 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertNotIn("<LifecyclePanel", risk_controls)
         self.assertNotIn("Execution readiness", risk_controls)
 
+    def test_live_refresh_uses_websocket_fallback_and_pauses_hidden_pages(self):
+        dashboard_data = (
+            FRONTEND_ROOT / "src" / "hooks" / "useDashboardData.jsx"
+        ).read_text(encoding="utf-8")
+        nginx = (FRONTEND_ROOT / "nginx.conf.template").read_text(encoding="utf-8")
+        dockerfile = (FRONTEND_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn("LIVE_SNAPSHOT_FALLBACK_MS = 30_000", dashboard_data)
+        self.assertIn("LIVE_STATUS_FALLBACK_MS = 60_000", dashboard_data)
+        self.assertIn("liveSocketConnected", dashboard_data)
+        self.assertIn("pageVisible", dashboard_data)
+        self.assertIn("if (!pageVisible) return undefined;", dashboard_data)
+        self.assertNotIn("LIVE_SNAPSHOT_REFRESH_MS = 10_000", dashboard_data)
+        self.assertIn("${QUANTPULSE_API_UPSTREAM}/ws/", nginx)
+        self.assertIn("${QUANTPULSE_API_UPSTREAM}/;", nginx)
+        self.assertIn("ENV QUANTPULSE_API_UPSTREAM=", dockerfile)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,11 +36,9 @@ def save_feature_snapshot(db, snapshot):
     _ensure_snapshot_tables(db)
     existing = _get_existing_feature_snapshot(db, snapshot)
     if existing is not None:
-        generation_id = snapshot.get("data_generation_id")
-        if generation_id and existing.data_generation_id != generation_id:
-            existing.data_generation_id = generation_id
-            existing.snapshot_json = _snapshot_json(snapshot)
-            commit_or_rollback(db)
+        # A point-in-time feature snapshot is immutable evidence. Re-observing
+        # the same candle in a later scheduler generation must not rewrite its
+        # original lineage or create PostgreSQL dead tuples.
         return existing
 
     record = FeatureSnapshot(

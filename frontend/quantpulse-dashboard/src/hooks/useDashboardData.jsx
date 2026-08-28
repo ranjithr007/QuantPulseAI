@@ -23,7 +23,8 @@ import {
   sumWithinDays,
 } from "./dashboardTransforms";
 
-const LIVE_SNAPSHOT_REFRESH_MS = 10_000;
+const LIVE_SNAPSHOT_FALLBACK_MS = 30_000;
+const LIVE_STATUS_FALLBACK_MS = 60_000;
 const OFFICIAL_PAPER_ENTRY_TIMEFRAMES = new Set(["1h", "2h", "4h", "1d"]);
 
 function createInitialDashboardData() {
@@ -298,12 +299,18 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const [data, setData] = useState(createInitialDashboardData);
   const [liveMarket, setLiveMarket] = useState({});
   const [liveStatus, setLiveStatus] = useState({});
+  const [liveSocketConnected, setLiveSocketConnected] = useState(false);
+  const [pageVisible, setPageVisible] = useState(
+    () => document.visibilityState !== "hidden"
+  );
   const [resumeTick, setResumeTick] = useState(0);
   const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState !== "hidden") {
+      const visible = document.visibilityState !== "hidden";
+      setPageVisible(visible);
+      if (visible) {
         setResumeTick((current) => current + 1);
       }
     };
@@ -346,6 +353,13 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
 
       socket.onopen = () => {
         reconnectAttempts = 0;
+        setLiveSocketConnected(true);
+        setLiveStatus((current) => ({
+          ...current,
+          running: true,
+          connected: true,
+          state: "LIVE",
+        }));
       };
 
       socket.onmessage = (event) => {
@@ -380,6 +394,8 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       };
 
       socket.onclose = () => {
+        setLiveSocketConnected(false);
+        setLiveStatus((current) => ({ ...current, connected: false }));
         if (!closed) {
           scheduleReconnect();
         }
@@ -409,6 +425,8 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   }, [symbols]);
 
   useEffect(() => {
+    if (!pageVisible) return undefined;
+
     let cancelled = false;
     const controller = new AbortController();
 
@@ -438,16 +456,20 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     }
 
     refreshSnapshot();
-    const id = window.setInterval(refreshSnapshot, LIVE_SNAPSHOT_REFRESH_MS);
+    const id = liveSocketConnected
+      ? null
+      : window.setInterval(refreshSnapshot, LIVE_SNAPSHOT_FALLBACK_MS);
 
     return () => {
       cancelled = true;
       controller.abort();
-      window.clearInterval(id);
+      if (id) window.clearInterval(id);
     };
-  }, [autoRefreshMs, symbols, resumeTick]);
+  }, [liveSocketConnected, pageVisible, symbols, resumeTick]);
 
   useEffect(() => {
+    if (!pageVisible) return undefined;
+
     let cancelled = false;
     const controller = new AbortController();
 
@@ -476,9 +498,11 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       cancelled = true;
       controller.abort();
     };
-  }, [symbols, resumeTick]);
+  }, [pageVisible, symbols, resumeTick]);
 
   useEffect(() => {
+    if (!pageVisible || liveSocketConnected) return undefined;
+
     let cancelled = false;
     const controller = new AbortController();
 
@@ -492,16 +516,18 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       }
     }
 
-    const id = window.setInterval(pollLiveStatus, LIVE_SNAPSHOT_REFRESH_MS);
+    const id = window.setInterval(pollLiveStatus, LIVE_STATUS_FALLBACK_MS);
 
     return () => {
       cancelled = true;
       controller.abort();
       window.clearInterval(id);
     };
-  }, [resumeTick]);
+  }, [liveSocketConnected, pageVisible, resumeTick]);
 
   useEffect(() => {
+    if (!pageVisible) return undefined;
+
     let cancelled = false;
     const controller = new AbortController();
     let refreshTimer = null;
@@ -578,6 +604,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     filters.watchlistStatus,
     filters.watchlistSide,
     filters.failedMax,
+    pageVisible,
     tick,
     symbols,
   ]);
