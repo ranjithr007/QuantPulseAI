@@ -15,6 +15,31 @@ from app.utils.signal_validation import validate_trade_plan_direction
 
 
 TIMEFRAME_DURABILITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
+TREND_PULLBACK_REGIMES = {"BULL_PULLBACK": "LONG", "BEAR_RALLY": "SHORT"}
+RANGE_REVERSION_REGIMES = {
+    "RANGE_ACCUMULATION": "LONG",
+    "RANGE_DISTRIBUTION": "SHORT",
+}
+
+
+def build_trend_pullback_payload(core_payload, market_participation):
+    return _build_location_strategy_payload(
+        core_payload,
+        market_participation,
+        label="Trend Pullback",
+        execution_profile="TREND_PULLBACK",
+        allowed_regimes=TREND_PULLBACK_REGIMES,
+    )
+
+
+def build_range_reversion_payload(core_payload, market_participation):
+    return _build_location_strategy_payload(
+        core_payload,
+        market_participation,
+        label="Range Reversion",
+        execution_profile="RANGE_REVERSION",
+        allowed_regimes=RANGE_REVERSION_REGIMES,
+    )
 
 
 def build_regime_trend_payload(core_payload):
@@ -150,6 +175,240 @@ def build_liquidation_carry_payload(core_payload, market_participation):
         "data_generation_id": raw.get("data_generation_id"),
         "effective_timestamp": raw.get("effective_timestamp"),
     }
+
+
+def _build_location_strategy_payload(
+    core_payload,
+    market_participation,
+    *,
+    label,
+    execution_profile,
+    allowed_regimes,
+):
+    spot_by_timeframe = {
+        str(item.get("timeframe") or "").lower(): item
+        for item in (
+            ((market_participation or {}).get("spot") or {}).get("timeframes")
+            or []
+        )
+    }
+    timeframes = [
+        _location_timeframe(
+            item,
+            spot_by_timeframe.get(str(item.get("timeframe") or "").lower()),
+            execution_profile=execution_profile,
+            allowed_regimes=allowed_regimes,
+        )
+        for item in (core_payload.get("timeframes") or [])
+    ]
+    labels = tuple(item.get("timeframe") for item in timeframes)
+    blocked_reasons = []
+    if labels != tuple(OFFICIAL_ENTRY_TIMEFRAMES):
+        blocked_reasons.append("All governed timeframes must be scanned")
+    if str(core_payload.get("mode") or "intraday").lower() != "intraday":
+        blocked_reasons.append(
+            f"{label} is enabled for governed intraday paper validation only"
+        )
+
+    selected = max(
+        (item for item in timeframes if item.get("route_status") == "READY"),
+        key=_candidate_rank,
+        default=None,
+    )
+    if selected is None:
+        first_reason = next(
+            (item.get("route_reason") for item in timeframes if item.get("route_reason")),
+            None,
+        )
+        blocked_reasons.append(
+            first_reason or f"{label} has no confirmed entry location"
+        )
+
+    side = (selected or {}).get("route_side")
+    confidence = abs(_number((selected or {}).get("score")))
+    trade_plan = _adaptive_trade_plan(
+        core_payload,
+        selected,
+        side,
+        confidence,
+        execution_profile,
+    )
+    validation = _validation(side, trade_plan, blocked_reasons)
+    ready = not blocked_reasons and validation["is_valid"]
+    return {
+        "symbol": core_payload["symbol"],
+        "source": label.lower().replace(" ", "_") + "_strategy",
+        "mode": core_payload.get("mode") or "intraday",
+        "timeframes_used": list(OFFICIAL_ENTRY_TIMEFRAMES),
+        "timeframes": timeframes,
+        "confirmation": {
+            "confidence": round(confidence, 2),
+            "overall_bias": _direction((selected or {}).get("score")),
+            "regime_route": execution_profile,
+        },
+        "trigger": {
+            "status": "READY" if ready else "WAIT",
+            "side": side,
+            "entry_timeframe": (selected or {}).get("timeframe"),
+            "reason": (
+                f"{label} location and spot confirmation are ready"
+                if ready
+                else blocked_reasons[0]
+                if blocked_reasons
+                else f"{label} trade plan is invalid"
+            ),
+            "conditions": (selected or {}).get("route_conditions") or [],
+            "execution_profile": execution_profile,
+        },
+        "trade_plan": trade_plan,
+        "trade_plan_validation": validation,
+        "data_generation_id": (
+            (market_participation or {}).get("data_generation_id")
+            or core_payload.get("data_generation_id")
+        ),
+    }
+
+
+def _location_timeframe(core, spot, *, execution_profile, allowed_regimes):
+    component_map = core.get("component_scores") or {}
+    feature = component_map.get("feature") or {}
+    regime_component = component_map.get("regime") or {}
+    regime = str(regime_component.get("value") or "UNKNOWN").upper()
+    expected_side = allowed_regimes.get(regime)
+    feature_score = _number(feature.get("score"))
+    regime_score = _number(regime_component.get("score"))
+    strategy_score = _clamp((feature_score + regime_score) / 49.0 * 100, -100, 100)
+    score_side = _side(strategy_score)
+    atr = _optional_number(core.get("atr"))
+    price = _optional_number((spot or {}).get("spot_price"))
+    ema20 = _optional_number((spot or {}).get("ema20"))
+    cvd = _optional_number((spot or {}).get("spot_cvd_percent"))
+    zone_name = "support" if expected_side == "LONG" else "resistance"
+    zone = (spot or {}).get(zone_name) or {}
+    structure_level = _optional_number(
+        zone.get("lower") if expected_side == "LONG" else zone.get("upper")
+    )
+    distance_percent = abs(_number(zone.get("distance_percent")))
+    atr_percent = atr / price * 100 if atr and price else 0.0
+    proximity_limit = max(0.75, min(2.5, atr_percent * 1.25))
+    fresh = bool(
+        core.get("status") == "OK"
+        and not (core.get("freshness") or {}).get("is_stale", True)
+        and not ((core.get("inputs") or {}).get("feature") or {}).get("is_stale", True)
+        and not ((core.get("inputs") or {}).get("regime") or {}).get("is_stale", True)
+        and (spot or {}).get("status") == "READY"
+    )
+    directional_spot = bool(
+        cvd is not None
+        and ((expected_side == "LONG" and cvd > 0) or (expected_side == "SHORT" and cvd < 0))
+    )
+    ema_confirmed = bool(
+        price is not None
+        and ema20 is not None
+        and (
+            (expected_side == "LONG" and price >= ema20)
+            or (expected_side == "SHORT" and price <= ema20)
+        )
+    )
+    zone_confirmed = bool(
+        structure_level is not None
+        and int(zone.get("tests") or 0) >= 2
+        and distance_percent <= proximity_limit
+        and bool(zone.get("latest_rejected"))
+    )
+    regime_allowed = expected_side is not None
+    score_aligned = score_side == expected_side
+    atr_ready = atr is not None and atr > 0
+    conditions = [
+        {"name": "fresh_evidence", "passed": fresh},
+        {"name": "route_regime", "passed": regime_allowed},
+        {"name": "score_direction", "passed": score_aligned},
+        {"name": "spot_cvd", "passed": directional_spot},
+        {"name": "ema_reclaim_or_rejection", "passed": ema_confirmed},
+        {"name": "tested_boundary_rejection", "passed": zone_confirmed},
+        {"name": "fresh_atr", "passed": atr_ready},
+    ]
+    ready = all(item["passed"] for item in conditions)
+    reason = None
+    if not fresh:
+        reason = "Fresh core and spot evidence is required"
+    elif not regime_allowed:
+        reason = _route_wait_reason(regime, execution_profile)
+    elif not score_aligned:
+        reason = "Feature and regime score does not confirm the routed direction"
+    elif not directional_spot:
+        reason = "Spot CVD does not confirm the routed direction"
+    elif not ema_confirmed:
+        reason = "Price has not confirmed the EMA reclaim or rejection"
+    elif not zone_confirmed:
+        reason = "Price is not at a tested support/resistance rejection boundary"
+    elif not atr_ready:
+        reason = "Fresh ATR is required for volatility-aware risk"
+    return {
+        **core,
+        "spot_evidence": spot or {},
+        "score": round(strategy_score, 2),
+        "confidence": round(abs(strategy_score), 2),
+        "signal": expected_side if ready else "WAIT",
+        "bias": _direction(strategy_score),
+        "regime": regime,
+        "regime_route": execution_profile if regime_allowed else "WAIT",
+        "route_side": expected_side if ready else None,
+        "route_status": "READY" if ready else "WAIT",
+        "route_reason": reason,
+        "route_conditions": conditions,
+        "entry_location": {
+            "zone": zone_name if expected_side else None,
+            "structure_level": structure_level,
+            "distance_percent": distance_percent if zone else None,
+            "proximity_limit_percent": round(proximity_limit, 4),
+            "tests": zone.get("tests"),
+            "rejection_confirmed": bool(zone.get("latest_rejected")),
+        },
+        "atr": atr,
+    }
+
+
+def _adaptive_trade_plan(
+    core_payload,
+    selected,
+    side,
+    confidence,
+    execution_profile,
+):
+    if selected is None or side is None:
+        return None
+    price = _number(
+        (selected.get("spot_evidence") or {}).get("spot_price")
+        or selected.get("current_price")
+    )
+    atr = _optional_number(selected.get("atr"))
+    structure_level = _optional_number(
+        (selected.get("entry_location") or {}).get("structure_level")
+    )
+    if price <= 0 or atr is None or atr <= 0 or structure_level is None:
+        return None
+    return build_trade_plan(
+        side,
+        price,
+        atr=atr,
+        confidence=confidence,
+        symbol=core_payload["symbol"],
+        timeframe=selected.get("timeframe"),
+        execution_profile=execution_profile,
+        structure_level=structure_level,
+    )
+
+
+def _route_wait_reason(regime, execution_profile):
+    if regime in {"RANGE_NEUTRAL", "LOW_VOLATILITY_COMPRESSION", "MANIPULATION_PHASE"}:
+        return f"{regime} is a WAIT regime"
+    if execution_profile == "TREND_PULLBACK" and regime in {
+        "TRENDING_BULL",
+        "TRENDING_BEAR",
+    }:
+        return "Trend is extended; wait for a pullback or rally entry"
+    return f"{regime} is not routed to {execution_profile}"
 
 
 def _build_component_payload(

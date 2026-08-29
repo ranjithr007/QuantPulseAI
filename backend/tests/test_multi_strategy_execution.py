@@ -36,7 +36,7 @@ def _core_payload(now, *, ready=True):
         },
         "regime": {
             "score": 20.0 if ready else 5.0,
-            "value": "TRENDING_BULL" if ready else "RANGE",
+            "value": "BULL_PULLBACK" if ready else "RANGE",
             "reason": "Bull regime" if ready else "Neutral regime",
         },
         "orderflow": {
@@ -63,12 +63,23 @@ def _core_payload(now, *, ready=True):
                 "confidence": 55.0 if ready else 22.0,
                 "bias": "BULLISH" if ready else "NEUTRAL",
                 "current_price": 700.0,
+                "atr": 7.0,
                 "freshness": {"is_stale": False},
                 "inputs": {
                     name: {"is_stale": False}
                     for name in ("feature", "regime", "orderflow", "smc")
                 },
-                "component_scores": component_scores,
+                "component_scores": {
+                    **component_scores,
+                    "regime": {
+                        **component_scores["regime"],
+                        "value": (
+                            "BULL_PULLBACK"
+                            if timeframe in {"1h", "2h"}
+                            else "RANGE_ACCUMULATION"
+                        ) if ready else "RANGE",
+                    },
+                },
             }
             for timeframe in ("1h", "2h", "4h", "1d")
         ],
@@ -115,6 +126,26 @@ def _market_move(now, *, carry_ready=False):
                     "direction": "BULLISH",
                     "score": score,
                     "spot_price": 702.0,
+                    "ema20": 700.0,
+                    "spot_cvd_percent": 2.0,
+                    "support": {
+                        "lower": 694.0,
+                        "upper": 700.0,
+                        "center": 697.0,
+                        "tests": 3,
+                        "distance_percent": -0.71,
+                        "latest_rejected": True,
+                        "breakdown_accepted": False,
+                    },
+                    "resistance": {
+                        "lower": 710.0,
+                        "upper": 714.0,
+                        "center": 712.0,
+                        "tests": 3,
+                        "distance_percent": 1.42,
+                        "latest_rejected": False,
+                        "breakout_accepted": False,
+                    },
                     "source_timestamp": now,
                 }
                 for timeframe, score in (

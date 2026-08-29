@@ -36,6 +36,7 @@ from app.intelligence.contradiction_engine import build_contradiction_report
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.paper_trading.exit_policy import approval_target_for_policy
 from app.paper_trading.exit_policy import build_policy_trade_levels
+from app.paper_trading.exit_policy import PAPER_ADAPTIVE_EXIT_POLICY
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
@@ -817,6 +818,27 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
 
         eligible_by_symbol = defaultdict(list)
         for candidate in records:
+            plan_definition = strategy_definition(
+                (candidate.get("trade_plan") or {}).get("strategy_id")
+            ) or {}
+            if (
+                candidate["eligible"]
+                and plan_definition.get("official_execution_enabled") is not True
+            ):
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_research_only_official_execution",
+                        "strategy_id": plan_definition.get("id"),
+                        "blocked_reasons": [
+                            "Strategy remains in isolated Strategy Paper research; "
+                            "official paper execution is reserved for governed "
+                            "regime-routed strategies"
+                        ],
+                    }
+                )
+                continue
             if not candidate["eligible"]:
                 coin_blockers = (
                     candidate.get("blocker_scopes", {}).get("coin") or []
@@ -1108,6 +1130,20 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         (candidate.get("fill_profile") or {}).get("fee_bps", DEFAULT_FEE_BPS)
     )
     precision = _paper_trade_price_precision(mark_price)
+    adaptive_policy = (
+        str(trade_plan.get("exit_policy") or "").upper()
+        == PAPER_ADAPTIVE_EXIT_POLICY
+    )
+    signal_entry = _finite_float(trade_plan.get("entry_price"))
+    signal_stop = _finite_float(trade_plan.get("stop_loss"))
+    planned_stop_percent = (
+        abs(signal_entry - signal_stop) / signal_entry * 100
+        if adaptive_policy
+        and signal_entry is not None
+        and signal_entry > 0
+        and signal_stop is not None
+        else None
+    )
     mark_levels = build_policy_trade_levels(
         side,
         mark_price,
@@ -1116,6 +1152,10 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         confidence=confidence,
         fee_bps=fee_bps,
         price_precision=precision,
+        execution_profile=(
+            PAPER_ADAPTIVE_EXIT_POLICY if adaptive_policy else None
+        ),
+        stop_loss_percent=planned_stop_percent,
     )
     if mark_levels is None:
         return candidate, "No paper exit policy is available for the selected timeframe"
@@ -1141,6 +1181,10 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         confidence=confidence,
         fee_bps=fee_bps,
         price_precision=_paper_trade_price_precision(entry_fill),
+        execution_profile=(
+            PAPER_ADAPTIVE_EXIT_POLICY if adaptive_policy else None
+        ),
+        stop_loss_percent=planned_stop_percent,
     )
     if execution_levels is None:
         return candidate, "Paper exit levels could not be recalculated from the new entry"
@@ -1163,7 +1207,6 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
             f"{execution_risk.get('reason') or 'unknown reason'}"
         )
 
-    signal_entry = _finite_float(trade_plan.get("entry_price"))
     entry_drift_percent = None
     if signal_entry is not None and signal_entry > 0:
         entry_drift_percent = round((mark_price - signal_entry) / signal_entry * 100, 4)
@@ -1185,11 +1228,22 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         "target2": execution_risk["targets"]["t2"],
         "authorization_risk_decision_id": authorization_risk.get("id"),
     }
+    execution_stop_percent = (
+        abs(entry_fill - float(execution_levels["stop_loss"]))
+        / entry_fill
+        * 100
+    )
+    paper_sizing = build_inr_paper_sizing(
+        confidence,
+        fee_bps=fee_bps,
+        stop_loss_percent=execution_stop_percent,
+    )
 
     return {
         **candidate,
         "fill_profile": fill_profile,
         "execution_risk": execution_risk,
+        "paper_sizing": paper_sizing,
     }, None
 
 
@@ -2486,9 +2540,17 @@ def _paper_trade_candidate(
     strategy_snapshot=None,
 ):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
+    planned_stop_percent = (
+        abs(float(trade.entry_price) - float(trade.stop_loss))
+        / float(trade.entry_price)
+        * 100
+        if trade.entry_price and trade.stop_loss is not None
+        else 0.75
+    )
     paper_sizing = build_inr_paper_sizing(
         risk_payload.get("confidence", trade.confidence or 0),
         fee_bps=DEFAULT_FEE_BPS,
+        stop_loss_percent=planned_stop_percent,
     )
     fill_profile = build_fill_profile(
         side=trade.side,

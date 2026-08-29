@@ -23,6 +23,12 @@ ORDERFLOW_SMC_DECISION_VERSION = "orderflow_smc_strategy_v1"
 LIQUIDATION_CARRY_STRATEGY_ID = "LIQUIDATION_CARRY"
 LIQUIDATION_CARRY_STRATEGY_VERSION = "liquidation_carry_v1"
 LIQUIDATION_CARRY_DECISION_VERSION = "liquidation_carry_strategy_v1"
+TREND_PULLBACK_STRATEGY_ID = "TREND_PULLBACK"
+TREND_PULLBACK_STRATEGY_VERSION = "trend_pullback_v1"
+TREND_PULLBACK_DECISION_VERSION = "trend_pullback_strategy_v1"
+RANGE_REVERSION_STRATEGY_ID = "RANGE_REVERSION"
+RANGE_REVERSION_STRATEGY_VERSION = "range_reversion_v1"
+RANGE_REVERSION_DECISION_VERSION = "range_reversion_strategy_v1"
 LEGACY_UNATTRIBUTED_STRATEGY_ID = "LEGACY_UNATTRIBUTED"
 LEGACY_UNATTRIBUTED_STRATEGY_VERSION = "pre_strategy_lineage_v0"
 
@@ -45,6 +51,7 @@ CORE_SIGNAL_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
+    "official_execution_enabled": False,
 }
 
 MARKET_MOVE_STRATEGY = {
@@ -66,6 +73,7 @@ MARKET_MOVE_STRATEGY = {
     "requires_market_participation_confirmation": True,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
+    "official_execution_enabled": False,
 }
 
 REGIME_TREND_STRATEGY = {
@@ -88,6 +96,7 @@ REGIME_TREND_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
+    "official_execution_enabled": False,
 }
 
 ORDERFLOW_SMC_STRATEGY = {
@@ -110,6 +119,7 @@ ORDERFLOW_SMC_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
+    "official_execution_enabled": False,
 }
 
 LIQUIDATION_CARRY_STRATEGY = {
@@ -132,6 +142,7 @@ LIQUIDATION_CARRY_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
+    "official_execution_enabled": False,
 }
 
 CORE_FUSION_STRATEGY = {
@@ -153,6 +164,53 @@ CORE_FUSION_STRATEGY = {
     "requires_core_signal": True,
     "one_active_trade_per_symbol": True,
     "execution_priority": 30,
+    "official_execution_enabled": False,
+}
+
+TREND_PULLBACK_STRATEGY = {
+    "id": TREND_PULLBACK_STRATEGY_ID,
+    "version": TREND_PULLBACK_STRATEGY_VERSION,
+    "decision_version": TREND_PULLBACK_DECISION_VERSION,
+    "name": "Trend Pullback",
+    "description": (
+        "Governed intraday trend entry after a pullback/rally, tested boundary "
+        "rejection, EMA confirmation, directional spot CVD and fresh ATR."
+    ),
+    "strategy_type": "REGIME_ROUTED",
+    "execution_scope": "PAPER_ONLY",
+    "status": "ACTIVE",
+    "signal_threshold": 40.0,
+    "full_size_threshold": 60.0,
+    "official_timeframes": ["1h", "2h", "4h", "1d"],
+    "requires_core_signal": False,
+    "requires_market_participation_confirmation": False,
+    "one_active_trade_per_symbol": True,
+    "execution_priority": 100,
+    "official_execution_enabled": True,
+    "enabled_modes": ["intraday"],
+}
+
+RANGE_REVERSION_STRATEGY = {
+    "id": RANGE_REVERSION_STRATEGY_ID,
+    "version": RANGE_REVERSION_STRATEGY_VERSION,
+    "decision_version": RANGE_REVERSION_DECISION_VERSION,
+    "name": "Range Reversion",
+    "description": (
+        "Governed intraday range-boundary entry after tested support/resistance "
+        "rejection with directional spot CVD and fresh ATR."
+    ),
+    "strategy_type": "REGIME_ROUTED",
+    "execution_scope": "PAPER_ONLY",
+    "status": "ACTIVE",
+    "signal_threshold": 40.0,
+    "full_size_threshold": 60.0,
+    "official_timeframes": ["1h", "2h", "4h", "1d"],
+    "requires_core_signal": False,
+    "requires_market_participation_confirmation": False,
+    "one_active_trade_per_symbol": True,
+    "execution_priority": 100,
+    "official_execution_enabled": True,
+    "enabled_modes": ["intraday"],
 }
 
 STRATEGY_REGISTRY = {
@@ -162,6 +220,8 @@ STRATEGY_REGISTRY = {
     ORDERFLOW_SMC_STRATEGY_ID: ORDERFLOW_SMC_STRATEGY,
     LIQUIDATION_CARRY_STRATEGY_ID: LIQUIDATION_CARRY_STRATEGY,
     CORE_FUSION_STRATEGY_ID: CORE_FUSION_STRATEGY,
+    TREND_PULLBACK_STRATEGY_ID: TREND_PULLBACK_STRATEGY,
+    RANGE_REVERSION_STRATEGY_ID: RANGE_REVERSION_STRATEGY,
 }
 
 

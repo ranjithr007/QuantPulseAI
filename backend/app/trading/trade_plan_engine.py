@@ -14,6 +14,9 @@ def build_trade_plan(
     *,
     symbol=None,
     timeframe=None,
+    execution_profile=None,
+    structure_level=None,
+    stop_loss_percent=None,
 ):
     precision = price_precision(current_price)
 
@@ -41,6 +44,10 @@ def build_trade_plan(
         confidence=confidence,
         fee_bps=fee_bps,
         price_precision=precision,
+        execution_profile=execution_profile,
+        atr=atr,
+        structure_level=structure_level,
+        stop_loss_percent=stop_loss_percent,
     )
     if policy_levels is not None:
         return {
@@ -63,6 +70,10 @@ def build_trade_plan(
             "exit_policy": policy_levels["name"],
             "target1_fraction": policy_levels["target1_fraction"],
             "max_hold_hours": policy_levels["max_hold_hours"],
+            "execution_profile": policy_levels.get("execution_profile"),
+            "stop_model": policy_levels.get("stop_model"),
+            "atr_stop_multiple": policy_levels.get("atr_stop_multiple"),
+            "structure_level": policy_levels.get("structure_level"),
         }
 
     stop_distance = entry * (DEFAULT_STOP_LOSS_PERCENT / 100)

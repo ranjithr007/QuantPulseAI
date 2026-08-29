@@ -64,10 +64,11 @@ eligibility gates and may block a candidate. This threshold does not bypass
 direction, reward/risk, timeframe confirmation, freshness, risk, or the
 one-active-trade lock.
 
-Every configured cryptocurrency on each official paper-entry timeframe uses one
-staged exit policy measured from the actual paper entry price: **0.75% stop-loss**,
-**1.5% Target 1**, and **2.3% Target 2**. Target 1 closes 50% of the position and
-moves the remaining stop to the entry price. Target 2 closes the remaining 50%.
+Legacy strategy-comparison entries use the fixed staged exit policy measured
+from the actual paper entry price: **0.75% stop-loss**, **1.5% Target 1**, and
+**2.3% Target 2**. Target 1 closes 75% of the position and advances the remaining
+stop to halfway between entry and Target 1. The regime-routed official paper
+strategies use the separately versioned ATR/structure policy in QP-TI-004.
 Any remainder still open after **48 hours** must close using the governed paper
 fill model. The target engine must continue estimating adverse entry/exit
 slippage and the configured **0.15% round-trip transaction fee** (`7.5` basis
@@ -239,8 +240,9 @@ timeframe must not be labelled with another timeframe's eligibility.
 ## QP-TI-003: Strategy isolation and attribution
 
 **Status:** Core Signal, Market Move, Regime Trend, Order Flow SMC, Liquidation
-Carry, and Core Fusion paper strategies are implemented under one shared
-execution contract. Live exchange execution remains disabled.
+Carry, Core Fusion, Trend Pullback, and Range Reversion paper strategies are
+implemented under one shared execution contract. Live exchange execution
+remains disabled.
 
 Every scan must evaluate all registered active strategies independently:
 
@@ -257,9 +259,18 @@ Every scan must evaluate all registered active strategies independently:
 - `LIQUIDATION_CARRY` requires fresh funding and open-interest evidence plus
   observed liquidation pressure. Estimated or missing liquidation evidence is
   never executable.
+- `TREND_PULLBACK` requires a `BULL_PULLBACK` or `BEAR_RALLY` regime, an aligned
+  score of at least 40, directional spot CVD, EMA reclaim/rejection, a tested
+  dynamic boundary rejection, and fresh ATR.
+- `RANGE_REVERSION` requires `RANGE_ACCUMULATION` or `RANGE_DISTRIBUTION`, an
+  aligned score of at least 40, directional spot CVD, EMA confirmation, and a
+  tested dynamic support/resistance rejection near the current price.
 
 Each eligible result owns a separate candidate plan. Those plans compete for one
 paper execution; they do not create simultaneous positions for the same coin.
+The six legacy score-led strategies remain available in isolated Strategy Paper
+research. Only `TREND_PULLBACK` and `RANGE_REVERSION` may currently win the
+consolidated official paper lane; this restriction cannot enable live execution.
 
 For forward strategy comparison, every trade-level-eligible strategy also opens
 an isolated **Strategy Paper position**. The legacy `strategy_shadow_trades`
@@ -279,9 +290,11 @@ hold at most one open Strategy Paper position per symbol across `1h`, `2h`,
 
 The official paper portfolio still selects one deterministic winner and permits
 only one active consolidated position per symbol across every strategy,
-direction, and timeframe. Strategy comparison requires at least 30 closed
-Strategy Paper trades per active strategy before a research leader is reported. That ranking is evidence
-for a later human production decision and never enables live orders automatically.
+direction, and timeframe. A strategy is labelled a promotion candidate only
+after at least 30 closed Strategy Paper trades, win rate at least 55%, profit
+factor at least 1.30, and positive cost-adjusted expectancy. Comparison is
+evidence for a later human production decision and never enables live orders
+automatically.
 
 Every strategy must have an immutable `strategy_id` and `strategy_version`.
 Changing entry rules, confirmation gates, sizing, or exits requires a new
@@ -334,6 +347,33 @@ as a current strategy, all registered active strategies can produce separate can
 plans, Market Move can proceed when Core Signal is WAIT, the shared symbol lock
 holds across strategies, strategy metrics do not include another strategy/version,
 and dashboard candidate reasons come from persisted strategy evidence.
+
+## QP-TI-004: Regime-routed entry location and adaptive risk
+
+**Status:** Enabled for governed intraday paper validation only. Scalp, swing,
+position, and all live exchange execution remain disabled for this policy.
+
+The regime router must not turn a large score into an immediate trade. It routes
+each independently calculated `1h`, `2h`, `4h`, and `1d` regime as follows:
+
+- `BULL_PULLBACK` and `BEAR_RALLY` may enter only through `TREND_PULLBACK`;
+- `RANGE_ACCUMULATION` and `RANGE_DISTRIBUTION` may enter only through
+  `RANGE_REVERSION`;
+- extended trends wait for a pullback/rally;
+- `RANGE_NEUTRAL`, `LOW_VOLATILITY_COMPRESSION`, `MANIPULATION_PHASE`, missing
+  evidence, and unsupported regimes remain `WAIT`.
+
+An executable entry requires fresh core and spot evidence, a tested dynamic
+support/resistance zone with at least two tests, a confirmed rejection at that
+zone, directional spot CVD, direction-appropriate EMA confirmation, and a fresh
+positive ATR. Middle-of-range and score-only entries fail closed.
+
+The initial stop is the farther of one ATR or the relevant structure boundary
+plus a 0.25 ATR buffer, capped at 2.5 ATR. Target 1 is calculated for at least
+1.5 net R after configured fees/slippage; Target 2 is calculated for at least
+2.3 net R. Target 1 retains the governed 75% partial exit and protection-stop
+lifecycle. INR loss estimates must use the actual adaptive stop percentage, not
+the legacy 0.75% assumption.
 
 # INR-M paper-wallet sizing
 

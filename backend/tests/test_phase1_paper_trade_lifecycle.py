@@ -22,9 +22,9 @@ from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
 from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.trading.trade_plan_engine import build_trade_plan
-from app.strategies.registry import CORE_FUSION_DECISION_VERSION
-from app.strategies.registry import CORE_FUSION_STRATEGY_ID
-from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
+from app.strategies.registry import TREND_PULLBACK_DECISION_VERSION
+from app.strategies.registry import TREND_PULLBACK_STRATEGY_ID
+from app.strategies.registry import TREND_PULLBACK_STRATEGY_VERSION
 
 
 def _enabled_automation_settings():
@@ -115,9 +115,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             source_timestamp=now,
             effective_timestamp=now,
             feature_version="feature_factory_v1",
-            decision_version=CORE_FUSION_DECISION_VERSION,
-            strategy_id=CORE_FUSION_STRATEGY_ID,
-            strategy_version=CORE_FUSION_STRATEGY_VERSION,
+            decision_version=TREND_PULLBACK_DECISION_VERSION,
+            strategy_id=TREND_PULLBACK_STRATEGY_ID,
+            strategy_version=TREND_PULLBACK_STRATEGY_VERSION,
             quality_state="OK",
             decision="ELIGIBLE",
             confidence=confidence,
@@ -207,8 +207,8 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 entry_timeframe="1h",
                 timeframe_stack="1h,4h,1d",
                 regime="TRENDING_BULL",
-                strategy_id=CORE_FUSION_STRATEGY_ID,
-                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_id=TREND_PULLBACK_STRATEGY_ID,
+                strategy_version=TREND_PULLBACK_STRATEGY_VERSION,
                 strategy_decision_snapshot_id=snapshot.id,
                 status="OPEN",
                 created_at=now - timedelta(minutes=2),
@@ -229,8 +229,8 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     position_size=1.25,
                     risk_percent=1.0,
                     confidence=80.0,
-                    strategy_id=CORE_FUSION_STRATEGY_ID,
-                    strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                    strategy_id=TREND_PULLBACK_STRATEGY_ID,
+                    strategy_version=TREND_PULLBACK_STRATEGY_VERSION,
                     strategy_decision_snapshot_id=snapshot.id,
                     created_at=now - timedelta(minutes=1),
                 )
@@ -402,8 +402,8 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 entry_timeframe="1h",
                 timeframe_stack="1h,4h,1d",
                 regime="TRENDING_BULL",
-                strategy_id=CORE_FUSION_STRATEGY_ID,
-                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_id=TREND_PULLBACK_STRATEGY_ID,
+                strategy_version=TREND_PULLBACK_STRATEGY_VERSION,
                 strategy_decision_snapshot_id=reentry_snapshot.id,
                 status="OPEN",
                 created_at=decision_time - timedelta(seconds=2),
@@ -424,8 +424,8 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     position_size=1.25,
                     risk_percent=1.0,
                     confidence=80.0,
-                    strategy_id=CORE_FUSION_STRATEGY_ID,
-                    strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                    strategy_id=TREND_PULLBACK_STRATEGY_ID,
+                    strategy_version=TREND_PULLBACK_STRATEGY_VERSION,
                     strategy_decision_snapshot_id=reentry_snapshot.id,
                     created_at=decision_time - timedelta(seconds=1),
                 )
@@ -503,8 +503,8 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                 exit_policy=governed["exit_policy"],
                 target1_fraction=governed["target1_fraction"],
                 max_hold_hours=governed["max_hold_hours"],
-                strategy_id=CORE_FUSION_STRATEGY_ID,
-                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_id=TREND_PULLBACK_STRATEGY_ID,
+                strategy_version=TREND_PULLBACK_STRATEGY_VERSION,
                 strategy_decision_snapshot_id=snapshot.id,
                 status="OPEN",
                 created_at=now - timedelta(minutes=2),
@@ -525,8 +525,8 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     position_size=1.0,
                     risk_percent=0.5,
                     confidence=50.0,
-                    strategy_id=CORE_FUSION_STRATEGY_ID,
-                    strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                    strategy_id=TREND_PULLBACK_STRATEGY_ID,
+                    strategy_version=TREND_PULLBACK_STRATEGY_VERSION,
                     strategy_decision_snapshot_id=snapshot.id,
                     created_at=now - timedelta(minutes=1),
                 )

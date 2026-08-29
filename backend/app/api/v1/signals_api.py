@@ -58,11 +58,15 @@ from app.strategies.registry import LIQUIDATION_CARRY_STRATEGY_ID
 from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
 from app.strategies.registry import ORDERFLOW_SMC_STRATEGY_ID
 from app.strategies.registry import REGIME_TREND_STRATEGY_ID
+from app.strategies.registry import RANGE_REVERSION_STRATEGY_ID
 from app.strategies.registry import STRATEGY_REGISTRY
+from app.strategies.registry import TREND_PULLBACK_STRATEGY_ID
 from app.strategies.registry import strategy_definition
 from app.strategies.candidate_builders import build_liquidation_carry_payload
 from app.strategies.candidate_builders import build_orderflow_smc_payload
+from app.strategies.candidate_builders import build_range_reversion_payload
 from app.strategies.candidate_builders import build_regime_trend_payload
+from app.strategies.candidate_builders import build_trend_pullback_payload
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
@@ -1779,6 +1783,14 @@ def _persist_strategy_candidates(db, payload, market_participation):
         payload,
         market_participation,
     )
+    trend_pullback_payload = build_trend_pullback_payload(
+        payload,
+        market_participation,
+    )
+    range_reversion_payload = build_range_reversion_payload(
+        payload,
+        market_participation,
+    )
     core_snapshot = _persist_core_signal_strategy_snapshot(
         db,
         payload,
@@ -1801,6 +1813,8 @@ def _persist_strategy_candidates(db, payload, market_participation):
     liquidation_carry_definition = strategy_definition(
         LIQUIDATION_CARRY_STRATEGY_ID
     )
+    trend_pullback_definition = strategy_definition(TREND_PULLBACK_STRATEGY_ID)
+    range_reversion_definition = strategy_definition(RANGE_REVERSION_STRATEGY_ID)
     regime_trend_snapshot = _persist_derived_strategy_snapshot(
         db,
         regime_trend_payload,
@@ -1817,6 +1831,20 @@ def _persist_strategy_candidates(db, payload, market_participation):
         db,
         liquidation_carry_payload,
         liquidation_carry_definition,
+        market_participation=market_participation,
+        effective_timestamp=evaluation_timestamp,
+    )
+    trend_pullback_snapshot = _persist_derived_strategy_snapshot(
+        db,
+        trend_pullback_payload,
+        trend_pullback_definition,
+        market_participation=market_participation,
+        effective_timestamp=evaluation_timestamp,
+    )
+    range_reversion_snapshot = _persist_derived_strategy_snapshot(
+        db,
+        range_reversion_payload,
+        range_reversion_definition,
         market_participation=market_participation,
         effective_timestamp=evaluation_timestamp,
     )
@@ -1850,6 +1878,16 @@ def _persist_strategy_candidates(db, payload, market_participation):
             "definition": strategy_definition(CORE_FUSION_STRATEGY_ID),
             "payload": payload,
             "snapshot": fusion_snapshot,
+        },
+        {
+            "definition": trend_pullback_definition,
+            "payload": trend_pullback_payload,
+            "snapshot": trend_pullback_snapshot,
+        },
+        {
+            "definition": range_reversion_definition,
+            "payload": range_reversion_payload,
+            "snapshot": range_reversion_snapshot,
         },
     ]
 
@@ -2088,6 +2126,13 @@ def _persist_governed_strategy_snapshot(
             "side": side,
             "selected_timeframe": timeframe,
             "selected_score": selected.get("score"),
+            "regime_route": selected.get("regime_route"),
+            "entry_location": selected.get("entry_location"),
+            "route_conditions": selected.get("route_conditions") or [],
+            "stop_model": (payload.get("trade_plan") or {}).get("stop_model"),
+            "execution_profile": (payload.get("trade_plan") or {}).get(
+                "execution_profile"
+            ),
             "market_participation": market_participation or {},
             "blocked_reasons": list(blocked_reasons),
             "one_active_trade_per_symbol": True,
@@ -2872,6 +2917,7 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
         data["feature"], data["regime"], data["orderflow"], data["smc"]
     )
     probability = build_probability_profile(db, symbol, timeframe, freshness_window)
+    observed_atr = _observed_atr(data["feature"])
 
     return {
         "symbol": symbol,
@@ -2885,6 +2931,13 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
         "confidence": signal["confidence"],
         "score": signal["score"],
         "current_price": float(candle.close_price),
+        # Regime-routed candidates must fail closed when observed volatility is
+        # unavailable. The legacy plan paths may retain the 1% planning fallback,
+        # but it must never be presented as fresh strategy evidence.
+        "atr": observed_atr,
+        "atr_source": (
+            "MARKET_FEATURE" if observed_atr is not None else "UNAVAILABLE"
+        ),
         "candle_time": candle.candle_time,
         "freshness": freshness_status(
             candle_freshness_timestamp(candle),
@@ -2934,6 +2987,15 @@ def _latest_atr(feature, current_price):
         return float(atr)
 
     return current_price * 0.01
+
+
+def _observed_atr(feature):
+    atr = getattr(feature, "ATR", None) if feature else None
+    try:
+        atr = float(atr)
+    except (TypeError, ValueError):
+        return None
+    return atr if atr > 0 else None
 
 
 def _latest_persisted_signal(db, symbol, timeframe=None, stale_after_seconds=900):

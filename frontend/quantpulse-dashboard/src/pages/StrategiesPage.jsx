@@ -70,13 +70,18 @@ export default function StrategiesPage() {
 
 function ComparisonBanner({ comparison }) {
   if (!comparison) return null;
-  const ready = comparison.status === "COMPARABLE";
+  const ready = comparison.status === "EVIDENCE_READY";
+  const leader = comparison.research_leader_strategy_id;
   return (
     <div className="mt-4 flex flex-col gap-2 rounded-xl border border-white/10 bg-slate-900/70 p-4 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Forward-test comparison</div>
         <div className="mt-1 text-sm font-medium text-white">
-          {ready ? `Strategy Paper leader: ${comparison.research_leader_strategy_id || "calculating"}` : `Collecting ${comparison.minimum_closed_trades_per_strategy || 30} closed Strategy Paper trades per strategy`}
+          {ready
+            ? leader
+              ? `Promotion candidate: ${leader}`
+              : "Evidence complete, but no strategy passed every promotion gate"
+            : `Collecting ${comparison.minimum_closed_trades_per_strategy || 30} closed Strategy Paper trades per strategy`}
         </div>
         <div className="mt-1 text-xs text-slate-500">Current ranking: {(comparison.ranking || []).join(" → ") || "waiting for data"}</div>
       </div>
@@ -101,7 +106,14 @@ function StrategyPanel({ strategy }) {
               <StatusBadge label={strategy.status} tone="emerald" />
               <StatusBadge label={strategy.strategy_type || "INDIVIDUAL"} tone={strategy.strategy_type === "COMBINED" ? "amber" : "slate"} />
               <StatusBadge label="PAPER ONLY" tone="cyan" />
-              <StatusBadge label={readiness.status || "COLLECTING"} tone={readiness.status === "COMPARABLE" ? "emerald" : "amber"} />
+              <StatusBadge
+                label={strategy.official_execution_enabled ? "OFFICIAL PAPER LANE" : "STRATEGY PAPER ONLY"}
+                tone={strategy.official_execution_enabled ? "emerald" : "slate"}
+              />
+              <StatusBadge
+                label={readiness.status || "COLLECTING"}
+                tone={readiness.status === "PROMOTION_CANDIDATE" ? "emerald" : readiness.status === "EVIDENCE_COMPLETE_FAILED" ? "rose" : "amber"}
+              />
             </div>
             <p className="mt-1 max-w-3xl text-sm text-slate-400">{strategy.description}</p>
             <div className="mt-2 font-mono text-[11px] text-slate-500">{strategy.id} · {strategy.version}</div>
@@ -139,7 +151,7 @@ function StrategyPanel({ strategy }) {
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
-          Forward comparison requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades per strategy; {readiness.remaining_trades || 0} remain for this strategy. Comparison never enables live orders automatically.
+          Promotion requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades, win rate ≥ {readiness.minimum_win_rate || 55}%, profit factor ≥ {number(readiness.minimum_profit_factor || 1.3, 2)}, and positive cost-adjusted expectancy. {readiness.remaining_trades || 0} trades remain for the sample gate. This never enables live orders automatically.
         </div>
         <div className="mt-1 text-xs text-slate-500">
           Eligible scans are evaluations, not separate positions. Repeated unchanged signals reuse the matching open plan or position; only one official paper winner may be active per coin.
@@ -210,7 +222,11 @@ function CandidateTable({ candidates }) {
                 <td><StatusBadge label={candidate.market_participation?.direction || candidate.market_participation?.status || "N/A"} tone={directionTone(candidate.market_participation?.direction)} /></td>
                 <td>{(candidate.strategy_paper_lifecycle || candidate.shadow_lifecycle)?.replaceAll("_", " ")}</td>
                 <td>{candidate.lifecycle?.replaceAll("_", " ")}</td>
-                <td className="max-w-[340px] py-3 pr-3 text-slate-400">{candidate.blocked_reasons?.[0] || candidate.market_participation?.reason || "All current strategy gates passed"}</td>
+                <td className="max-w-[340px] py-3 pr-3 text-slate-400">
+                  <div>{candidate.blocked_reasons?.[0] || candidate.market_participation?.reason || "All current strategy gates passed"}</div>
+                  {candidate.regime_route ? <div className="mt-1 text-[10px] uppercase tracking-[0.1em] text-cyan-600">{candidate.regime_route.replaceAll("_", " ")}</div> : null}
+                  {candidate.entry_location?.zone ? <div className="mt-0.5 text-[10px] text-slate-500">{candidate.entry_location.zone} · {candidate.entry_location.tests || 0} tests · {candidate.entry_location.rejection_confirmed ? "rejection confirmed" : "waiting for rejection"}</div> : null}
+                </td>
                 <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(candidate.created_at)}</span></td>
               </tr>
             ))}

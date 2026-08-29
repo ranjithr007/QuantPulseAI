@@ -1,8 +1,19 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
+from app.api.v1.signals_api import _observed_atr
 from app.strategies.candidate_builders import build_liquidation_carry_payload
 from app.strategies.candidate_builders import build_orderflow_smc_payload
+from app.strategies.candidate_builders import build_range_reversion_payload
 from app.strategies.candidate_builders import build_regime_trend_payload
+from app.strategies.candidate_builders import build_trend_pullback_payload
+
+
+def test_observed_atr_never_substitutes_the_legacy_one_percent_fallback():
+    assert _observed_atr(None) is None
+    assert _observed_atr(SimpleNamespace(ATR=None)) is None
+    assert _observed_atr(SimpleNamespace(ATR=0)) is None
+    assert _observed_atr(SimpleNamespace(ATR=1.25)) == 1.25
 
 
 def _timeframe(label, now, *, component_scores, stale=()):
@@ -76,6 +87,49 @@ def _market_participation(now, *, observed=True, aligned=True):
     }
 
 
+def _location_market_participation(now, *, rejected=True):
+    payload = _market_participation(now)
+    payload["spot"]["timeframes"] = [
+        {
+            **item,
+            "spot_price": 100.0,
+            "ema20": 99.5,
+            "spot_cvd_percent": 2.0,
+            "support": {
+                "lower": 98.5,
+                "upper": 99.5,
+                "tests": 3,
+                "distance_percent": -1.0,
+                "latest_rejected": rejected,
+            },
+            "resistance": {
+                "lower": 102.0,
+                "upper": 103.0,
+                "tests": 3,
+                "distance_percent": 2.5,
+                "latest_rejected": False,
+            },
+        }
+        for item in payload["spot"]["timeframes"]
+    ]
+    return payload
+
+
+def _location_core(now, regime):
+    core = _core_payload(now, component_scores=_components())
+    for item in core["timeframes"]:
+        item["atr"] = 1.5
+        item["component_scores"] = {
+            **item["component_scores"],
+            "regime": {
+                "score": 20.0,
+                "value": regime,
+                "reason": "Routed regime",
+            },
+        }
+    return core
+
+
 def test_regime_trend_ignores_stale_orderflow_and_smc_when_own_inputs_are_fresh():
     now = datetime.now(timezone.utc)
     payload = build_regime_trend_payload(
@@ -145,3 +199,40 @@ def test_liquidation_carry_requires_aligned_observed_complete_evidence():
     assert "observed liquidation" in unavailable["trigger"]["reason"].lower()
     assert conflict["trigger"]["status"] == "WAIT"
     assert "same direction" in conflict["trigger"]["reason"].lower()
+
+
+def test_trend_pullback_requires_pullback_regime_location_and_fresh_atr():
+    now = datetime.now(timezone.utc)
+    ready = build_trend_pullback_payload(
+        _location_core(now, "BULL_PULLBACK"),
+        _location_market_participation(now),
+    )
+    extended = build_trend_pullback_payload(
+        _location_core(now, "TRENDING_BULL"),
+        _location_market_participation(now),
+    )
+
+    assert ready["trigger"]["status"] == "READY"
+    assert ready["trigger"]["side"] == "LONG"
+    assert ready["trade_plan"]["exit_policy"] == "PAPER_ATR_STRUCTURE_V1"
+    assert ready["trade_plan"]["stop_loss"] <= 98.5
+    assert ready["trade_plan"]["target2_net_risk_reward"] >= 2.3
+    assert extended["trigger"]["status"] == "WAIT"
+    assert "wait for a pullback" in extended["trigger"]["reason"].lower()
+
+
+def test_range_reversion_fails_closed_without_confirmed_boundary_rejection():
+    now = datetime.now(timezone.utc)
+    ready = build_range_reversion_payload(
+        _location_core(now, "RANGE_ACCUMULATION"),
+        _location_market_participation(now, rejected=True),
+    )
+    middle = build_range_reversion_payload(
+        _location_core(now, "RANGE_ACCUMULATION"),
+        _location_market_participation(now, rejected=False),
+    )
+
+    assert ready["trigger"]["status"] == "READY"
+    assert ready["trigger"]["side"] == "LONG"
+    assert middle["trigger"]["status"] == "WAIT"
+    assert "tested support/resistance" in middle["trigger"]["reason"].lower()

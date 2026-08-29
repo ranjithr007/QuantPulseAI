@@ -31,7 +31,7 @@ import { deriveSelectedEligibilityState } from "../utils/eligibility";
 import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNumber, timestampMillis, tooltipStyle } from "../utils/formatters";
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
-const STAGED_EXIT_POLICIES = new Set(["PAPER_STAGED_EXIT_V2", "PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
+const STAGED_EXIT_POLICIES = new Set(["PAPER_ATR_STRUCTURE_V1", "PAPER_STAGED_EXIT_V2", "PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
 const TRADE_HISTORY_PAGE_SIZE = 10;
 
 export default function PnLSection({

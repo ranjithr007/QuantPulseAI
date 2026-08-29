@@ -252,6 +252,11 @@ def _latest_candidates(snapshots, plans, trades, shadow_trades, limit):
                 "decision": row.decision,
                 "lifecycle": lifecycle,
                 "blocked_reasons": context.get("blocked_reasons") or [],
+                "regime_route": context.get("regime_route"),
+                "execution_profile": context.get("execution_profile"),
+                "entry_location": context.get("entry_location") or {},
+                "route_conditions": context.get("route_conditions") or [],
+                "stop_model": context.get("stop_model"),
                 "market_participation": {
                     "status": participation.get("status"),
                     "direction": participation.get("direction"),
@@ -358,13 +363,43 @@ def _profit_factor(closed):
     return round(gains / losses, 4)
 
 
-def _forward_test_readiness(performance, minimum_closed_trades=30):
+def _forward_test_readiness(
+    performance,
+    minimum_closed_trades=30,
+    minimum_win_rate=55.0,
+    minimum_profit_factor=1.30,
+):
     closed = int(performance.get("closed_trades") or 0)
+    win_rate = float(performance.get("win_rate") or 0)
+    profit_factor = performance.get("profit_factor")
+    normalized_profit_factor = (
+        float(profit_factor) if profit_factor is not None else 0.0
+    )
+    expectancy_inr = float(performance.get("expectancy_inr") or 0)
+    sample_passed = closed >= minimum_closed_trades
+    gates = {
+        "sample_size": sample_passed,
+        "win_rate": win_rate >= minimum_win_rate,
+        "profit_factor": normalized_profit_factor >= minimum_profit_factor,
+        "cost_adjusted_expectancy": expectancy_inr > 0,
+    }
+    promotion_candidate = sample_passed and all(gates.values())
+    if not sample_passed:
+        status = "COLLECTING"
+    elif promotion_candidate:
+        status = "PROMOTION_CANDIDATE"
+    else:
+        status = "EVIDENCE_COMPLETE_FAILED"
     return {
-        "status": "COMPARABLE" if closed >= minimum_closed_trades else "COLLECTING",
+        "status": status,
         "closed_trades": closed,
         "minimum_closed_trades": minimum_closed_trades,
         "remaining_trades": max(0, minimum_closed_trades - closed),
+        "minimum_win_rate": minimum_win_rate,
+        "minimum_profit_factor": minimum_profit_factor,
+        "requires_positive_cost_adjusted_expectancy": True,
+        "gates": gates,
+        "promotion_candidate": promotion_candidate,
         "authorizes_live_execution": False,
     }
 
@@ -387,17 +422,29 @@ def _shadow_comparison(records):
         ),
         reverse=True,
     )
-    comparable = [
+    evidence_complete = [
         item
         for item in ranked
-        if (item.get("forward_test_readiness") or {}).get("status") == "COMPARABLE"
+        if (item.get("forward_test_readiness") or {}).get("status")
+        in {"PROMOTION_CANDIDATE", "EVIDENCE_COMPLETE_FAILED"}
     ]
+    promotion_candidates = [
+        item
+        for item in ranked
+        if (item.get("forward_test_readiness") or {}).get("promotion_candidate")
+    ]
+    evidence_ready = len(evidence_complete) == len(records)
     return {
-        "status": "COMPARABLE" if len(comparable) == len(records) else "COLLECTING",
+        "status": "EVIDENCE_READY" if evidence_ready else "COLLECTING",
         "execution_book": "STRATEGY_PAPER",
         "minimum_closed_trades_per_strategy": 30,
+        "minimum_win_rate": 55.0,
+        "minimum_profit_factor": 1.30,
+        "requires_positive_cost_adjusted_expectancy": True,
         "research_leader_strategy_id": (
-            comparable[0]["id"] if len(comparable) == len(records) and comparable else None
+            promotion_candidates[0]["id"]
+            if evidence_ready and promotion_candidates
+            else None
         ),
         "authorizes_live_execution": False,
         "ranking_method": (

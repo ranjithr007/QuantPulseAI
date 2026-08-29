@@ -512,3 +512,36 @@ def test_strategy_paper_wallet_keeps_positions_older_than_reporting_window(monke
     assert record["strategy_paper_lifetime_performance"]["total_trades"] == 1
     assert record["strategy_paper_wallet"]["open_position_count"] == 1
     assert record["strategy_paper_history"][0]["symbol"] == "BTCUSDT"
+
+
+def test_forward_readiness_requires_performance_not_only_sample_size():
+    readiness = strategy_api._forward_test_readiness(
+        {
+            "closed_trades": 30,
+            "win_rate": 53.33,
+            "profit_factor": 1.5,
+            "expectancy_inr": 100.0,
+        }
+    )
+
+    assert readiness["status"] == "EVIDENCE_COMPLETE_FAILED"
+    assert readiness["gates"]["sample_size"] is True
+    assert readiness["gates"]["win_rate"] is False
+    assert readiness["promotion_candidate"] is False
+    assert readiness["authorizes_live_execution"] is False
+
+
+def test_forward_readiness_marks_all_gate_passes_as_promotion_candidate_only():
+    readiness = strategy_api._forward_test_readiness(
+        {
+            "closed_trades": 40,
+            "win_rate": 57.5,
+            "profit_factor": 1.42,
+            "expectancy_inr": 85.0,
+        }
+    )
+
+    assert readiness["status"] == "PROMOTION_CANDIDATE"
+    assert all(readiness["gates"].values())
+    assert readiness["promotion_candidate"] is True
+    assert readiness["authorizes_live_execution"] is False

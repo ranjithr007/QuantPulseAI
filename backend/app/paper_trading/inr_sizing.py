@@ -20,6 +20,7 @@ def build_inr_paper_sizing(
     leverage=DEFAULT_PAPER_LEVERAGE,
     fee_bps=7.5,
     remaining_fraction=1.0,
+    stop_loss_percent=0.75,
 ):
     """Return governed INR-M paper sizing without mixing INR with USDT prices.
 
@@ -32,6 +33,7 @@ def build_inr_paper_sizing(
     leverage = _finite_number("leverage", leverage)
     fee_bps = _finite_number("fee_bps", fee_bps)
     remaining_fraction = _finite_number("remaining_fraction", remaining_fraction)
+    stop_loss_percent = _finite_number("stop_loss_percent", stop_loss_percent)
 
     if leverage < 1:
         raise ValueError("Paper leverage must be at least 1")
@@ -39,6 +41,8 @@ def build_inr_paper_sizing(
         raise ValueError("Paper fee basis points cannot be negative")
     if not 0 <= remaining_fraction <= 1:
         raise ValueError("Remaining position fraction must be between 0 and 1")
+    if stop_loss_percent <= 0:
+        raise ValueError("Stop-loss percentage must be greater than zero")
 
     allocation_percent = (
         MINIMUM_TIER_ALLOCATION_PERCENT
@@ -54,7 +58,6 @@ def build_inr_paper_sizing(
     margin_used_inr = position_notional_inr / leverage
     remaining_notional_inr = position_notional_inr * remaining_fraction
     remaining_margin_inr = margin_used_inr * remaining_fraction
-    stop_loss_percent = 0.75
     estimated_round_trip_cost_percent = fee_bps * 2 / 100
     estimated_stop_loss_inr = position_notional_inr * stop_loss_percent / 100
     estimated_round_trip_cost_inr = (
@@ -74,6 +77,7 @@ def build_inr_paper_sizing(
         "remaining_notional_inr": round(remaining_notional_inr, 2),
         "remaining_margin_inr": round(remaining_margin_inr, 2),
         "estimated_stop_loss_inr": round(estimated_stop_loss_inr, 2),
+        "stop_loss_percent": round(stop_loss_percent, 4),
         "estimated_round_trip_cost_inr": round(
             estimated_round_trip_cost_inr,
             2,
