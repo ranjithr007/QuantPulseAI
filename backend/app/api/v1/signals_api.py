@@ -1381,9 +1381,19 @@ def _timeframe_stack_from_mode(mode):
 
 
 def _mode_from_stack(stack):
-    for mode, configured_stack in TIMEFRAME_MODES.items():
-        if list(stack) == list(configured_stack):
-            return mode
+    matches = [
+        mode
+        for mode, configured_stack in TIMEFRAME_MODES.items()
+        if list(stack) == list(configured_stack)
+    ]
+    # Every current mode intentionally scans the same governed 1h/2h/4h/1d
+    # prediction stack.  A stack alone therefore cannot identify scalp, swing,
+    # or position mode.  Scheduled scans do not provide an explicit mode and
+    # must default to the only execution-enabled policy: intraday.
+    if "intraday" in matches:
+        return "intraday"
+    if matches:
+        return matches[0]
     return "custom"
 
 

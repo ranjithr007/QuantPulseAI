@@ -11,6 +11,13 @@ def teardown_function():
     signals_api._clear_watchlist_cache()
 
 
+def test_shared_prediction_stack_defaults_to_intraday_execution_mode():
+    assert (
+        signals_api._mode_from_stack(signals_api.PREDICTION_TIMEFRAME_STACK)
+        == "intraday"
+    )
+
+
 def test_watchlist_cache_reuses_payloads_and_returns_independent_copies(monkeypatch):
     symbols = [SimpleNamespace(symbol="BTCUSDT"), SimpleNamespace(symbol="ETHUSDT")]
     build_calls = []

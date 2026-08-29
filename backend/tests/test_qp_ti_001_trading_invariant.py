@@ -27,6 +27,8 @@ from app.intelligence.multi_timeframe_engine import combine_timeframe_signals
 from app.jobs.deterministic_pipeline_job import STAGE_ORDER
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.fusion_signal_repository import FusionSignalRepository
+from app.strategies.registry import TREND_PULLBACK_STRATEGY_ID
+from app.strategies.registry import TREND_PULLBACK_STRATEGY_VERSION
 from app.trading.trade_plan_engine import build_trade_plan
 
 
@@ -39,6 +41,8 @@ def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
         "blocked_reasons": [],
         "trade_plan": {
             "id": plan_id,
+            "strategy_id": TREND_PULLBACK_STRATEGY_ID,
+            "strategy_version": TREND_PULLBACK_STRATEGY_VERSION,
             "entry_timeframe": timeframe,
             "confidence": confidence,
             "risk_reward": risk_reward,
