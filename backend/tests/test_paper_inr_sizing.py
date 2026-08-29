@@ -2,6 +2,7 @@ import pytest
 
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.paper_trading.inr_sizing import build_inr_paper_wallet
+from app.paper_trading.inr_sizing import fit_inr_paper_sizing_to_margin_capacity
 
 
 def test_minimum_confidence_tier_uses_75_percent_inr_notional():
@@ -25,6 +26,32 @@ def test_full_confidence_tier_uses_85_percent_inr_notional():
     assert sizing["position_notional_inr"] == 170_000
     assert sizing["margin_used_inr"] == 34_000
     assert sizing["estimated_max_loss_inr"] == 1_530
+
+
+def test_new_position_scales_to_remaining_account_margin_capacity():
+    requested = build_inr_paper_sizing(49, leverage=5, fee_bps=7.5)
+
+    sizing = fit_inr_paper_sizing_to_margin_capacity(requested, 22_000)
+
+    assert sizing["capacity_adjusted"] is True
+    assert sizing["position_tier"] == "CAPACITY_ADJUSTED"
+    assert sizing["requested_position_tier"] == "MINIMUM"
+    assert sizing["requested_margin_inr"] == 30_000
+    assert sizing["margin_used_inr"] == 22_000
+    assert sizing["position_notional_inr"] == 110_000
+    assert sizing["allocation_percent"] == 55
+    assert sizing["estimated_max_loss_inr"] == 990
+    assert sizing["estimated_max_loss_percent"] == 0.495
+
+
+def test_margin_capacity_fit_never_expands_requested_position():
+    requested = build_inr_paper_sizing(60, leverage=5, fee_bps=7.5)
+
+    sizing = fit_inr_paper_sizing_to_margin_capacity(requested, 50_000)
+
+    assert sizing["capacity_adjusted"] is False
+    assert sizing["position_tier"] == "MAXIMUM"
+    assert sizing["margin_used_inr"] == 34_000
 
 
 def test_wallet_tracks_remaining_margin_after_target_one_partial_exit():

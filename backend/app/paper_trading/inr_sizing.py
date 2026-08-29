@@ -95,6 +95,79 @@ def build_inr_paper_sizing(
     }
 
 
+def fit_inr_paper_sizing_to_margin_capacity(sizing, margin_capacity_inr):
+    """Reduce a new paper position to the account's remaining safe margin.
+
+    The 75/85 percent confidence tiers describe the requested position size.
+    They must not make an otherwise valid coin fail merely because earlier
+    positions already use part of the account-wide 85 percent margin budget.
+    This function preserves the requested tier for auditability while scaling
+    every monetary risk field by the same factor.  A zero capacity is left for
+    the executor to reject; this helper never expands a position.
+    """
+
+    result = dict(sizing or {})
+    requested_margin = _finite_number(
+        "paper sizing margin",
+        result.get("margin_used_inr") or 0,
+    )
+    margin_capacity = max(
+        0.0,
+        _finite_number("remaining paper margin capacity", margin_capacity_inr),
+    )
+    if (
+        requested_margin <= 0
+        or margin_capacity <= 0
+        or requested_margin <= margin_capacity
+    ):
+        result.setdefault("capacity_adjusted", False)
+        return result
+
+    scale = margin_capacity / requested_margin
+    requested_tier = result.get("position_tier")
+    requested_allocation = result.get("allocation_percent")
+    requested_notional = result.get("position_notional_inr")
+    requested_max_loss = result.get("estimated_max_loss_inr")
+    for key in (
+        "position_notional_inr",
+        "margin_used_inr",
+        "remaining_notional_inr",
+        "remaining_margin_inr",
+        "estimated_stop_loss_inr",
+        "estimated_round_trip_cost_inr",
+        "estimated_max_loss_inr",
+    ):
+        if result.get(key) is not None:
+            result[key] = round(float(result[key]) * scale, 2)
+
+    result.update(
+        {
+            "position_tier": "CAPACITY_ADJUSTED",
+            "allocation_percent": round(
+                float(result.get("position_notional_inr") or 0)
+                / PAPER_CAPITAL_INR
+                * 100,
+                4,
+            ),
+            "estimated_max_loss_percent": round(
+                float(result.get("estimated_max_loss_inr") or 0)
+                / PAPER_CAPITAL_INR
+                * 100,
+                4,
+            ),
+            "capacity_adjusted": True,
+            "capacity_scale": round(scale, 6),
+            "requested_position_tier": requested_tier,
+            "requested_allocation_percent": requested_allocation,
+            "requested_position_notional_inr": requested_notional,
+            "requested_margin_inr": round(requested_margin, 2),
+            "requested_estimated_max_loss_inr": requested_max_loss,
+            "margin_capacity_at_entry_inr": round(margin_capacity, 2),
+        }
+    )
+    return result
+
+
 def build_inr_paper_wallet(
     trades,
     *,

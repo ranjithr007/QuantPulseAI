@@ -67,6 +67,34 @@ def test_open_position_payload_supplies_target2_from_official_exit_policy():
     assert payload["exit_levels_source"] == "POLICY_FALLBACK"
 
 
+def test_open_position_payload_labels_capacity_adjusted_sizing():
+    trade = PaperTrade(
+        id=8,
+        symbol="XRPUSDT",
+        side="SHORT",
+        entry_price=1.0,
+        stop_loss=1.0075,
+        target1=0.985,
+        target2=0.977,
+        confidence=49.0,
+        entry_timeframe="1h",
+        status="OPEN",
+        paper_capital_at_entry_inr=200_000,
+        allocation_percent=55.0,
+        position_notional_inr=110_000,
+        leverage=5.0,
+        margin_used_inr=22_000,
+    )
+
+    payload = _paper_trade_payload(trade)
+
+    assert payload["paper_sizing"]["capacity_adjusted"] is True
+    assert payload["paper_sizing"]["position_tier"] == "CAPACITY_ADJUSTED"
+    assert payload["paper_sizing"]["requested_position_tier"] == "MINIMUM"
+    assert payload["paper_sizing"]["position_notional_inr"] == 110_000
+    assert payload["paper_sizing"]["margin_used_inr"] == 22_000
+
+
 class Phase1PaperTradeLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine(

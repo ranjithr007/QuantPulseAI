@@ -655,6 +655,69 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
     )
 
 
+def test_executor_uses_remaining_safe_margin_instead_of_rejecting_trade(monkeypatch):
+    candidate = _candidate(20, "1h", 49)
+    saved = []
+
+    class DummyDb:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeRepo:
+        def acquire_account_execution_lock(self, db):
+            pass
+
+        def all_trades(self, db):
+            return []
+
+        def has_open_trade(self, db, symbol, side=None):
+            return False
+
+        def has_trade_for_plan(self, db, trade_plan_id):
+            return False
+
+        def save_candidate(self, db, item):
+            saved.append(item)
+            return SimpleNamespace(id=101)
+
+    monkeypatch.setattr(paper_trade_api, "SessionLocal", DummyDb)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "build_paper_trade_candidates",
+        lambda *args, **kwargs: (None, [candidate]),
+    )
+    monkeypatch.setattr(paper_trade_api, "PaperTradeRepository", FakeRepo)
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_wallet_snapshot",
+        lambda db, trades, account_risk=None: {
+            "open_position_count": 4,
+            "remaining_margin_capacity_inr": 22_000,
+        },
+    )
+    monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
+    monkeypatch.setattr(
+        paper_trade_api,
+        "automation_settings_payload",
+        lambda row: _enabled_automation_settings(),
+    )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "_paper_trade_payload",
+        lambda trade, fill_profile=None: {"id": trade.id},
+    )
+
+    result = paper_trade_api.execute_paper_trade_candidates_for_symbol()
+
+    assert result["executed_count"] == 1
+    assert saved[0]["paper_sizing"]["capacity_adjusted"] is True
+    assert saved[0]["paper_sizing"]["margin_used_inr"] == 22_000
+    assert saved[0]["paper_sizing"]["position_notional_inr"] == 110_000
+
+
 def test_executor_blocks_only_same_side_during_post_stop_cooldown(monkeypatch):
     candidate = _candidate(12, "1h", 64, side="LONG")
     stopped_trade = SimpleNamespace(

@@ -20,6 +20,7 @@ from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.entry_price_service import get_current_paper_entry_mark
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.paper_trading.inr_sizing import build_inr_paper_wallet
+from app.paper_trading.inr_sizing import fit_inr_paper_sizing_to_margin_capacity
 from app.paper_trading.measurement import MeasurementGates
 from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
@@ -980,6 +981,16 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 account_trades,
                 account_risk=locked_account_risk,
             )
+            remaining_margin_capacity = float(
+                wallet["remaining_margin_capacity_inr"]
+            )
+            if remaining_margin_capacity > 0:
+                candidate["paper_sizing"] = (
+                    fit_inr_paper_sizing_to_margin_capacity(
+                        candidate.get("paper_sizing") or {},
+                        remaining_margin_capacity,
+                    )
+                )
             candidate_margin = float(
                 (candidate.get("paper_sizing") or {}).get("margin_used_inr") or 0
             )
@@ -1000,7 +1011,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 db.rollback()
                 continue
-            if candidate_margin > wallet["remaining_margin_capacity_inr"]:
+            if candidate_margin > remaining_margin_capacity:
                 skipped.append(
                     {
                         "symbol": candidate["symbol"],
@@ -1043,6 +1054,10 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 db.rollback()
                 continue
+            candidate["paper_sizing"] = fit_inr_paper_sizing_to_margin_capacity(
+                candidate.get("paper_sizing") or {},
+                remaining_margin_capacity,
+            )
 
             try:
                 paper_trade = repo.save_candidate(db, candidate)
@@ -1542,6 +1557,15 @@ def _execute_strategy_shadow_candidates(db, records, auto):
             or plan.get("confidence")
             or 0
         )
+        remaining_strategy_margin = float(
+            strategy_wallet["remaining_margin_capacity_inr"]
+        )
+        if remaining_strategy_margin > 0:
+            sizing = fit_inr_paper_sizing_to_margin_capacity(
+                sizing,
+                remaining_strategy_margin,
+            )
+            candidate["paper_sizing"] = sizing
         candidate_margin = float(sizing.get("margin_used_inr") or 0)
         effective_max_open_trades = min(
             int(auto.get("maxOpenTrades", PAPER_MAX_OPEN_TRADES)),
@@ -1559,7 +1583,7 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
-        if candidate_margin > strategy_wallet["remaining_margin_capacity_inr"]:
+        if candidate_margin > remaining_strategy_margin:
             skipped.append(
                 {
                     "symbol": candidate["symbol"],
@@ -1590,6 +1614,10 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
+        repriced["paper_sizing"] = fit_inr_paper_sizing_to_margin_capacity(
+            repriced.get("paper_sizing") or {},
+            remaining_strategy_margin,
+        )
         try:
             trade = repo.save_candidate(db, repriced)
         except IntegrityError:
@@ -2273,6 +2301,15 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
             1.0 if remaining_fraction is None else remaining_fraction
         ),
     )
+    persisted_margin = getattr(paper_trade, "margin_used_inr", None)
+    if (
+        persisted_margin is not None
+        and float(persisted_margin) < float(sizing["margin_used_inr"])
+    ):
+        sizing = fit_inr_paper_sizing_to_margin_capacity(
+            sizing,
+            float(persisted_margin),
+        )
     sizing.update(
         {
             "paper_capital_inr": getattr(
@@ -2295,12 +2332,7 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
             or sizing["position_notional_inr"],
             "leverage": getattr(paper_trade, "leverage", None)
             or sizing["leverage"],
-            "margin_used_inr": getattr(
-                paper_trade,
-                "margin_used_inr",
-                None,
-            )
-            or sizing["margin_used_inr"],
+            "margin_used_inr": persisted_margin or sizing["margin_used_inr"],
         }
     )
     payload = {
@@ -2600,6 +2632,11 @@ def _paper_trade_candidate(
     remaining_margin_capacity = (paper_wallet or {}).get(
         "remaining_margin_capacity_inr"
     )
+    if remaining_margin_capacity is not None and float(remaining_margin_capacity) > 0:
+        paper_sizing = fit_inr_paper_sizing_to_margin_capacity(
+            paper_sizing,
+            float(remaining_margin_capacity),
+        )
     if (
         remaining_margin_capacity is not None
         and paper_sizing["margin_used_inr"] > float(remaining_margin_capacity)
