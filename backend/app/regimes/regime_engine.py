@@ -6,6 +6,7 @@ from app.regimes.rules import detect_regime
 
 HYSTERESIS_MARGIN = 7
 MIN_TRANSITION_CONFIDENCE = 62
+MIN_CANDIDATE_DWELL_CYCLES = 3
 
 
 def analyze_market(
@@ -19,6 +20,12 @@ def analyze_market(
     transition_policy = transition_policy or _transition_decision
     candidate = regime_detector(feature)
     previous = _previous_state(previous_regime)
+    candidate_dwell_cycles = _next_candidate_dwell_cycles(candidate, previous)
+    if previous is not None:
+        previous = {
+            **previous,
+            "current_candidate_dwell_cycles": candidate_dwell_cycles,
+        }
     transition = transition_policy(candidate, previous)
     selected = candidate
 
@@ -35,8 +42,9 @@ def analyze_market(
 
     dwell_cycles = _next_dwell_cycles(selected["regime"], previous)
     audit = {
-        "engine_version": "v3_regime_13_v1",
+        "engine_version": "v3_regime_13_v2",
         "candidate_regime": candidate["regime"],
+        "candidate_dwell_cycles": candidate_dwell_cycles,
         "selected_regime": selected["regime"],
         "previous_regime": previous["regime"] if previous else None,
         "previous_confidence": previous["confidence"] if previous else None,
@@ -45,6 +53,7 @@ def analyze_market(
         "dwell_cycles": dwell_cycles,
         "hysteresis_margin": HYSTERESIS_MARGIN,
         "min_transition_confidence": MIN_TRANSITION_CONFIDENCE,
+        "min_candidate_dwell_cycles": MIN_CANDIDATE_DWELL_CYCLES,
         "transition_policy": getattr(
             transition_policy,
             "__name__",
@@ -94,12 +103,13 @@ def build_regime_contract():
     ]
     return {
         "source": "v3_regime_contract",
-        "version": "v3_regime_13_v1",
+        "version": "v3_regime_13_v2",
         "count": len(regimes),
         "regimes": regimes,
         "thresholds": {
             "hysteresis_margin": HYSTERESIS_MARGIN,
             "min_transition_confidence": MIN_TRANSITION_CONFIDENCE,
+            "min_candidate_dwell_cycles": MIN_CANDIDATE_DWELL_CYCLES,
         },
         "taxonomy": [item["regime"] for item in regimes],
         "notes": [
@@ -141,6 +151,14 @@ def _transition_decision(candidate, previous):
         }
 
     if confidence_edge < HYSTERESIS_MARGIN:
+        if (
+            int(previous.get("current_candidate_dwell_cycles") or 1)
+            >= MIN_CANDIDATE_DWELL_CYCLES
+        ):
+            return {
+                "decision": "CONFIRMED_PERSISTENT_TRANSITION",
+                "confidence": candidate["confidence"],
+            }
         return {
             "decision": "HELD_PREVIOUS",
             "confidence": max(0, confidence_edge),
@@ -185,6 +203,8 @@ def _previous_state(previous_regime):
         "regime": regime,
         "confidence": float(getattr(previous_regime, "Confidence", 0) or 0),
         "dwell_cycles": int(audit.get("dwell_cycles") or 1),
+        "candidate_regime": audit.get("candidate_regime"),
+        "candidate_dwell_cycles": int(audit.get("candidate_dwell_cycles") or 0),
     }
 
 
@@ -192,6 +212,12 @@ def _next_dwell_cycles(selected_regime, previous):
     if previous and previous["regime"] == selected_regime:
         return previous["dwell_cycles"] + 1
 
+    return 1
+
+
+def _next_candidate_dwell_cycles(candidate, previous):
+    if previous and previous.get("candidate_regime") == candidate["regime"]:
+        return int(previous.get("candidate_dwell_cycles") or 0) + 1
     return 1
 
 

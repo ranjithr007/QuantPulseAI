@@ -48,9 +48,10 @@ class Phase1BRegimeEngineTests(unittest.TestCase):
         self.assertIn("TRENDING_BEAR", REGIME_DEFINITIONS)
         self.assertIn("MANIPULATION_PHASE", REGIME_DEFINITIONS)
         self.assertIn("LOW_VOLATILITY_COMPRESSION", REGIME_DEFINITIONS)
-        self.assertEqual(contract["version"], "v3_regime_13_v1")
+        self.assertEqual(contract["version"], "v3_regime_13_v2")
         self.assertEqual(contract["thresholds"]["min_transition_confidence"], 62)
         self.assertEqual(contract["thresholds"]["hysteresis_margin"], 7)
+        self.assertEqual(contract["thresholds"]["min_candidate_dwell_cycles"], 3)
         self.assertEqual(contract["count"], 13)
         self.assertEqual(len(contract["taxonomy"]), 13)
 
@@ -136,6 +137,29 @@ class Phase1BRegimeEngineTests(unittest.TestCase):
         self.assertEqual(result["transition_decision"], "CONFIRMED_TRANSITION")
         self.assertEqual(result["dwell_cycles"], 1)
 
+    def test_persistent_candidate_eventually_releases_lower_confidence_hysteresis(self):
+        previous = Obj(
+            Regime="TRENDING_BULL",
+            Confidence=80,
+            Reason=json.dumps(
+                {
+                    "dwell_cycles": 8,
+                    "candidate_regime": "BULL_PULLBACK",
+                    "candidate_dwell_cycles": 2,
+                }
+            ),
+        )
+
+        result = analyze_market(feature(trend=66, momentum=42), previous)
+
+        self.assertEqual(result["regime"], "BULL_PULLBACK")
+        self.assertEqual(
+            result["transition_decision"],
+            "CONFIRMED_PERSISTENT_TRANSITION",
+        )
+        self.assertEqual(result["dwell_cycles"], 1)
+        self.assertEqual(result["audit"]["candidate_dwell_cycles"], 3)
+
     def test_direction_aware_research_policy_does_not_change_production_hysteresis(self):
         previous = Obj(
             Regime="TRENDING_BULL",
@@ -169,7 +193,7 @@ class Phase1BRegimeEngineTests(unittest.TestCase):
         result = analyze_market(feature(trend=82, momentum=74), None)
 
         audit = parse_regime_audit(result["reason"])
-        self.assertEqual(audit["engine_version"], "v3_regime_13_v1")
+        self.assertEqual(audit["engine_version"], "v3_regime_13_v2")
         self.assertEqual(audit["selected_regime"], "TRENDING_BULL")
 
     def test_master_signal_scores_expanded_bull_and_bear_regime_names(self):

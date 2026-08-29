@@ -89,7 +89,7 @@ def test_regime_catalog_returns_failure_when_catalog_build_fails():
 def test_regime_catalog_exposes_governed_contract():
     payload = get_regime_catalog()
 
-    assert payload["regime_contract"]["version"] == "v3_regime_13_v1"
+    assert payload["regime_contract"]["version"] == "v3_regime_13_v2"
     assert payload["regime_contract"]["thresholds"]["min_transition_confidence"] == 62
     assert payload["regime_contract"]["count"] == 13
 

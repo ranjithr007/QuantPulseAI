@@ -368,6 +368,12 @@ support/resistance zone with at least two tests, a confirmed rejection at that
 zone, directional spot CVD, direction-appropriate EMA confirmation, and a fresh
 positive ATR. Middle-of-range and score-only entries fail closed.
 
+Regime hysteresis may hold a lower-confidence candidate briefly, but it must not
+freeze the selected regime indefinitely. A candidate meeting the governed
+minimum confidence must become selectable after three consecutive observations,
+even when it cannot exceed the previous regime's confidence by the hysteresis
+margin. The candidate streak and transition reason must be persisted for audit.
+
 The initial stop is the farther of one ATR or the relevant structure boundary
 plus a 0.25 ATR buffer, capped at 2.5 ATR. Target 1 is calculated for at least
 1.5 net R after configured fees/slippage; Target 2 is calculated for at least
