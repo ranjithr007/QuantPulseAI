@@ -374,6 +374,12 @@ minimum confidence must become selectable after three consecutive observations,
 even when it cannot exceed the previous regime's confidence by the hysteresis
 margin. The candidate streak and transition reason must be persisted for audit.
 
+Regime-routed pullback and range-reversion confidence is signed by the selected
+regime component. Countertrend feature direction is expected during a pullback,
+rally, or range-edge test and must not cancel the route. Execution still requires
+the ±40 threshold plus fresh evidence, directional spot CVD, EMA confirmation,
+a tested boundary rejection, and fresh observed ATR.
+
 The initial stop is the farther of one ATR or the relevant structure boundary
 plus a 0.25 ATR buffer, capped at 2.5 ATR. Target 1 is calculated for at least
 1.5 net R after configured fees/slippage; Target 2 is calculated for at least

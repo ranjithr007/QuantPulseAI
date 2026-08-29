@@ -115,19 +115,42 @@ def _location_market_participation(now, *, rejected=True):
     return payload
 
 
-def _location_core(now, regime):
+def _location_core(now, regime, *, regime_score=20.0):
     core = _core_payload(now, component_scores=_components())
     for item in core["timeframes"]:
         item["atr"] = 1.5
         item["component_scores"] = {
             **item["component_scores"],
             "regime": {
-                "score": 20.0,
+                "score": regime_score,
                 "value": regime,
                 "reason": "Routed regime",
             },
         }
     return core
+
+
+def _bearish_location_market_participation(now, *, rejected=True):
+    payload = _location_market_participation(now, rejected=rejected)
+    payload["spot"]["timeframes"] = [
+        {
+            **item,
+            "direction": "BEARISH",
+            "score": -55.0,
+            "spot_price": 100.0,
+            "ema20": 100.5,
+            "spot_cvd_percent": -2.0,
+            "resistance": {
+                "lower": 100.5,
+                "upper": 101.0,
+                "tests": 3,
+                "distance_percent": 1.0,
+                "latest_rejected": rejected,
+            },
+        }
+        for item in payload["spot"]["timeframes"]
+    ]
+    return payload
 
 
 def test_regime_trend_ignores_stale_orderflow_and_smc_when_own_inputs_are_fresh():
@@ -221,6 +244,19 @@ def test_trend_pullback_requires_pullback_regime_location_and_fresh_atr():
     assert "wait for a pullback" in extended["trigger"]["reason"].lower()
 
 
+def test_bear_rally_short_is_not_cancelled_by_countertrend_feature_score():
+    now = datetime.now(timezone.utc)
+    payload = build_trend_pullback_payload(
+        _location_core(now, "BEAR_RALLY", regime_score=-20.0),
+        _bearish_location_market_participation(now),
+    )
+
+    assert payload["trigger"]["status"] == "READY"
+    assert payload["trigger"]["side"] == "SHORT"
+    assert payload["confirmation"]["confidence"] == 80.0
+    assert payload["trade_plan_validation"]["is_valid"] is True
+
+
 def test_range_reversion_fails_closed_without_confirmed_boundary_rejection():
     now = datetime.now(timezone.utc)
     ready = build_range_reversion_payload(
@@ -236,3 +272,16 @@ def test_range_reversion_fails_closed_without_confirmed_boundary_rejection():
     assert ready["trigger"]["side"] == "LONG"
     assert middle["trigger"]["status"] == "WAIT"
     assert "tested support/resistance" in middle["trigger"]["reason"].lower()
+
+
+def test_range_distribution_short_uses_signed_regime_route_confidence():
+    now = datetime.now(timezone.utc)
+    payload = build_range_reversion_payload(
+        _location_core(now, "RANGE_DISTRIBUTION", regime_score=-20.0),
+        _bearish_location_market_participation(now),
+    )
+
+    assert payload["trigger"]["status"] == "READY"
+    assert payload["trigger"]["side"] == "SHORT"
+    assert payload["confirmation"]["confidence"] == 80.0
+    assert payload["trade_plan_validation"]["is_valid"] is True

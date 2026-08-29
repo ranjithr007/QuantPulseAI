@@ -271,13 +271,18 @@ def _build_location_strategy_payload(
 
 def _location_timeframe(core, spot, *, execution_profile, allowed_regimes):
     component_map = core.get("component_scores") or {}
-    feature = component_map.get("feature") or {}
     regime_component = component_map.get("regime") or {}
     regime = str(regime_component.get("value") or "UNKNOWN").upper()
     expected_side = allowed_regimes.get(regime)
-    feature_score = _number(feature.get("score"))
     regime_score = _number(regime_component.get("score"))
-    strategy_score = _clamp((feature_score + regime_score) / 49.0 * 100, -100, 100)
+    # Pullback and range-reversion entries intentionally occur while the
+    # short-term feature trend can still point against the routed trade.  The
+    # route direction therefore comes from the governed regime component;
+    # spot CVD, EMA and boundary rejection below confirm that the countertrend
+    # move has actually turned.  Reusing the generic feature+regime sum here
+    # cancels valid BEAR_RALLY/RANGE_DISTRIBUTION shorts (and the inverse long
+    # cases) before those purpose-built confirmations can be evaluated.
+    strategy_score = _clamp(regime_score / 25.0 * 100, -100, 100)
     score_side = _side(strategy_score)
     atr = _optional_number(core.get("atr"))
     price = _optional_number((spot or {}).get("spot_price"))
@@ -335,7 +340,7 @@ def _location_timeframe(core, spot, *, execution_profile, allowed_regimes):
     elif not regime_allowed:
         reason = _route_wait_reason(regime, execution_profile)
     elif not score_aligned:
-        reason = "Feature and regime score does not confirm the routed direction"
+        reason = "Regime score does not confirm the routed direction"
     elif not directional_spot:
         reason = "Spot CVD does not confirm the routed direction"
     elif not ema_confirmed:
