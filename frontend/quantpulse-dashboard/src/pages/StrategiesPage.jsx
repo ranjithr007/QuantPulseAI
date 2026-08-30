@@ -14,6 +14,8 @@ import {
 import { loadStrategySummary } from "../hooks/dashboardApi";
 import { formatPercent, formatSigned, formatTimeInIst } from "../utils/formatters";
 
+const STRATEGY_GRID_PAGE_SIZE = 5;
+
 export default function StrategiesPage() {
   const [payload, setPayload] = useState({ records: [] });
   const [loading, setLoading] = useState(true);
@@ -165,6 +167,7 @@ function StrategyPanel({ strategy }) {
 }
 
 function StrategyPaperHistory({ trades }) {
+  const pagination = usePaginatedRows(trades);
   return (
     <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
       <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/60 px-4 py-3">
@@ -177,7 +180,7 @@ function StrategyPaperHistory({ trades }) {
             <tr><th className="px-4 py-2.5">Coin</th><th>Side / TF</th><th>Entry</th><th>Stop</th><th>Target 1</th><th>Target 2</th><th>Status</th><th>Exit</th><th>Net P&amp;L</th><th>Opened IST</th></tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {trades.map((trade) => (
+            {pagination.visibleRows.map((trade) => (
               <tr key={trade.id} className="text-slate-300">
                 <td className="px-4 py-3 font-semibold text-white">{trade.symbol}</td>
                 <td><StatusBadge label={trade.side} tone={trade.side === "LONG" ? "emerald" : "rose"} /> <span className="ml-1">{trade.entry_timeframe || "—"}</span></td>
@@ -195,11 +198,17 @@ function StrategyPaperHistory({ trades }) {
           </tbody>
         </table>
       </div>
+      <GridPagination
+        {...pagination}
+        itemLabel="paper trades"
+        ariaLabel="Strategy Paper trade history pagination"
+      />
     </div>
   );
 }
 
 function CandidateTable({ candidates }) {
+  const pagination = usePaginatedRows(candidates);
   return (
     <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
       <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/60 px-4 py-3">
@@ -212,7 +221,7 @@ function CandidateTable({ candidates }) {
             <tr><th className="px-4 py-2.5">Coin</th><th>Side / TF</th><th>Score</th><th>Confidence</th><th>Strategy decision</th><th>Market Move</th><th>Strategy Paper</th><th>Consolidated</th><th>Reason</th><th>Evaluated IST</th></tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {candidates.map((candidate) => (
+            {pagination.visibleRows.map((candidate) => (
               <tr key={candidate.decision_snapshot_id} className="text-slate-300">
                 <td className="px-4 py-3 font-semibold text-white">{candidate.symbol}</td>
                 <td>{candidate.side || "—"} · {candidate.timeframe || "—"}</td>
@@ -234,8 +243,104 @@ function CandidateTable({ candidates }) {
           </tbody>
         </table>
       </div>
+      <GridPagination
+        {...pagination}
+        itemLabel="candidates"
+        ariaLabel="Latest strategy candidates pagination"
+      />
     </div>
   );
+}
+
+function GridPagination({
+  ariaLabel,
+  currentPage,
+  firstVisible,
+  itemLabel,
+  lastVisible,
+  setCurrentPage,
+  totalItems,
+  totalPages,
+  visiblePageNumbers,
+}) {
+  if (!totalItems) return null;
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-white/10 bg-slate-950/35 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="text-xs text-slate-500">
+        Showing {firstVisible}–{lastVisible} of {totalItems} {itemLabel}
+      </div>
+      <nav className="flex flex-wrap items-center gap-1" aria-label={ariaLabel}>
+        <PaginationButton
+          disabled={currentPage === 1}
+          label="Previous"
+          onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+        />
+        {visiblePageNumbers.map((page) => (
+          <PaginationButton
+            key={page}
+            active={page === currentPage}
+            label={String(page)}
+            onClick={() => setCurrentPage(page)}
+          />
+        ))}
+        <PaginationButton
+          disabled={currentPage === totalPages}
+          label="Next"
+          onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+        />
+      </nav>
+    </div>
+  );
+}
+
+function PaginationButton({ active = false, disabled = false, label, onClick }) {
+  return (
+    <button
+      type="button"
+      className={clsx(
+        "min-w-8 rounded-md border px-2.5 py-1.5 text-xs font-medium transition",
+        active
+          ? "border-cyan-400/40 bg-cyan-500/15 text-cyan-200"
+          : "border-white/10 bg-slate-950/40 text-slate-300 hover:border-cyan-400/30 hover:text-white",
+        disabled && "cursor-not-allowed opacity-40 hover:border-white/10 hover:text-slate-300"
+      )}
+      disabled={disabled}
+      aria-current={active ? "page" : undefined}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function usePaginatedRows(rows) {
+  const totalItems = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / STRATEGY_GRID_PAGE_SIZE));
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageStart = (currentPage - 1) * STRATEGY_GRID_PAGE_SIZE;
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  return {
+    currentPage,
+    firstVisible: totalItems ? pageStart + 1 : 0,
+    lastVisible: Math.min(pageStart + STRATEGY_GRID_PAGE_SIZE, totalItems),
+    setCurrentPage,
+    totalItems,
+    totalPages,
+    visiblePageNumbers: paginationPageNumbers(currentPage, totalPages),
+    visibleRows: rows.slice(pageStart, pageStart + STRATEGY_GRID_PAGE_SIZE),
+  };
+}
+
+function paginationPageNumbers(currentPage, totalPages) {
+  const maximumVisiblePages = 5;
+  const firstPage = Math.max(1, Math.min(currentPage - 2, totalPages - maximumVisiblePages + 1));
+  const lastPage = Math.min(totalPages, firstPage + maximumVisiblePages - 1);
+  return Array.from({ length: lastPage - firstPage + 1 }, (_, index) => firstPage + index);
 }
 
 function Metric({ label, value, icon: Icon, tone = "cyan" }) {

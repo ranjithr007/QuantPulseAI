@@ -1,7 +1,9 @@
 import json
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
+from sqlalchemy import func
 
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
@@ -41,8 +43,14 @@ def get_strategy_summary(
             if normalized
             else list(STRATEGY_REGISTRY.values())
         )
+        strategy_data = _load_strategy_data(db, definitions, cutoff)
         records = [
-            _strategy_record(db, definition, cutoff, candidate_limit)
+            _strategy_record_from_data(
+                definition,
+                strategy_data,
+                cutoff,
+                candidate_limit,
+            )
             for definition in definitions
         ]
         return {
@@ -60,50 +68,21 @@ def get_strategy_summary(
 
 
 def _strategy_record(db, definition, cutoff, candidate_limit):
-    strategy_id = definition["id"]
-    strategy_version = definition["version"]
-    snapshots = (
-        db.query(DecisionSnapshot)
-        .filter(DecisionSnapshot.strategy_id == strategy_id)
-        .filter(DecisionSnapshot.strategy_version == strategy_version)
-        .filter(
-            DecisionSnapshot.decision_version
-            == definition["decision_version"]
-        )
-        .filter(DecisionSnapshot.created_at >= cutoff)
-        .order_by(DecisionSnapshot.created_at.desc(), DecisionSnapshot.id.desc())
-        .limit(2000)
-        .all()
+    strategy_data = _load_strategy_data(db, [definition], cutoff)
+    return _strategy_record_from_data(
+        definition,
+        strategy_data,
+        cutoff,
+        candidate_limit,
     )
-    plans = (
-        db.query(TradePlan)
-        .filter(TradePlan.strategy_id == strategy_id)
-        .filter(TradePlan.strategy_version == strategy_version)
-        .filter(TradePlan.created_at >= cutoff)
-        .all()
-    )
-    risks = (
-        db.query(RiskDecision)
-        .filter(RiskDecision.strategy_id == strategy_id)
-        .filter(RiskDecision.strategy_version == strategy_version)
-        .filter(RiskDecision.created_at >= cutoff)
-        .all()
-    )
-    trades = production_paper_trade_records(
-        db.query(PaperTrade)
-        .filter(PaperTrade.strategy_id == strategy_id)
-        .filter(PaperTrade.strategy_version == strategy_version)
-        .filter(PaperTrade.created_at >= cutoff)
-        .order_by(PaperTrade.created_at.asc(), PaperTrade.id.asc())
-        .all()
-    )
-    strategy_book_trades = (
-        db.query(StrategyShadowTrade)
-        .filter(StrategyShadowTrade.strategy_id == strategy_id)
-        .filter(StrategyShadowTrade.strategy_version == strategy_version)
-        .order_by(StrategyShadowTrade.created_at.asc(), StrategyShadowTrade.id.asc())
-        .all()
-    )
+
+
+def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limit):
+    key = (definition["id"], definition["version"])
+    snapshots = strategy_data["snapshots"].get(key, [])
+    plans = strategy_data["plans"].get(key, [])
+    trades = strategy_data["paper_trades"].get(key, [])
+    strategy_book_trades = strategy_data["strategy_paper_trades"].get(key, [])
     shadow_trades = [
         item for item in strategy_book_trades if item.created_at >= cutoff
     ]
@@ -122,7 +101,7 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
         "coverage": {
             "decision_snapshots": len(snapshots),
             "trade_plans": len(plans),
-            "risk_decisions": len(risks),
+            "risk_decisions": strategy_data["risk_counts"].get(key, 0),
             "paper_trades": len(trades),
             "shadow_trades": len(shadow_trades),
             "strategy_paper_trades": len(shadow_trades),
@@ -158,6 +137,104 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
         "forward_test_readiness": _forward_test_readiness(shadow_performance),
         "candidates": candidates,
     }
+
+
+def _load_strategy_data(db, definitions, cutoff):
+    """Load all strategy-summary evidence in five bounded database queries."""
+
+    strategy_ids = [definition["id"] for definition in definitions]
+    decision_versions = [
+        definition["decision_version"] for definition in definitions
+    ]
+    if not strategy_ids:
+        return {
+            "snapshots": {},
+            "plans": {},
+            "risk_counts": {},
+            "paper_trades": {},
+            "strategy_paper_trades": {},
+        }
+
+    ranked_snapshot_ids = (
+        db.query(
+            DecisionSnapshot.id.label("snapshot_id"),
+            func.row_number()
+            .over(
+                partition_by=(
+                    DecisionSnapshot.strategy_id,
+                    DecisionSnapshot.strategy_version,
+                    DecisionSnapshot.decision_version,
+                ),
+                order_by=(
+                    DecisionSnapshot.created_at.desc(),
+                    DecisionSnapshot.id.desc(),
+                ),
+            )
+            .label("strategy_rank"),
+        )
+        .filter(DecisionSnapshot.strategy_id.in_(strategy_ids))
+        .filter(DecisionSnapshot.decision_version.in_(decision_versions))
+        .filter(DecisionSnapshot.created_at >= cutoff)
+        .subquery()
+    )
+    snapshots = (
+        db.query(DecisionSnapshot)
+        .join(
+            ranked_snapshot_ids,
+            ranked_snapshot_ids.c.snapshot_id == DecisionSnapshot.id,
+        )
+        .filter(ranked_snapshot_ids.c.strategy_rank <= 2000)
+        .order_by(DecisionSnapshot.created_at.desc(), DecisionSnapshot.id.desc())
+        .all()
+    )
+    plans = (
+        db.query(TradePlan)
+        .filter(TradePlan.strategy_id.in_(strategy_ids))
+        .filter(TradePlan.created_at >= cutoff)
+        .all()
+    )
+    risk_count_rows = (
+        db.query(
+            RiskDecision.strategy_id,
+            RiskDecision.strategy_version,
+            func.count(RiskDecision.id),
+        )
+        .filter(RiskDecision.strategy_id.in_(strategy_ids))
+        .filter(RiskDecision.created_at >= cutoff)
+        .group_by(RiskDecision.strategy_id, RiskDecision.strategy_version)
+        .all()
+    )
+    paper_trades = production_paper_trade_records(
+        db.query(PaperTrade)
+        .filter(PaperTrade.strategy_id.in_(strategy_ids))
+        .filter(PaperTrade.created_at >= cutoff)
+        .order_by(PaperTrade.created_at.asc(), PaperTrade.id.asc())
+        .all()
+    )
+    strategy_paper_trades = (
+        db.query(StrategyShadowTrade)
+        .filter(StrategyShadowTrade.strategy_id.in_(strategy_ids))
+        .order_by(StrategyShadowTrade.created_at.asc(), StrategyShadowTrade.id.asc())
+        .all()
+    )
+
+    return {
+        "snapshots": _group_strategy_rows(snapshots),
+        "plans": _group_strategy_rows(plans),
+        "risk_counts": {
+            (strategy_id, strategy_version): int(count)
+            for strategy_id, strategy_version, count in risk_count_rows
+        },
+        "paper_trades": _group_strategy_rows(paper_trades),
+        "strategy_paper_trades": _group_strategy_rows(strategy_paper_trades),
+    }
+
+
+def _group_strategy_rows(rows):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[(row.strategy_id, row.strategy_version)].append(row)
+    return dict(grouped)
 
 
 def _latest_candidates(snapshots, plans, trades, shadow_trades, limit):

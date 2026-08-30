@@ -20,7 +20,7 @@ const PAGE_DATA_NEEDS = {
   signals: { watchlist: true, paper: true, signals: true },
   "market-trend": { signals: true },
   "market-move": { signals: true },
-  strategies: {},
+  strategies: { signals: true },
   "coin-details": { signals: true },
   "risk-controls": { paper: true, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },
@@ -79,7 +79,7 @@ export async function loadStrategySummary({ strategyId, sinceDays = 30, signal }
       candidate_limit: 24,
     },
     signal,
-    30000
+    45000
   );
   return response || { source: "strategy_performance_v1", status: "UNAVAILABLE", records: [] };
 }
@@ -526,7 +526,11 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
   });
 
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  let requestTimedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    requestTimedOut = true;
+    controller.abort();
+  }, timeoutMs);
 
   if (signal) {
     if (signal.aborted) {
@@ -548,6 +552,11 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
+  } catch (requestError) {
+    if (requestTimedOut && requestError?.name === "AbortError") {
+      throw new Error(`${url.pathname} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    }
+    throw requestError;
   } finally {
     window.clearTimeout(timeoutId);
   }
