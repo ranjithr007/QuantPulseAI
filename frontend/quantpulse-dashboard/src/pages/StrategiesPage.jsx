@@ -60,8 +60,13 @@ export default function StrategiesPage() {
         {error ? <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div> : null}
         <ComparisonBanner comparison={payload?.comparison} />
         <div className="mt-4 space-y-4">
+          {loading ? (
+            <div className="rounded-xl border border-sky-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
+              Loading governed paper strategies…
+            </div>
+          ) : null}
           {(payload?.records || []).map((strategy) => <StrategyPanel key={`${strategy.id}:${strategy.version}`} strategy={strategy} />)}
-          {!loading && !(payload?.records || []).length ? (
+          {!loading && !error && !(payload?.records || []).length ? (
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-8 text-center text-sm text-slate-400">No governed paper strategies are registered.</div>
           ) : null}
         </div>

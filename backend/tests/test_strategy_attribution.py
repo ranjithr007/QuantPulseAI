@@ -378,6 +378,59 @@ def test_strategy_summary_excludes_other_strategy_version(monkeypatch):
     assert [item["symbol"] for item in record["candidates"]] == ["BTCUSDT"]
 
 
+def test_strategy_summary_aggregates_coverage_but_returns_latest_candidate_per_coin(
+    monkeypatch,
+):
+    Session = _session_factory()
+    db = Session()
+    now = datetime.utcnow().replace(microsecond=0)
+    snapshots = []
+    for minute, symbol, decision in (
+        (0, "BTCUSDT", "ELIGIBLE"),
+        (1, "BTCUSDT", "BLOCKED"),
+        (2, "ETHUSDT", "ELIGIBLE"),
+    ):
+        observed_at = now + timedelta(minutes=minute)
+        snapshots.append(
+            DecisionSnapshot(
+                symbol=symbol,
+                timeframe="1h",
+                source_timestamp=observed_at,
+                effective_timestamp=observed_at,
+                feature_version="feature_factory_v1",
+                decision_version=CORE_FUSION_DECISION_VERSION,
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                quality_state="OK",
+                decision=decision,
+                confidence=55.0,
+                snapshot_json='{"context":{"side":"LONG","selected_score":55}}',
+                created_at=observed_at,
+            )
+        )
+    db.add_all(snapshots)
+    db.commit()
+    db.close()
+    monkeypatch.setattr(strategy_api, "SessionLocal", Session)
+
+    payload = strategy_api.get_strategy_summary(
+        strategy_id=CORE_FUSION_STRATEGY_ID,
+        since_days=30,
+        candidate_limit=24,
+    )
+    record = payload["records"][0]
+
+    assert record["coverage"]["decision_snapshots"] == 3
+    assert record["coverage"]["eligible_signals"] == 2
+    assert record["coverage"]["blocked_signals"] == 1
+    assert {item["symbol"] for item in record["candidates"]} == {
+        "BTCUSDT",
+        "ETHUSDT",
+    }
+    btc = next(item for item in record["candidates"] if item["symbol"] == "BTCUSDT")
+    assert btc["decision"] == "BLOCKED"
+
+
 def test_latest_unchanged_snapshot_reuses_matching_open_position_lifecycle():
     now = datetime.utcnow()
     latest_snapshot = SimpleNamespace(

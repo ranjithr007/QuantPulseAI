@@ -74,6 +74,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260826_strategy_shadow.py",
         "pg_20260827_app_notifications.py",
         "pg_20260828_usage_indexes.py",
+        "pg_20260831_strategy_summary_indexes.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -145,3 +146,8 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     assert 'down_revision = "pg_20260827_notifications"' in usage_indexes
     assert 'revision = "pg_20260828_usage_indexes"' in usage_indexes
     assert "postgresql_concurrently=True" in usage_indexes
+
+    strategy_indexes = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260831_strategy_summary_indexes.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260828_usage_indexes"' in strategy_indexes
+    assert 'revision = "pg_20260831_strategy_indexes"' in strategy_indexes
+    assert "postgresql_concurrently=True" in strategy_indexes

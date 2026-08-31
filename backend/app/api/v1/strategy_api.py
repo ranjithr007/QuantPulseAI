@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
-from sqlalchemy import func
+from sqlalchemy import case, func
 
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
@@ -83,6 +83,7 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
     plans = strategy_data["plans"].get(key, [])
     trades = strategy_data["paper_trades"].get(key, [])
     strategy_book_trades = strategy_data["strategy_paper_trades"].get(key, [])
+    snapshot_counts = strategy_data["snapshot_counts"].get(key, {})
     shadow_trades = [
         item for item in strategy_book_trades if item.created_at >= cutoff
     ]
@@ -99,19 +100,15 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
     return {
         **definition,
         "coverage": {
-            "decision_snapshots": len(snapshots),
-            "trade_plans": len(plans),
+            "decision_snapshots": snapshot_counts.get("total", 0),
+            "trade_plans": strategy_data["plan_counts"].get(key, 0),
             "risk_decisions": strategy_data["risk_counts"].get(key, 0),
             "paper_trades": len(trades),
             "shadow_trades": len(shadow_trades),
             "strategy_paper_trades": len(shadow_trades),
             "strategy_paper_lifetime_trades": len(strategy_book_trades),
-            "eligible_signals": sum(
-                1 for item in snapshots if str(item.decision).upper() == "ELIGIBLE"
-            ),
-            "blocked_signals": sum(
-                1 for item in snapshots if str(item.decision).upper() == "BLOCKED"
-            ),
+            "eligible_signals": snapshot_counts.get("eligible", 0),
+            "blocked_signals": snapshot_counts.get("blocked", 0),
         },
         # The headline comparison uses isolated shadow results because every
         # strategy receives the same opportunity to trade. Official results
@@ -140,7 +137,7 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
 
 
 def _load_strategy_data(db, definitions, cutoff):
-    """Load all strategy-summary evidence in five bounded database queries."""
+    """Load aggregate coverage plus only the rows needed by visible candidates."""
 
     strategy_ids = [definition["id"] for definition in definitions]
     decision_versions = [
@@ -150,47 +147,78 @@ def _load_strategy_data(db, definitions, cutoff):
         return {
             "snapshots": {},
             "plans": {},
+            "snapshot_counts": {},
+            "plan_counts": {},
             "risk_counts": {},
             "paper_trades": {},
             "strategy_paper_trades": {},
         }
 
-    ranked_snapshot_ids = (
+    snapshot_count_rows = (
         db.query(
-            DecisionSnapshot.id.label("snapshot_id"),
-            func.row_number()
-            .over(
-                partition_by=(
-                    DecisionSnapshot.strategy_id,
-                    DecisionSnapshot.strategy_version,
-                    DecisionSnapshot.decision_version,
-                ),
-                order_by=(
-                    DecisionSnapshot.created_at.desc(),
-                    DecisionSnapshot.id.desc(),
-                ),
-            )
-            .label("strategy_rank"),
+            DecisionSnapshot.strategy_id,
+            DecisionSnapshot.strategy_version,
+            func.count(DecisionSnapshot.id),
+            func.sum(
+                case(
+                    (func.upper(DecisionSnapshot.decision) == "ELIGIBLE", 1),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (func.upper(DecisionSnapshot.decision) == "BLOCKED", 1),
+                    else_=0,
+                )
+            ),
         )
         .filter(DecisionSnapshot.strategy_id.in_(strategy_ids))
         .filter(DecisionSnapshot.decision_version.in_(decision_versions))
         .filter(DecisionSnapshot.created_at >= cutoff)
+        .group_by(DecisionSnapshot.strategy_id, DecisionSnapshot.strategy_version)
+        .all()
+    )
+    latest_snapshot_ids = (
+        db.query(
+            func.max(DecisionSnapshot.id).label("snapshot_id"),
+        )
+        .filter(DecisionSnapshot.strategy_id.in_(strategy_ids))
+        .filter(DecisionSnapshot.decision_version.in_(decision_versions))
+        .filter(DecisionSnapshot.created_at >= cutoff)
+        .group_by(
+            DecisionSnapshot.strategy_id,
+            DecisionSnapshot.strategy_version,
+            DecisionSnapshot.decision_version,
+            DecisionSnapshot.symbol,
+        )
         .subquery()
     )
     snapshots = (
         db.query(DecisionSnapshot)
         .join(
-            ranked_snapshot_ids,
-            ranked_snapshot_ids.c.snapshot_id == DecisionSnapshot.id,
+            latest_snapshot_ids,
+            latest_snapshot_ids.c.snapshot_id == DecisionSnapshot.id,
         )
-        .filter(ranked_snapshot_ids.c.strategy_rank <= 2000)
         .order_by(DecisionSnapshot.created_at.desc(), DecisionSnapshot.id.desc())
         .all()
     )
+    snapshot_ids = [item.id for item in snapshots]
     plans = (
         db.query(TradePlan)
+        .filter(TradePlan.strategy_decision_snapshot_id.in_(snapshot_ids))
+        .all()
+        if snapshot_ids
+        else []
+    )
+    plan_count_rows = (
+        db.query(
+            TradePlan.strategy_id,
+            TradePlan.strategy_version,
+            func.count(TradePlan.id),
+        )
         .filter(TradePlan.strategy_id.in_(strategy_ids))
         .filter(TradePlan.created_at >= cutoff)
+        .group_by(TradePlan.strategy_id, TradePlan.strategy_version)
         .all()
     )
     risk_count_rows = (
@@ -221,6 +249,18 @@ def _load_strategy_data(db, definitions, cutoff):
     return {
         "snapshots": _group_strategy_rows(snapshots),
         "plans": _group_strategy_rows(plans),
+        "snapshot_counts": {
+            (strategy_id, strategy_version): {
+                "total": int(total or 0),
+                "eligible": int(eligible or 0),
+                "blocked": int(blocked or 0),
+            }
+            for strategy_id, strategy_version, total, eligible, blocked in snapshot_count_rows
+        },
+        "plan_counts": {
+            (strategy_id, strategy_version): int(count)
+            for strategy_id, strategy_version, count in plan_count_rows
+        },
         "risk_counts": {
             (strategy_id, strategy_version): int(count)
             for strategy_id, strategy_version, count in risk_count_rows
