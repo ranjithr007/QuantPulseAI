@@ -509,7 +509,11 @@ function formatAgeShort(seconds) {
 }
 
 function PaperWalletStrip({ wallet, openPositions }) {
-  const capital = safeNumber(wallet?.paper_capital_inr, 200000);
+  const capital = safeNumber(wallet?.initial_capital_inr ?? wallet?.paper_capital_inr, 200000);
+  const walletBalance = safeNumber(wallet?.wallet_balance_inr, capital);
+  const unrealizedPnl = safeNumber(wallet?.unrealized_pnl_inr, 0);
+  const equity = safeNumber(wallet?.equity_inr, walletBalance + unrealizedPnl);
+  const realizedPnl = safeNumber(wallet?.realized_pnl_inr, walletBalance - capital);
   const committed = safeNumber(
     wallet?.committed_margin_inr,
     (openPositions || []).reduce(
@@ -517,14 +521,16 @@ function PaperWalletStrip({ wallet, openPositions }) {
       0
     )
   );
-  const available = safeNumber(wallet?.available_margin_inr, Math.max(0, capital - committed));
-  const utilization = capital > 0 ? (committed / capital) * 100 : 0;
+  const available = safeNumber(wallet?.available_margin_inr, Math.max(0, equity - committed));
+  const utilization = equity > 0 ? (committed / equity) * 100 : 0;
 
   return (
-    <div className="mt-3 grid gap-2 rounded-lg border border-cyan-400/20 bg-cyan-500/5 p-3 sm:grid-cols-4">
-      <WalletDatum label="INR-M paper wallet" value={formatInr(capital)} note="Paper trading only" />
+    <div className="mt-3 grid gap-2 rounded-lg border border-cyan-400/20 bg-cyan-500/5 p-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+      <WalletDatum label="Starting paper capital" value={formatInr(capital)} note="Fixed simulation baseline" />
+      <WalletDatum label="Current wallet balance" value={formatInr(walletBalance)} note={`Realized PnL ${formatInr(realizedPnl)}`} />
+      <WalletDatum label="Account equity" value={formatInr(equity)} note={`Includes open PnL ${formatInr(unrealizedPnl)}`} />
       <WalletDatum label="Committed margin" value={formatInr(committed)} note={`${formatPercent(utilization, 1)} utilised`} />
-      <WalletDatum label="Available balance" value={formatInr(available)} note="Uncommitted paper capital" />
+      <WalletDatum label="Available margin" value={formatInr(available)} note="Equity minus committed margin" />
       <WalletDatum label="Position sizing" value="75% / 85%" note={`${formatInr(150000)} minimum / ${formatInr(170000)} maximum notional`} />
     </div>
   );

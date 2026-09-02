@@ -162,6 +162,12 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('T1 closes 75% / protected stop / T2 closes 25%', pnl_section)
         self.assertIn("Deadline (IST)", pnl_section)
         self.assertIn("Closed (IST)", pnl_section)
+        self.assertIn('label="Starting paper capital"', pnl_section)
+        self.assertIn('label="Current wallet balance"', pnl_section)
+        self.assertIn('label="Account equity"', pnl_section)
+        self.assertIn('label="Available margin"', pnl_section)
+        self.assertIn("wallet?.wallet_balance_inr", pnl_section)
+        self.assertIn("wallet?.equity_inr", pnl_section)
 
         formatters = (
             FRONTEND_ROOT / "src" / "utils" / "formatters.js"
@@ -292,6 +298,10 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
             self.assertIn('document.visibilityState === "hidden"', source)
             self.assertIn('document.addEventListener("visibilitychange"', source)
             self.assertNotIn("window.setInterval", source)
+
+        self.assertIn("Promise.allSettled", validation_badge)
+        self.assertIn("Loading scheduled evaluations...", validation_badge)
+        self.assertIn("primary opportunity totals remain visible", validation_badge)
 
 
 if __name__ == "__main__":

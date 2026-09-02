@@ -19,6 +19,8 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
   const [recoveryHistory, setRecoveryHistory] = useState(null);
   const [dailyCheckpoints, setDailyCheckpoints] = useState(null);
   const [opportunityError, setOpportunityError] = useState("");
+  const [opportunityDetailWarning, setOpportunityDetailWarning] = useState("");
+  const [opportunityLoading, setOpportunityLoading] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -150,41 +152,75 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
         setRecoveryHistory(null);
         setDailyCheckpoints(null);
         setOpportunityError("");
+        setOpportunityDetailWarning("");
+        setOpportunityLoading(false);
         return;
       }
       if (cancelled || inFlight || document.visibilityState === "hidden") return;
 
       inFlight = true;
       controller = new AbortController();
+      setOpportunityLoading(true);
+      setOpportunityError("");
+      setOpportunityDetailWarning("");
       try {
-        const [response, funnelResponse, rollingResponse, recoveryResponse, checkpointResponse] = await Promise.all([
-          loadPaperTradeOpportunities({
-            sinceHours: 24,
-            signal: controller.signal,
-          }),
-          loadPaperTradeLifecycleFunnel({
-            sinceHours: 24,
-            signal: controller.signal,
-          }),
-          loadPhase2RollingValidation({
-            signal: controller.signal,
-          }),
-          loadPaperTradeRecoveryEvents({
-            limit: 20,
-            signal: controller.signal,
-          }),
-          loadPhase2EvidenceCheckpoints({
-            limit: 30,
-            signal: controller.signal,
-          }),
-        ]);
+        const requests = [
+          {
+            label: "Opportunity totals",
+            primary: true,
+            request: loadPaperTradeOpportunities({ sinceHours: 24, signal: controller.signal }),
+            apply: setOpportunities,
+          },
+          {
+            label: "Lifecycle funnel",
+            request: loadPaperTradeLifecycleFunnel({ sinceHours: 24, signal: controller.signal }),
+            apply: setLifecycleFunnel,
+          },
+          {
+            label: "Rolling validation",
+            request: loadPhase2RollingValidation({ signal: controller.signal }),
+            apply: setRollingValidation,
+          },
+          {
+            label: "Recovery history",
+            request: loadPaperTradeRecoveryEvents({ limit: 20, signal: controller.signal }),
+            apply: setRecoveryHistory,
+          },
+          {
+            label: "Daily checkpoints",
+            request: loadPhase2EvidenceCheckpoints({ limit: 30, signal: controller.signal }),
+            apply: setDailyCheckpoints,
+          },
+        ];
+        const results = await Promise.allSettled(
+          requests.map((item) =>
+            item.request.then((value) => {
+              if (!cancelled) item.apply(value);
+              return value;
+            })
+          )
+        );
         if (!cancelled) {
-          setOpportunities(response);
-          setLifecycleFunnel(funnelResponse);
-          setRollingValidation(rollingResponse);
-          setRecoveryHistory(recoveryResponse);
-          setDailyCheckpoints(checkpointResponse);
-          setOpportunityError("");
+          const failures = results
+            .map((result, index) => ({ result, request: requests[index] }))
+            .filter(({ result }) => result.status === "rejected");
+          const primaryFailure = failures.find(({ request }) => request.primary);
+          const detailFailures = failures
+            .filter(({ request }) => !request.primary)
+            .map(({ request }) => request.label);
+
+          if (primaryFailure) {
+            const reason = primaryFailure.result.reason;
+            setOpportunities(null);
+            setOpportunityError(
+              reason instanceof Error ? reason.message : "Unable to load opportunity totals"
+            );
+          }
+          setOpportunityDetailWarning(
+            detailFailures.length
+              ? `${detailFailures.join(", ")} unavailable; primary opportunity totals remain visible.`
+              : ""
+          );
         }
       } catch (err) {
         if (!cancelled && err?.name !== "AbortError") {
@@ -193,12 +229,14 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
           setRollingValidation(null);
           setRecoveryHistory(null);
           setDailyCheckpoints(null);
+          setOpportunityDetailWarning("");
           setOpportunityError(
             err instanceof Error ? err.message : "Unable to load opportunity accounting"
           );
         }
       } finally {
         inFlight = false;
+        if (!cancelled) setOpportunityLoading(false);
         if (!cancelled && document.visibilityState !== "hidden") {
           timer = window.setTimeout(refreshOpportunities, 60_000);
         }
@@ -238,7 +276,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
           </div>
           <Pill tone="slate">Idle</Pill>
         </div>
-        <OpportunityEvidence report={opportunities} lifecycleFunnel={lifecycleFunnel} rollingValidation={rollingValidation} recoveryHistory={recoveryHistory} dailyCheckpoints={dailyCheckpoints} error={opportunityError} />
+        <OpportunityEvidence report={opportunities} lifecycleFunnel={lifecycleFunnel} rollingValidation={rollingValidation} recoveryHistory={recoveryHistory} dailyCheckpoints={dailyCheckpoints} error={opportunityError} warning={opportunityDetailWarning} loading={opportunityLoading} />
       </div>
     );
   }
@@ -284,7 +322,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
         </div>
       ) : null}
 
-      <OpportunityEvidence report={opportunities} lifecycleFunnel={lifecycleFunnel} rollingValidation={rollingValidation} recoveryHistory={recoveryHistory} dailyCheckpoints={dailyCheckpoints} error={opportunityError} />
+      <OpportunityEvidence report={opportunities} lifecycleFunnel={lifecycleFunnel} rollingValidation={rollingValidation} recoveryHistory={recoveryHistory} dailyCheckpoints={dailyCheckpoints} error={opportunityError} warning={opportunityDetailWarning} loading={opportunityLoading} />
 
       {!error && contract?.issues?.length ? (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -343,22 +381,40 @@ function PromotionMetric({ label, value, target, suffix = "" }) {
   );
 }
 
-function OpportunityEvidence({ report, lifecycleFunnel, rollingValidation, recoveryHistory, dailyCheckpoints, error }) {
-  if (error) {
+function OpportunityEvidence({ report, lifecycleFunnel, rollingValidation, recoveryHistory, dailyCheckpoints, error, warning, loading }) {
+  if (loading && !report && !error) {
     return (
-      <div className="mt-2 rounded-md border border-rose-400/20 bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">
-        Opportunity accounting unavailable
+      <div className="mt-2 rounded-md border border-white/10 bg-slate-900/60 px-2.5 py-2">
+        <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">24h opportunity accounting</div>
+        <div className="mt-1 text-xs text-slate-400">Loading scheduled evaluations...</div>
       </div>
     );
   }
 
-  if (!report || report.status !== "OK") {
+  if (error) {
+    return (
+      <div className="mt-2 rounded-md border border-rose-400/20 bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">
+        <div>Opportunity accounting unavailable</div>
+        <div className="mt-1 text-[11px] text-rose-300/80">{error}</div>
+      </div>
+    );
+  }
+
+  if (!report) {
     return (
       <div className="mt-2 rounded-md border border-white/10 bg-slate-900/60 px-2.5 py-2">
         <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
           24h opportunity accounting
         </div>
-        <div className="mt-1 text-xs text-slate-400">Waiting for the first scheduled evaluation</div>
+        <div className="mt-1 text-xs text-slate-400">No opportunity accounting response is available yet.</div>
+      </div>
+    );
+  }
+
+  if (report.status !== "OK") {
+    return (
+      <div className="mt-2 rounded-md border border-rose-400/20 bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">
+        Opportunity accounting status: {report.status || "UNKNOWN"}. {report.detail || "Scheduled evaluation data is unavailable."}
       </div>
     );
   }
@@ -409,6 +465,7 @@ function OpportunityEvidence({ report, lifecycleFunnel, rollingValidation, recov
           ))}
         </div>
       ) : null}
+      {warning ? <div className="mt-2 text-[11px] text-amber-300">{warning}</div> : null}
       <LifecycleFunnel funnel={lifecycleFunnel} />
       <RollingValidation report={rollingValidation} />
       <DailyCheckpoint history={dailyCheckpoints} />
