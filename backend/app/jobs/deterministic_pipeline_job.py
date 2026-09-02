@@ -17,6 +17,7 @@ from app.jobs.opportunity_coverage_recovery_job import run_opportunity_coverage_
 from app.jobs.orderflow_jobs import run_orderflow_job
 from app.jobs.paper_trade_execute_job import run_paper_trade_execute_job
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
+from app.jobs.phase2_daily_checkpoint_job import run_phase2_daily_checkpoint_job
 from app.jobs.regime_jobs import run_regime_job
 from app.jobs.risk_job import run_risk_job
 from app.jobs.smc_job import run_smc_job
@@ -39,9 +40,14 @@ STAGE_ORDER = (
     ("opportunity_coverage_recovery", run_opportunity_coverage_recovery_job),
     ("risk", run_risk_job),
     ("paper_trade_execute", run_paper_trade_execute_job),
+    ("phase2_daily_checkpoint", run_phase2_daily_checkpoint_job),
 )
 ALWAYS_RUN_SAFETY_STAGES = frozenset(
-    {"paper_trade_monitor", "opportunity_coverage_recovery"}
+    {
+        "paper_trade_monitor",
+        "opportunity_coverage_recovery",
+        "phase2_daily_checkpoint",
+    }
 )
 # These stages provide evidence to one or more strategies, but no individual
 # branch is globally authoritative. A failure must be recorded as degradation
@@ -59,6 +65,7 @@ NON_BLOCKING_STRATEGY_STAGES = frozenset(
         "market_participation_trend",
         "watchlist_persist",
         "opportunity_coverage_recovery",
+        "phase2_daily_checkpoint",
     }
 )
 STALE_PIPELINE_AFTER_SECONDS = 1800

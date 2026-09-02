@@ -302,6 +302,8 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("Promise.allSettled", validation_badge)
         self.assertIn("Loading scheduled evaluations...", validation_badge)
         self.assertIn("primary opportunity totals remain visible", validation_badge)
+        self.assertIn("Current 24h coverage is complete", validation_badge)
+        self.assertIn("CURRENTLY COMPLETE", validation_badge)
 
 
 if __name__ == "__main__":

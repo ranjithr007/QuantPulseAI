@@ -595,50 +595,11 @@ def create_phase2_evidence_checkpoint(payload: dict = Body(default={})):
     db = SessionLocal()
 
     try:
-        checkpoint_date = str(
-            payload.get("checkpoint_date") or datetime.utcnow().date().isoformat()
-        )[:10]
-        event_repo = DataQualityEventRepository()
-        existing = _find_phase2_checkpoint(
-            event_repo.list_events(
-                db,
-                source=PHASE2_CHECKPOINT_EVENT_SOURCE,
-                category=PHASE2_CHECKPOINT_EVENT_CATEGORY,
-                limit=500,
-            ),
-            checkpoint_date,
-        )
-        if existing:
-            return {
-                "source": "phase2_daily_evidence_checkpoint",
-                "status": "EXISTS",
-                "record": existing,
-            }
-
-        checkpoint = _build_phase2_evidence_checkpoint(db, checkpoint_date)
-        records = event_repo.record_events(
+        return record_phase2_evidence_checkpoint(
             db,
-            [
-                {
-                    "symbol": "SYSTEM",
-                    "timeframe": "1d",
-                    "source": PHASE2_CHECKPOINT_EVENT_SOURCE,
-                    "category": PHASE2_CHECKPOINT_EVENT_CATEGORY,
-                    "severity": "error" if checkpoint["status"] == "ATTENTION" else "info",
-                    "status": checkpoint["status"],
-                    "blocked": checkpoint["status"] == "ATTENTION",
-                    "reason": checkpoint["reason"],
-                    "details": checkpoint,
-                    "observed_at": payload.get("observed_at"),
-                    "effective_at": payload.get("observed_at"),
-                }
-            ],
+            checkpoint_date=payload.get("checkpoint_date"),
+            observed_at=payload.get("observed_at"),
         )
-        return {
-            "source": "phase2_daily_evidence_checkpoint",
-            "status": "RECORDED",
-            "record": records[0] if records else None,
-        }
     finally:
         db.close()
 
@@ -2358,6 +2319,61 @@ def _find_phase2_checkpoint(records, checkpoint_date):
         ),
         None,
     )
+
+
+def record_phase2_evidence_checkpoint(
+    db,
+    *,
+    checkpoint_date=None,
+    observed_at=None,
+):
+    """Persist at most one Phase 2 evidence checkpoint per UTC date."""
+    checkpoint_date = str(
+        checkpoint_date or datetime.utcnow().date().isoformat()
+    )[:10]
+    event_repo = DataQualityEventRepository()
+    existing = _find_phase2_checkpoint(
+        event_repo.list_events(
+            db,
+            source=PHASE2_CHECKPOINT_EVENT_SOURCE,
+            category=PHASE2_CHECKPOINT_EVENT_CATEGORY,
+            limit=500,
+        ),
+        checkpoint_date,
+    )
+    if existing:
+        return {
+            "source": "phase2_daily_evidence_checkpoint",
+            "status": "EXISTS",
+            "record": existing,
+        }
+
+    checkpoint = _build_phase2_evidence_checkpoint(db, checkpoint_date)
+    records = event_repo.record_events(
+        db,
+        [
+            {
+                "symbol": "SYSTEM",
+                "timeframe": "1d",
+                "source": PHASE2_CHECKPOINT_EVENT_SOURCE,
+                "category": PHASE2_CHECKPOINT_EVENT_CATEGORY,
+                "severity": (
+                    "error" if checkpoint["status"] == "ATTENTION" else "info"
+                ),
+                "status": checkpoint["status"],
+                "blocked": checkpoint["status"] == "ATTENTION",
+                "reason": checkpoint["reason"],
+                "details": checkpoint,
+                "observed_at": observed_at,
+                "effective_at": observed_at,
+            }
+        ],
+    )
+    return {
+        "source": "phase2_daily_evidence_checkpoint",
+        "status": "RECORDED",
+        "record": records[0] if records else None,
+    }
 
 
 def _build_phase2_evidence_checkpoint(db, checkpoint_date):

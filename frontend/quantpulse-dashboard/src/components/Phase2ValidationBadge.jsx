@@ -469,7 +469,7 @@ function OpportunityEvidence({ report, lifecycleFunnel, rollingValidation, recov
       <LifecycleFunnel funnel={lifecycleFunnel} />
       <RollingValidation report={rollingValidation} />
       <DailyCheckpoint history={dailyCheckpoints} />
-      <RecoveryHistory history={recoveryHistory} />
+      <RecoveryHistory history={recoveryHistory} coverageComplete={coverageComplete} />
     </div>
   );
 }
@@ -610,7 +610,7 @@ function metricValue(value) {
   return Number.isFinite(number) ? number.toFixed(2) : String(value);
 }
 
-function RecoveryHistory({ history }) {
+function RecoveryHistory({ history, coverageComplete = false }) {
   const latest = history?.latest || null;
   const summary = history?.summary || {};
 
@@ -627,11 +627,18 @@ function RecoveryHistory({ history }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Recovery history</div>
-          <div className="mt-0.5 text-xs text-slate-300">{latest.reason}</div>
+          <div className="mt-0.5 text-xs text-slate-300">
+            {coverageComplete
+              ? "Current 24h coverage is complete; the event below is historical."
+              : latest.reason}
+          </div>
         </div>
-        <Pill tone={recoveryTone(latest.status)}>{latest.status}</Pill>
+        <Pill tone={coverageComplete ? "emerald" : recoveryTone(latest.status)}>
+          {coverageComplete ? "CURRENTLY COMPLETE" : latest.status}
+        </Pill>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+        {coverageComplete ? <span>Last historical outcome: {latest.status}</span> : null}
         <span>Attempts: {summary.attempts ?? 0}</span>
         <span>Recovered: {summary.recovered ?? 0}</span>
         <span>Unresolved: {(summary.unresolved ?? 0) + (summary.retry_failed ?? 0)}</span>

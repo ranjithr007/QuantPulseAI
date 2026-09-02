@@ -1077,6 +1077,7 @@ def test_monitoring_precedes_recalculation_and_execution():
         "opportunity_coverage_recovery",
         "risk",
         "paper_trade_execute",
+        "phase2_daily_checkpoint",
     ]
 
 
