@@ -20,7 +20,6 @@ const PAGE_DATA_NEEDS = {
   signals: { watchlist: true, paper: true, signals: true },
   "market-trend": { signals: true },
   "market-move": { signals: true },
-  "coin-pulse": { signals: true },
   strategies: { signals: true },
   "coin-details": { signals: true },
   "risk-controls": { paper: true, risk: true, signals: true },

@@ -12,7 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 import { loadMarketParticipationTrends } from "../hooks/dashboardApi";
-import { formatPercent, formatPrice, formatSigned } from "../utils/formatters";
+import { formatNumber, formatPercent, formatPrice, formatSigned } from "../utils/formatters";
 import Pill from "../components/ui/Pill";
 
 export default function MarketMovePage({ view, selectedDetail }) {
@@ -100,8 +100,65 @@ export default function MarketMovePage({ view, selectedDetail }) {
             <EvidencePolicy macroAvailable={analysis.macroAvailable} quality={participation?.quality_state} />
           </div>
         </div>
+        <MarketContextCard analysis={analysis} />
       </div>
     </section>
+  );
+}
+
+function MarketContextCard({ analysis }) {
+  const metrics = [
+    {
+      label: "Executable signal",
+      value: analysis.signalType,
+      note: analysis.confidence === null ? "Confidence unavailable" : `${formatPercent(analysis.confidence, 1)} confidence`,
+    },
+    {
+      label: "Funding rate",
+      value: analysis.fundingRate === null ? "Unavailable" : `${formatSigned(analysis.fundingRate * 100, 4)}%`,
+      note: analysis.fundingTrend,
+    },
+    {
+      label: "Open interest",
+      value: analysis.openInterest === null ? "Unavailable" : formatNumber(analysis.openInterest, 0),
+      note: analysis.openInterestChange === null ? "Change unavailable" : `${formatSigned(analysis.openInterestChange, 2)}% latest change`,
+    },
+    {
+      label: "Market structure",
+      value: analysis.marketStructure,
+      note: `${analysis.timeframe} · ${analysis.mode}`,
+    },
+  ];
+
+  return (
+    <article className="mt-3 rounded-xl border border-white/10 bg-slate-900/70 p-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium text-white">
+          <Activity className="h-4 w-4 text-cyan-300" /> Trading context
+        </div>
+        <div className="text-xs text-slate-500">Futures and execution evidence for the selected coin</div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {metrics.map((metric) => (
+          <div key={metric.label} className="rounded-lg border border-white/5 bg-slate-950/55 p-3">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{metric.label}</div>
+            <div className="mt-2 text-base font-semibold text-white">{metric.value}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">{metric.note}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-[0.34fr_0.66fr]">
+        <div className="rounded-lg border border-white/5 bg-slate-950/55 p-3">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active range</div>
+          <div className="mt-2 text-base font-semibold text-white">{analysis.activeRange}</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">{analysis.currentTone}</div>
+        </div>
+        <div className="rounded-lg border border-white/5 bg-slate-950/55 p-3">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Market intelligence</div>
+          <p className="mt-2 text-sm leading-6 text-slate-300">{analysis.narrative}</p>
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -253,7 +310,7 @@ function EvidencePolicy({ macroAvailable, quality }) {
   );
 }
 
-export function buildMoveAnalysis(view, detail, participation) {
+function buildMoveAnalysis(view, detail, participation) {
   const engines = buildEngines(detail, participation);
   const usableScores = engines.map((engine) => engine.score).filter((score) => score !== null);
   const participationScore = optionalNumber(participation?.score);
@@ -269,23 +326,68 @@ export function buildMoveAnalysis(view, detail, participation) {
   const resistanceZone = timeframeEvidence?.resistance;
   const supportZone = timeframeEvidence?.support;
   const macroAvailable = participation?.external_context?.status === "VERIFIED";
+  const resistance = formatZone(resistanceZone, detail?.resistanceLevels?.r1, detail?.resistanceLevels?.r2);
+  const support = formatZone(supportZone, detail?.supportLevels?.s2, detail?.supportLevels?.s1);
+  const levelsAvailable = resistance !== "Calculating" && support !== "Calculating";
+  const drivers = buildDrivers(engines, participation, move.score);
+  const probabilities = scenarioProbabilities(move.score);
+  const marketStructure = String(detail?.regimeLabel || participation?.direction || move.label).replaceAll("_", " ");
+  const activeRange = levelsAvailable ? `${support} – ${resistance}` : "Calculating";
+  const currentTone = !levelsAvailable
+    ? "Directional evidence is available; price levels are still calculating"
+    : move.score >= 40
+      ? `Bullish while price holds above ${support}`
+      : move.score <= -40
+        ? `Bearish while price remains below ${resistance}`
+        : `Range-bound until price confirms outside the active range`;
 
   return {
     symbol: view.symbol,
+    timeframe: view.timeframe,
+    mode: view.mode,
     price: optionalNumber(detail?.currentPrice) || 0,
     change24h: optionalNumber(detail?.liveMarket?.price_change_pct ?? detail?.liveMarket?.price_change_percent),
     engines,
     move,
     hasEvidence: usableScores.length > 0 || participationScore !== null,
     availableEngineCount: usableScores.length,
-    drivers: buildDrivers(engines, participation, move.score),
-    probabilities: scenarioProbabilities(move.score),
-    resistance: formatZone(resistanceZone, detail?.resistanceLevels?.r1, detail?.resistanceLevels?.r2),
+    drivers,
+    probabilities,
+    resistance,
     resistanceNote: zoneNote(resistanceZone, "Nearest calculated resistance zone"),
-    support: formatZone(supportZone, detail?.supportLevels?.s2, detail?.supportLevels?.s1),
+    support,
     supportNote: zoneNote(supportZone, "Nearest calculated support zone"),
     macroAvailable,
+    signalType: detail?.signalType || "WAIT",
+    confidence: optionalNumber(detail?.confidence),
+    fundingRate: optionalNumber(
+      detail?.derivatives?.latest_funding_rate
+      ?? detail?.derivatives?.latestFundingRate
+      ?? detail?.derivatives?.funding?.latest?.rate
+    ),
+    fundingTrend: detail?.derivatives?.funding_trend || detail?.derivatives?.funding?.trend || "Funding feed pending",
+    openInterest: optionalNumber(
+      detail?.derivatives?.latest_open_interest
+      ?? detail?.derivatives?.latestOpenInterest
+      ?? detail?.derivatives?.openInterest?.latest?.value
+    ),
+    openInterestChange: optionalNumber(
+      detail?.derivatives?.latest_open_interest_change_pct
+      ?? detail?.derivatives?.latestOpenInterestChangePct
+      ?? detail?.derivatives?.openInterest?.latest_change_pct
+    ),
+    marketStructure,
+    activeRange,
+    currentTone,
+    narrative: buildMarketNarrative(view.symbol, move, drivers, probabilities, participation?.quality_state, usableScores.length),
   };
+}
+
+function buildMarketNarrative(symbol, move, drivers, probabilities, quality, engineCount) {
+  const leadingEvidence = drivers.length
+    ? `Leading evidence: ${drivers.slice(0, 3).join("; ")}.`
+    : "No directional driver has enough verified evidence to be promoted yet.";
+  return `${symbol} has a ${move.label.toLowerCase()} composite bias from ${engineCount}/6 available engines. ${leadingEvidence} The scenario model assigns ${formatPercent(probabilities.continuation, 0)} continuation, ${formatPercent(probabilities.pullback, 0)} pullback, and ${formatPercent(probabilities.reversal, 0)} reversal probability. Evidence quality is ${quality || "PENDING"}.`;
 }
 
 function buildEngines(detail, participation) {

@@ -10,7 +10,6 @@ import { executePaperTradeCandidates, loadAutomationSettings, persistReadyWatchl
 const importAutoTradingPage = () => import("./pages/AutoTradingPage");
 const importBacktestPage = () => import("./pages/BacktestPage");
 const importCoinDetailsPage = () => import("./pages/CoinDetailsPage");
-const importCoinPulsePage = () => import("./pages/CoinPulsePage");
 const importDashboardHomePage = () => import("./pages/DashboardHomePage");
 const importMarketScanPage = () => import("./pages/MarketScanPage");
 const importMarketMovePage = () => import("./pages/MarketMovePage");
@@ -26,7 +25,6 @@ const importStrategiesPage = () => import("./pages/StrategiesPage");
 const AutoTradingPage = React.lazy(importAutoTradingPage);
 const BacktestPage = React.lazy(importBacktestPage);
 const CoinDetailsPage = React.lazy(importCoinDetailsPage);
-const CoinPulsePage = React.lazy(importCoinPulsePage);
 const DashboardHomePage = React.lazy(importDashboardHomePage);
 const MarketScanPage = React.lazy(importMarketScanPage);
 const MarketMovePage = React.lazy(importMarketMovePage);
@@ -56,7 +54,6 @@ const PAGES = [
   "signals",
   "market-trend",
   "market-move",
-  "coin-pulse",
   "coin-details",
   "risk-controls",
   "auto-trading",
@@ -74,7 +71,6 @@ const ROUTE_PRELOADERS = [
   importSignalsPage,
   importMarketTrendPage,
   importMarketMovePage,
-  importCoinPulsePage,
   importCoinDetailsPage,
   importRiskControlsPage,
   importAutoTradingPage,
@@ -129,7 +125,6 @@ function getPageFromPath(pathname) {
   if (path.startsWith("/signals")) return "signals";
   if (path.startsWith("/market-trend")) return "market-trend";
   if (path.startsWith("/market-move")) return "market-move";
-  if (path.startsWith("/coin-pulse")) return "coin-pulse";
   if (path.startsWith("/trading-details")) return "auto-trading";
   if (path.startsWith("/market-scan")) return "market-scan";
   return "dashboard";
@@ -159,7 +154,6 @@ function buildPageUrl(page, view) {
   if (page === "signals") return `/signals?${params.toString()}`;
   if (page === "market-trend") return `/market-trend?${params.toString()}`;
   if (page === "market-move") return `/market-move?${params.toString()}`;
-  if (page === "coin-pulse") return `/coin-pulse?${params.toString()}`;
   return `/market-scan?${params.toString()}`;
 }
 
@@ -564,15 +558,6 @@ function DashboardLayout({
               path="/market-move"
               element={
                 <MarketMovePage
-                  view={view}
-                  selectedDetail={selectedDetail}
-                />
-              }
-            />
-            <Route
-              path="/coin-pulse"
-              element={
-                <CoinPulsePage
                   view={view}
                   selectedDetail={selectedDetail}
                 />
