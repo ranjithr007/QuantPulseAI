@@ -253,7 +253,7 @@ function EvidencePolicy({ macroAvailable, quality }) {
   );
 }
 
-function buildMoveAnalysis(view, detail, participation) {
+export function buildMoveAnalysis(view, detail, participation) {
   const engines = buildEngines(detail, participation);
   const usableScores = engines.map((engine) => engine.score).filter((score) => score !== null);
   const participationScore = optionalNumber(participation?.score);
