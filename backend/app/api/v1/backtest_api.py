@@ -23,10 +23,11 @@ from app.backtesting.walk_forward_validator import minimum_candles_for_folds
 from app.backtesting.walk_forward_validator import phase2_walk_forward_defaults
 from app.backtesting.walk_forward_jobs import complete_walk_forward_job
 from app.backtesting.walk_forward_jobs import create_walk_forward_job
+from app.backtesting.walk_forward_jobs import expire_stale_walk_forward_job
 from app.backtesting.walk_forward_jobs import fail_walk_forward_job
-from app.backtesting.walk_forward_jobs import load_walk_forward_job
 from app.backtesting.walk_forward_jobs import mark_walk_forward_job_running
 from app.backtesting.walk_forward_jobs import public_walk_forward_job
+from app.config import get_settings
 from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
 from app.paper_trading.measurement import build_measurement_report
@@ -436,7 +437,10 @@ def submit_walk_forward_validation_job(
         **_frozen_fold_options(frozen_fold_parameters_json),
     }
     record, created = create_walk_forward_job(parameters)
-    if created:
+    # Production API and worker services share this durable queue. Heavy replay
+    # execution stays out of the web process; local/all-in-one development keeps
+    # a background fallback so it does not require a separately started worker.
+    if created and get_settings().process_role == "all":
         background_tasks.add_task(
             _run_walk_forward_validation_job,
             record["job_id"],
@@ -448,7 +452,7 @@ def submit_walk_forward_validation_job(
 @router.get("/walk-forward/jobs/{job_id}")
 def get_walk_forward_validation_job(job_id: str):
     try:
-        record = load_walk_forward_job(job_id)
+        record = expire_stale_walk_forward_job(job_id)
     except ValueError:
         record = None
     if record is None:
@@ -482,7 +486,24 @@ def _run_walk_forward_validation_job(job_id, parameters):
         fail_walk_forward_job(job_id, exc)
 
 
-@router.get("/phase2-report")
+@router.get("/phase2-report", deprecated=True)
+def retired_phase2_validation_report(symbol: str):
+    del symbol
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "SYNCHRONOUS_PHASE2_REPORT_RETIRED",
+            "message": (
+                "Synchronous Phase 2 report execution was retired to prevent "
+                "gateway timeouts. Submit a persistent walk-forward job instead; "
+                "its completed response already contains the Phase 2 report."
+            ),
+            "submit_url": "/api/backtest/walk-forward/jobs",
+            "method": "POST",
+        },
+    )
+
+
 def phase2_validation_report(
     symbol: str,
     signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
@@ -564,40 +585,29 @@ def export_phase2_validation_report(
     frozen_fold_parameters_json: str = Query(default="[]"),
 ):
     result = dict((payload or {}).get("result") or {})
-    if result:
-        if result.get("engine_version") != "walk_forward_v1":
-            raise HTTPException(
-                status_code=422,
-                detail="result must contain a completed walk_forward_v1 result",
-            )
-        _validate_completed_walk_forward_scope(
-            result,
-            symbol=symbol,
-            timeframe=timeframe,
-            signal=signal,
+    if not result:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "COMPLETED_WALK_FORWARD_REQUIRED",
+                "message": (
+                    "Export requires the completed result from an asynchronous "
+                    "walk-forward job and will not recalculate it synchronously."
+                ),
+                "submit_url": "/api/backtest/walk-forward/jobs",
+            },
         )
-    else:
-        resolved = _resolve_walk_forward_configuration(timeframe, limit, train_size, test_size, step_size)
-        result = execute_walk_forward(
-            symbol,
-            timeframe,
-            signal,
-            limit=resolved["limit"],
-            stop_grid=_parse_grid(stop_grid, "stop_grid"),
-            target_grid=_parse_grid(target_grid, "target_grid"),
-            train_size=resolved["train_size"],
-            test_size=resolved["test_size"],
-            step_size=resolved["step_size"],
-            mode=mode,
-            min_train_trades=min_train_trades,
-            initial_capital=initial_capital,
-            position_size_percent=position_size_percent,
-            fee_bps=fee_bps,
-            slippage_bps=slippage_bps,
-            strategy=strategy,
-            **_as_of_options(as_of),
-            **_frozen_fold_options(frozen_fold_parameters_json),
+    if result.get("engine_version") != "walk_forward_v1":
+        raise HTTPException(
+            status_code=422,
+            detail="result must contain a completed walk_forward_v1 result",
         )
+    _validate_completed_walk_forward_scope(
+        result,
+        symbol=symbol,
+        timeframe=timeframe,
+        signal=signal,
+    )
     report = build_phase2_validation_report(
         result,
         symbol=symbol,
@@ -614,9 +624,7 @@ def export_phase2_validation_report(
     )
     return {
         "source": "phase2_validation_export_v1",
-        "calculation_source": (
-            "COMPLETED_ASYNC_JOB" if payload and payload.get("result") else "SYNCHRONOUS_COMPATIBILITY"
-        ),
+        "calculation_source": "COMPLETED_ASYNC_JOB",
         "report": report,
         "artifact": artifact,
     }

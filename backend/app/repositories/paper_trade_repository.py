@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, inspect, or_, text
+from sqlalchemy import and_, case, func, inspect, or_, text
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.paper_trade import PaperTrade
@@ -215,6 +215,8 @@ class PaperTradeRepository:
         status=None,
         symbol=None,
         limit=50,
+        offset=0,
+        entry_timeframes=None,
         include_quarantined=False,
     ):
         self.ensure_table(db)
@@ -226,12 +228,138 @@ class PaperTradeRepository:
 
         if symbol:
             query = query.filter(PaperTrade.symbol == symbol)
+        if entry_timeframes:
+            query = query.filter(PaperTrade.entry_timeframe.in_(entry_timeframes))
 
-        query = query.order_by(PaperTrade.created_at.desc())
+        query = query.order_by(PaperTrade.created_at.desc(), PaperTrade.id.desc())
+        if offset:
+            query = query.offset(max(0, int(offset)))
         if limit is not None:
             query = query.limit(limit)
 
         return query.all()
+
+    def count_trades(
+        self,
+        db,
+        *,
+        status=None,
+        symbol=None,
+        entry_timeframes=None,
+        include_quarantined=False,
+    ):
+        self.ensure_table(db)
+        query = db.query(func.count(PaperTrade.id))
+        query = _apply_production_ledger_scope(query, include_quarantined)
+        if status:
+            query = query.filter(PaperTrade.status == status)
+        if symbol:
+            query = query.filter(PaperTrade.symbol == symbol)
+        if entry_timeframes:
+            query = query.filter(PaperTrade.entry_timeframe.in_(entry_timeframes))
+        return int(query.scalar() or 0)
+
+    def risk_snapshot_trades(self, db, *, window_start):
+        """Load only open positions and closed trades relevant to daily risk."""
+
+        self.ensure_table(db)
+        query = db.query(PaperTrade)
+        query = _apply_production_ledger_scope(query, False)
+        return query.filter(
+            or_(
+                PaperTrade.status == "OPEN",
+                and_(
+                    PaperTrade.status == "CLOSED",
+                    PaperTrade.closed_at >= window_start,
+                ),
+            )
+        ).all()
+
+    def performance_summary(self, db, *, symbol=None, entry_timeframes=None):
+        """Return exact account performance without loading every trade row."""
+
+        self.ensure_table(db)
+        closed = func.upper(PaperTrade.status) == "CLOSED"
+        opened = func.upper(PaperTrade.status) == "OPEN"
+        pnl = func.coalesce(PaperTrade.pnl_percent, 0.0)
+        now = datetime.utcnow()
+        query = db.query(
+            func.count(PaperTrade.id).label("total_trades"),
+            func.sum(case((opened, 1), else_=0)).label("open_trades"),
+            func.sum(case((closed, 1), else_=0)).label("closed_trades"),
+            func.sum(
+                case(
+                    (and_(closed, func.upper(PaperTrade.result) == "WIN"), 1),
+                    else_=0,
+                )
+            ).label("wins"),
+            func.sum(
+                case(
+                    (and_(closed, func.upper(PaperTrade.result) == "LOSS"), 1),
+                    else_=0,
+                )
+            ).label("losses"),
+            func.sum(
+                case((func.upper(PaperTrade.side) == "LONG", 1), else_=0)
+            ).label("long_trades"),
+            func.sum(
+                case((func.upper(PaperTrade.side) == "SHORT", 1), else_=0)
+            ).label("short_trades"),
+            func.sum(case((closed, pnl), else_=0.0)).label("total_pnl_percent"),
+            func.sum(
+                case(
+                    (
+                        and_(closed, PaperTrade.closed_at >= now - timedelta(days=1)),
+                        pnl,
+                    ),
+                    else_=0.0,
+                )
+            ).label("daily_pnl_percent"),
+            func.sum(
+                case(
+                    (
+                        and_(closed, PaperTrade.closed_at >= now - timedelta(days=7)),
+                        pnl,
+                    ),
+                    else_=0.0,
+                )
+            ).label("weekly_pnl_percent"),
+            func.sum(
+                case(
+                    (
+                        and_(closed, PaperTrade.closed_at >= now - timedelta(days=30)),
+                        pnl,
+                    ),
+                    else_=0.0,
+                )
+            ).label("monthly_pnl_percent"),
+        )
+        query = _apply_production_ledger_scope(query, False)
+        if symbol:
+            query = query.filter(PaperTrade.symbol == symbol)
+        if entry_timeframes:
+            query = query.filter(PaperTrade.entry_timeframe.in_(entry_timeframes))
+        row = query.one()
+        closed_count = int(row.closed_trades or 0)
+        wins = int(row.wins or 0)
+        total_pnl = round(float(row.total_pnl_percent or 0.0), 2)
+        return {
+            "total_trades": int(row.total_trades or 0),
+            "open_trades": int(row.open_trades or 0),
+            "closed_trades": closed_count,
+            "wins": wins,
+            "losses": int(row.losses or 0),
+            "long_trades": int(row.long_trades or 0),
+            "short_trades": int(row.short_trades or 0),
+            "win_rate": round(wins / closed_count * 100, 2) if closed_count else 0,
+            "average_pnl_percent": (
+                round(total_pnl / closed_count, 2) if closed_count else 0
+            ),
+            "total_pnl_percent": total_pnl,
+            "daily_pnl_percent": round(float(row.daily_pnl_percent or 0.0), 2),
+            "weekly_pnl_percent": round(float(row.weekly_pnl_percent or 0.0), 2),
+            "monthly_pnl_percent": round(float(row.monthly_pnl_percent or 0.0), 2),
+        }
 
     def all_trades(self, db, symbol=None, include_quarantined=False):
         self.ensure_table(db)

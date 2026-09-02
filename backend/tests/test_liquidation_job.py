@@ -1,5 +1,6 @@
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -28,3 +29,13 @@ def test_save_event_swallows_repository_failures_and_closes_db():
         save_event(event)
 
     assert fake_db.close.called
+
+
+def test_continuous_liquidation_job_does_not_log_every_event_payload():
+    source = (
+        Path(__file__).parents[1] / "app" / "jobs" / "liquidation_job.py"
+    ).read_text(encoding="utf-8")
+
+    assert "LIQUIDATION EVENT RECEIVED" not in source
+    assert "Liquidation event saved successfully" not in source
+    assert "print(event)" not in source

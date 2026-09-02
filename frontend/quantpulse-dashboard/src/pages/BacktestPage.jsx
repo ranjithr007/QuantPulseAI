@@ -57,6 +57,7 @@ export default function BacktestPage({
   const [phase2ScopeSort, setPhase2ScopeSort] = useState("LATEST");
   const [phase2ReviewMode, setPhase2ReviewMode] = useState("ALL");
   const [phase2Enabled, setPhase2Enabled] = useState(false);
+  const [phase2RunToken, setPhase2RunToken] = useState(0);
   const [selectedArtifact, setSelectedArtifact] = useState(null);
   const [selectedArtifactError, setSelectedArtifactError] = useState("");
   const [selectedArtifactLoading, setSelectedArtifactLoading] = useState(false);
@@ -293,7 +294,7 @@ export default function BacktestPage({
       cancelled = true;
       controller.abort();
     };
-  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled]);
+  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled, phase2RunToken]);
 
   async function handleExportPhase2Report() {
     if (!view?.symbol || !signalSide || !phase2ReportSummary?.result) {
@@ -544,11 +545,20 @@ export default function BacktestPage({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setPhase2Enabled(true)}
+                onClick={() => {
+                  setPhase2Enabled(true);
+                  setPhase2RunToken((current) => current + 1);
+                }}
                 disabled={!signalSide || walkForwardLoading || phase2ReportLoading}
                 className="inline-flex items-center rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {phase2Enabled ? "Phase 2 loaded" : "Load Phase 2"}
+                {walkForwardLoading
+                  ? "Running Phase 2"
+                  : walkForwardError || phase2ReportError
+                    ? "Retry Phase 2"
+                    : walkForwardResult
+                      ? "Refresh Phase 2"
+                      : "Load Phase 2"}
               </button>
               <Pill tone={signalSide ? "violet" : "slate"}>{signalSide || "WAIT"}</Pill>
               <Pill tone={walkForwardLoading ? "amber" : walkForwardResult?.robustness?.profitable_fold_percent >= 50 ? "emerald" : "rose"}>

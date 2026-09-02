@@ -29,7 +29,7 @@ def test_production_api_role_is_cloud_safe_by_default(monkeypatch):
     assert settings.database_max_overflow == 5
     assert settings.database_pool_timeout_seconds == 30
     assert settings.database_pool_recycle_seconds == 1800
-    assert settings.pipeline_retention_enabled is False
+    assert settings.pipeline_retention_enabled is True
     assert settings.pipeline_retention_days == 30
     assert settings.pipeline_retention_batch_size == 2500
 

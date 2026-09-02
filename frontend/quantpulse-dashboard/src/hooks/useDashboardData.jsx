@@ -5,9 +5,11 @@ import {
   loadIntelligenceBundle,
   loadLiveMarketSnapshot,
   loadLiveMarketStatus,
+  loadSignalBatch,
   startLiveMarketListener,
 } from "./dashboardApi";
 import { deriveRowEligibilityState } from "../utils/eligibility";
+import { isCandidateExecutorReady, selectExecutorCandidate } from "../utils/executorCompetition";
 import {
   buildEquityCurve,
   buildGroupPnL,
@@ -222,8 +224,41 @@ function scopePaperTrades(records) {
   });
 }
 
+function mergeSignalBatchData(current, signalBatch, symbols, view) {
+  const records = signalBatch?.records_by_symbol || {};
+  return {
+    ...current,
+    signalsBySymbol: Object.fromEntries(
+      symbols.map((symbol) => [
+        symbol,
+        Object.prototype.hasOwnProperty.call(records, symbol)
+          ? records[symbol]
+          : current.signalsBySymbol[symbol] || null,
+      ])
+    ),
+    selected: {
+      ...current.selected,
+      signal: Object.prototype.hasOwnProperty.call(records, view.symbol)
+        ? records[view.symbol]
+        : current.selected.signal,
+    },
+    lastRefresh: new Date(),
+  };
+}
+
+function requestErrorMessage(error, fallback) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 function buildScopedPaperPerformance(performance, openTrades, closedTrades) {
   if (!performance && !openTrades.length && !closedTrades.length) return null;
+
+  if (performance) {
+    return {
+      ...performance,
+      closedTrades,
+    };
+  }
 
   const returns = closedTrades.map((trade) => Number(trade?.pnl_percent || 0));
   const wins = returns.filter((value) => value > 0).length;
@@ -258,14 +293,10 @@ function executorRowState(row, watchRow, candidates = []) {
   const side = normalizeTradeSide(
     watchRow?.combined_execution?.side || watchRow?.side || row?.type
   );
-  const candidate = candidates.find(
-    (item) =>
-      String(item?.symbol || "").toUpperCase() === String(row?.symbol || "").toUpperCase() &&
-      normalizeTradeSide(item?.side) === side
-  );
+  const candidate = selectExecutorCandidate(candidates, row?.symbol, side);
 
   if (!candidate) return "no_queued_plan";
-  return candidate.eligible ? "executor_ready" : "executor_blocked";
+  return isCandidateExecutorReady(candidate) ? "executor_ready" : "executor_blocked";
 }
 
 function withLiveMarketPrice(signal, liveRecord) {
@@ -539,32 +570,63 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       }
       setError("");
 
-        try {
-          if (pageNeedsSelectedBundle(activePage)) {
-            try {
-              const selectedBundle = await loadIntelligenceBundle({ view, signal: controller.signal });
+      try {
+        const requestErrors = [];
+        const requests = [];
 
-            if (cancelled) {
-              return;
-              }
-
-              if (selectedBundle?.signal) {
+        if (pageNeedsSelectedBundle(activePage)) {
+          requests.push(
+            loadIntelligenceBundle({ view, signal: controller.signal })
+              .then((selectedBundle) => {
+                if (cancelled || !selectedBundle?.signal) return;
                 setData((current) => mergeSelectedBundleData(current, view, selectedBundle));
                 hasLoadedRef.current = true;
                 setLoading(false);
-              }
-            } catch {
-              // Non-blocking: selected bundle can fall back to the live batch payload.
-            }
-          }
-
-        const dashboardBatches = await loadDashboardBatches({ activePage, view, filters, auto, symbols, signal: controller.signal });
-
-        if (cancelled) {
-          return;
+              })
+              .catch((exception) => {
+                requestErrors.push(
+                  `Selected intelligence: ${requestErrorMessage(exception, "request failed")}`
+                );
+              })
+          );
         }
 
-        setData((current) => mergeDashboardBatches(current, dashboardBatches, symbols, view));
+        requests.push(
+          loadSignalBatch({ view, symbols, signal: controller.signal })
+            .then((signalBatch) => {
+              if (cancelled || !signalBatch) return;
+              setData((current) => mergeSignalBatchData(current, signalBatch, symbols, view));
+              hasLoadedRef.current = true;
+              setLoading(false);
+            })
+            .catch((exception) => {
+              requestErrors.push(
+                `Signals: ${requestErrorMessage(exception, "request failed")}`
+              );
+            })
+        );
+
+        requests.push(
+          loadDashboardBatches({ activePage, view, filters, auto, symbols, signal: controller.signal })
+            .then((dashboardBatches) => {
+              if (cancelled) return;
+              setData((current) => mergeDashboardBatches(current, dashboardBatches, symbols, view));
+              (dashboardBatches.errors || []).forEach((item) => {
+                requestErrors.push(`${item.key}: ${item.message}`);
+              });
+            })
+            .catch((exception) => {
+              requestErrors.push(
+                `Dashboard: ${requestErrorMessage(exception, "request failed")}`
+              );
+            })
+        );
+
+        await Promise.allSettled(requests);
+
+        if (!cancelled && requestErrors.length) {
+          setError(requestErrors.join(" · "));
+        }
       } catch (exception) {
         if (!cancelled) {
           setError(exception instanceof Error ? exception.message : "Unable to load dashboard");
@@ -694,13 +756,6 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       return null;
     }
 
-    const symbolCandidates = selectedPaperTradeCandidates.filter(
-      (candidate) => String(candidate?.symbol || "").toUpperCase() === String(view.symbol || "").toUpperCase()
-    );
-    if (!symbolCandidates.length) {
-      return null;
-    }
-
     const preferredSide = normalizeTradeSide(
       selectedRisk?.signal ||
       selectedDetail.signalType ||
@@ -708,10 +763,10 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       selectedSignal?.decision
     );
 
-    return (
-      symbolCandidates.find(
-        (candidate) => normalizeTradeSide(candidate?.side) === preferredSide
-      ) || symbolCandidates[0]
+    return selectExecutorCandidate(
+      selectedPaperTradeCandidates,
+      view.symbol,
+      preferredSide
     );
   }, [
     view.symbol,
@@ -813,15 +868,16 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       .sort((a, b) => Math.abs(b.unrealized_pnl_percent || 0) - Math.abs(a.unrealized_pnl_percent || 0));
   }, [openTrades, signalsBySymbol]);
 
-  const dailyPnl = sumWithinDays(closedTrades, 1);
-  const weeklyPnl = sumWithinDays(closedTrades, 7);
-  const monthlyPnl = sumWithinDays(closedTrades, 30);
-  const realizedPnl = sumPnl(closedTrades);
+  const dailyPnl = performance.daily_pnl_percent ?? sumWithinDays(closedTrades, 1);
+  const weeklyPnl = performance.weekly_pnl_percent ?? sumWithinDays(closedTrades, 7);
+  const monthlyPnl = performance.monthly_pnl_percent ?? sumWithinDays(closedTrades, 30);
+  const realizedPnl = performance.total_pnl_percent ?? sumPnl(closedTrades);
   const unrealizedPnl = sumPnl(openPositions, "unrealized_pnl_percent");
   const maxDrawdown = calculateMaxDrawdown(equitySeries);
-  const winningTrades = closedTrades.filter((trade) => safeNumber(trade.pnl_percent, 0) > 0).length;
-  const losingTrades = closedTrades.filter((trade) => safeNumber(trade.pnl_percent, 0) < 0).length;
-  const winRate = closedTrades.length ? (winningTrades / closedTrades.length) * 100 : 0;
+  const winningTrades = performance.wins ?? closedTrades.filter((trade) => safeNumber(trade.pnl_percent, 0) > 0).length;
+  const losingTrades = performance.losses ?? closedTrades.filter((trade) => safeNumber(trade.pnl_percent, 0) < 0).length;
+  const closedTradeCount = performance.closed_trades ?? closedTrades.length;
+  const winRate = performance.win_rate ?? (closedTradeCount ? (winningTrades / closedTradeCount) * 100 : 0);
 
   return {
     setTick,
@@ -847,6 +903,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     pnlBySymbol,
     pnlBySide,
     tradeHistory,
+    closedTradeCount,
     openPositions,
     dailyPnl,
     weeklyPnl,

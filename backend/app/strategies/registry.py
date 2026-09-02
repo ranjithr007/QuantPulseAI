@@ -51,7 +51,7 @@ CORE_SIGNAL_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
-    "official_execution_enabled": False,
+    "official_execution_enabled": True,
 }
 
 MARKET_MOVE_STRATEGY = {
@@ -73,7 +73,7 @@ MARKET_MOVE_STRATEGY = {
     "requires_market_participation_confirmation": True,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
-    "official_execution_enabled": False,
+    "official_execution_enabled": True,
 }
 
 REGIME_TREND_STRATEGY = {
@@ -96,7 +96,7 @@ REGIME_TREND_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
-    "official_execution_enabled": False,
+    "official_execution_enabled": True,
 }
 
 ORDERFLOW_SMC_STRATEGY = {
@@ -119,7 +119,7 @@ ORDERFLOW_SMC_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
-    "official_execution_enabled": False,
+    "official_execution_enabled": True,
 }
 
 LIQUIDATION_CARRY_STRATEGY = {
@@ -142,7 +142,7 @@ LIQUIDATION_CARRY_STRATEGY = {
     "requires_market_participation_confirmation": False,
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
-    "official_execution_enabled": False,
+    "official_execution_enabled": True,
 }
 
 CORE_FUSION_STRATEGY = {
@@ -164,7 +164,7 @@ CORE_FUSION_STRATEGY = {
     "requires_core_signal": True,
     "one_active_trade_per_symbol": True,
     "execution_priority": 30,
-    "official_execution_enabled": False,
+    "official_execution_enabled": True,
 }
 
 TREND_PULLBACK_STRATEGY = {

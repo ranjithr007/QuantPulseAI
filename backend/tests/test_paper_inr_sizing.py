@@ -132,6 +132,29 @@ def test_wallet_balance_comes_from_persisted_ledger_deltas():
     assert wallet["positions"][0]["notional_inr"] == 75_000
 
 
+def test_wallet_accepts_exact_trade_aggregate_with_bounded_history():
+    wallet = build_inr_paper_wallet(
+        [
+            {
+                "id": 1,
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "status": "OPEN",
+                "entry_price": 100,
+                "position_notional_inr": 75_000,
+                "margin_used_inr": 15_000,
+                "remaining_position_fraction": 1.0,
+            }
+        ],
+        trade_realized_pnl_inr=1_250.5,
+    )
+
+    assert wallet["accounting_source"] == "PERSISTED_TRADE_AGGREGATE"
+    assert wallet["realized_pnl_inr"] == 1_250.5
+    assert wallet["wallet_balance_inr"] == 201_250.5
+    assert wallet["open_position_count"] == 1
+
+
 def test_wallet_equity_includes_open_unrealized_pnl_from_mark_prices():
     trades = [
         {

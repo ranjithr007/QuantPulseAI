@@ -27,7 +27,13 @@ import {
 import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
 import Phase2ValidationBadge from "./Phase2ValidationBadge";
+import { loadPaperTrades } from "../hooks/dashboardApi";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
+import {
+  candidateExecutorBlockers,
+  executorStrategyLabel,
+  isCandidateExecutorReady,
+} from "../utils/executorCompetition";
 import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNumber, timestampMillis, tooltipStyle } from "../utils/formatters";
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
@@ -45,6 +51,7 @@ export default function PnLSection({
   losingTrades,
   winRate,
   tradeHistory,
+  closedTradeCount,
   openPositions,
   paperWallet,
   ledgerScope,
@@ -57,7 +64,7 @@ export default function PnLSection({
   selectedRisk,
   selectedPaperTradeCandidate,
 }) {
-  const totalTrades = tradeHistory.length + openPositions.length;
+  const totalTrades = (closedTradeCount ?? tradeHistory.length) + openPositions.length;
   const avgProfit = averagePnl(tradeHistory, true);
   const avgLoss = averagePnl(tradeHistory, false);
   const entryTrigger = selectedDetail?.timing?.trigger || selectedDetail?.entryTrigger?.trigger || selectedDetail?.timing || selectedDetail?.entryTrigger || null;
@@ -134,9 +141,9 @@ export default function PnLSection({
                   ? "The risk gate passed, but no futures paper trade has been opened yet."
                   : executionReason}
             </div>
-            {selectedPaperTradeCandidate?.blocked_reasons?.length ? (
+            {candidateExecutorBlockers(selectedPaperTradeCandidate).length ? (
               <div className="mt-2 flex flex-wrap gap-2">
-                {selectedPaperTradeCandidate.blocked_reasons.map((reason) => (
+                {candidateExecutorBlockers(selectedPaperTradeCandidate).map((reason) => (
                   <Pill key={reason} tone="rose">{reason}</Pill>
                 ))}
               </div>
@@ -202,9 +209,9 @@ export default function PnLSection({
           />
           <DiagnosticStrip
             label="Top block"
-            value={topReasonLabel(autoDecision?.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
-            note={topReasonNote(autoDecision?.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
-            tone={topReasonTone(autoDecision?.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
+            value={topReasonLabel(autoDecision?.reasons, candidateExecutorBlockers(selectedPaperTradeCandidate))}
+            note={topReasonNote(autoDecision?.reasons, candidateExecutorBlockers(selectedPaperTradeCandidate))}
+            tone={topReasonTone(autoDecision?.reasons, candidateExecutorBlockers(selectedPaperTradeCandidate))}
           />
           <DiagnosticStrip
             label="Timing state"
@@ -319,7 +326,7 @@ export default function PnLSection({
           <OpenPositionsTable openPositions={openPositions} />
         </div>
 
-        <TradeHistoryTable tradeHistory={tradeHistory} />
+        <TradeHistoryTable tradeHistory={tradeHistory} totalCount={closedTradeCount} />
       </div>
     </section>
   );
@@ -334,17 +341,18 @@ function executorState(candidate) {
     };
   }
 
-  if (candidate.eligible) {
+  if (isCandidateExecutorReady(candidate)) {
     return {
       label: "Executor ready",
-      note: "Queued OPEN trade plan passes executor checks.",
+      note: `${executorStrategyLabel(candidate)} is the selected official paper strategy.`,
       tone: "emerald",
     };
   }
 
+  const blockers = candidateExecutorBlockers(candidate);
   return {
     label: "Executor blocked",
-    note: candidate.blocked_reasons?.[0] || "Queued OPEN trade plan is blocked by executor checks.",
+    note: blockers[0] || "Queued OPEN trade plan is blocked by executor checks.",
     tone: "rose",
   };
 }
@@ -415,7 +423,8 @@ function paperTradeLifecycle({ symbol, eligibilityState, selectedPaperTradeCandi
   const selectedClosedTrade = tradeHistory.find((trade) => String(trade?.symbol || "").toUpperCase() === normalizedSymbol);
   const eligible = ["Eligible", "Ready to execute"].includes(String(eligibilityState?.label || ""));
   const candidateExists = Boolean(selectedPaperTradeCandidate);
-  const executorReady = Boolean(selectedPaperTradeCandidate?.eligible);
+  const executorReady = isCandidateExecutorReady(selectedPaperTradeCandidate);
+  const executorBlockers = candidateExecutorBlockers(selectedPaperTradeCandidate);
   const openNow = Boolean(selectedOpenTrade);
   const closedSeen = Boolean(selectedClosedTrade);
   const queuedAt = selectedPaperTradeCandidate?.trade_plan?.created_at || null;
@@ -455,7 +464,7 @@ function paperTradeLifecycle({ symbol, eligibilityState, selectedPaperTradeCandi
       note: executorReady
         ? (riskStale ? `Queued candidate would be ready, but ${staleNote}.` : "Queued candidate passes executor checks.")
         : candidateExists
-          ? (riskStale ? "Executor needs a fresh risk decision before treating this candidate as ready." : (selectedPaperTradeCandidate?.blocked_reasons?.[0] || "Queued candidate is blocked by executor checks."))
+          ? (riskStale ? "Executor needs a fresh risk decision before treating this candidate as ready." : (executorBlockers[0] || "Queued candidate is blocked by executor checks."))
           : "Executor has nothing to evaluate yet.",
       when: stageTimestampLabel(executorCheckedAt),
     },
@@ -673,18 +682,54 @@ function exitTimeRemainingLabel(trade) {
   return `${hours}h remaining`;
 }
 
-function TradeHistoryTable({ tradeHistory }) {
+function TradeHistoryTable({ tradeHistory, totalCount }) {
   const [currentPage, setCurrentPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(tradeHistory.length / TRADE_HISTORY_PAGE_SIZE));
+  const [pageRecords, setPageRecords] = useState(() => tradeHistory.slice(0, TRADE_HISTORY_PAGE_SIZE));
+  const [remoteTotal, setRemoteTotal] = useState(totalCount ?? tradeHistory.length);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const latestTradeId = tradeHistory[0]?.id ?? null;
+  const totalItems = remoteTotal ?? totalCount ?? tradeHistory.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / TRADE_HISTORY_PAGE_SIZE));
   const pageStart = (currentPage - 1) * TRADE_HISTORY_PAGE_SIZE;
-  const visibleTrades = tradeHistory.slice(pageStart, pageStart + TRADE_HISTORY_PAGE_SIZE);
-  const firstVisibleTrade = tradeHistory.length ? pageStart + 1 : 0;
-  const lastVisibleTrade = Math.min(pageStart + TRADE_HISTORY_PAGE_SIZE, tradeHistory.length);
+  const visibleTrades = pageRecords;
+  const firstVisibleTrade = totalItems ? pageStart + 1 : 0;
+  const lastVisibleTrade = Math.min(pageStart + visibleTrades.length, totalItems);
   const visiblePageNumbers = paginationPageNumbers(currentPage, totalPages);
 
   useEffect(() => {
     setCurrentPage((page) => Math.min(page, totalPages));
   }, [totalPages]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    setLoading(true);
+    setError("");
+    loadPaperTrades({
+      status: "CLOSED",
+      page: currentPage,
+      limit: TRADE_HISTORY_PAGE_SIZE,
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!active) return;
+        setPageRecords(response?.records || []);
+        setRemoteTotal(response?.total_count ?? 0);
+      })
+      .catch((requestError) => {
+        if (active && requestError?.name !== "AbortError") {
+          setError(requestError?.message || "Trade history is temporarily unavailable");
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [currentPage, latestTradeId]);
 
   return (
     <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-slate-900/70 p-3">
@@ -693,8 +738,9 @@ function TradeHistoryTable({ tradeHistory }) {
           <div className="text-sm font-medium text-white">Trade history</div>
           <div className="text-xs text-slate-500">All closed futures paper trades across the account</div>
         </div>
-        <Pill tone="slate">{tradeHistory.length} closed</Pill>
+        <Pill tone="slate">{totalItems} closed</Pill>
       </div>
+      {error ? <div role="alert" className="mt-2 rounded-md border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{error}</div> : null}
       <div className="mt-2.5 overflow-x-auto">
         <table className="min-w-full divide-y divide-white/5 text-sm">
           <thead className="bg-slate-950/60 text-[11px] uppercase tracking-[0.16em] text-slate-500">
@@ -724,40 +770,24 @@ function TradeHistoryTable({ tradeHistory }) {
                 <td className="px-3 py-2.5 text-slate-400">{formatDate(trade.closed_at || trade.created_at)}</td>
               </tr>
             ))}
-            {!tradeHistory.length ? (
-              <tr>
-                <td className="px-3 py-3.5 text-slate-400" colSpan={7}>
-                  No closed trades available.
-                </td>
-              </tr>
+            {!visibleTrades.length && !loading ? (
+              <tr><td className="px-3 py-3.5 text-slate-400" colSpan={7}>No closed trades available.</td></tr>
+            ) : null}
+            {loading && !visibleTrades.length ? (
+              <tr><td className="px-3 py-3.5 text-slate-400" colSpan={7}>Loading trade history…</td></tr>
             ) : null}
           </tbody>
         </table>
       </div>
-      {tradeHistory.length ? (
+      {totalItems ? (
         <div className="mt-3 flex flex-col gap-2 border-t border-white/5 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-slate-500">
-            Showing {firstVisibleTrade}–{lastVisibleTrade} of {tradeHistory.length} closed trades
-          </div>
+          <div className="text-xs text-slate-500">Showing {firstVisibleTrade}–{lastVisibleTrade} of {totalItems} closed trades</div>
           <nav className="flex flex-wrap items-center gap-1" aria-label="Trade history pagination">
-            <PaginationButton
-              disabled={currentPage === 1}
-              label="Previous"
-              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-            />
+            <PaginationButton disabled={currentPage === 1 || loading} label="Previous" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} />
             {visiblePageNumbers.map((page) => (
-              <PaginationButton
-                key={page}
-                active={page === currentPage}
-                label={String(page)}
-                onClick={() => setCurrentPage(page)}
-              />
+              <PaginationButton key={page} active={page === currentPage} disabled={loading} label={String(page)} onClick={() => setCurrentPage(page)} />
             ))}
-            <PaginationButton
-              disabled={currentPage === totalPages}
-              label="Next"
-              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-            />
+            <PaginationButton disabled={currentPage === totalPages || loading} label="Next" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} />
           </nav>
         </div>
       ) : null}

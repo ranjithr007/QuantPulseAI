@@ -172,6 +172,9 @@ def build_inr_paper_wallet(
     trades,
     *,
     ledger_entries=None,
+    ledger_realized_pnl_inr=None,
+    ledger_entry_count=None,
+    trade_realized_pnl_inr=None,
     current_prices=None,
     require_open_prices=False,
     leverage=DEFAULT_PAPER_LEVERAGE,
@@ -222,7 +225,9 @@ def build_inr_paper_wallet(
     committed_notional = round(sum(item["notional_inr"] for item in positions), 2)
     if ledger_entries is not None:
         realized_pnl = round(
-            sum(float(_value(entry, "delta_inr") or 0) for entry in ledger_entries),
+            float(ledger_realized_pnl_inr)
+            if ledger_realized_pnl_inr is not None
+            else sum(float(_value(entry, "delta_inr") or 0) for entry in ledger_entries),
             2,
         )
         accounting_source = "PERSISTED_LEDGER"
@@ -239,6 +244,10 @@ def build_inr_paper_wallet(
             }
             for entry in list(ledger_entries)[-100:]
         ]
+    elif trade_realized_pnl_inr is not None:
+        realized_pnl = round(float(trade_realized_pnl_inr), 2)
+        accounting_source = "PERSISTED_TRADE_AGGREGATE"
+        ledger_payload = []
     else:
         realized_pnl = round(_realized_pnl_from_trades(trades), 2)
         accounting_source = "PERSISTED_TRADE_SNAPSHOTS"
@@ -264,7 +273,11 @@ def build_inr_paper_wallet(
         "valuation_complete": valuation_complete,
         "missing_price_symbols": sorted(set(missing_price_symbols)),
         "accounting_source": accounting_source,
-        "ledger_entry_count": len(ledger_entries or []),
+        "ledger_entry_count": (
+            int(ledger_entry_count)
+            if ledger_entry_count is not None
+            else len(ledger_entries or [])
+        ),
         "ledger": ledger_payload,
         "leverage": float(leverage),
         "minimum_position_allocation_percent": MINIMUM_TIER_ALLOCATION_PERCENT,

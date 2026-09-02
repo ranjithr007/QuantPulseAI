@@ -84,14 +84,19 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
 
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
+    let controller = null;
+    let timer = null;
+    let inFlight = false;
 
     async function refreshMeasurement() {
       if (!symbol || !signalSide) {
         setMeasurement(null);
         return;
       }
+      if (cancelled || inFlight || document.visibilityState === "hidden") return;
 
+      inFlight = true;
+      controller = new AbortController();
       try {
         const response = await loadPaperTradeMeasurement({
           symbol,
@@ -100,22 +105,42 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
         if (!cancelled) setMeasurement(response);
       } catch (err) {
         if (!cancelled && err?.name !== "AbortError") setMeasurement(null);
+      } finally {
+        inFlight = false;
+        if (!cancelled && document.visibilityState !== "hidden") {
+          timer = window.setTimeout(refreshMeasurement, 15_000);
+        }
       }
     }
 
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        if (timer) window.clearTimeout(timer);
+        timer = null;
+        controller?.abort();
+        return;
+      }
+      if (timer) window.clearTimeout(timer);
+      timer = null;
+      refreshMeasurement();
+    }
+
     refreshMeasurement();
-    const timer = window.setInterval(refreshMeasurement, 15_000);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       cancelled = true;
-      controller.abort();
-      window.clearInterval(timer);
+      controller?.abort();
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [symbol, signalSide]);
 
   useEffect(() => {
     let cancelled = false;
-    let controller = new AbortController();
+    let controller = null;
+    let timer = null;
+    let inFlight = false;
 
     async function refreshOpportunities() {
       if (!symbol) {
@@ -127,7 +152,10 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
         setOpportunityError("");
         return;
       }
+      if (cancelled || inFlight || document.visibilityState === "hidden") return;
 
+      inFlight = true;
+      controller = new AbortController();
       try {
         const [response, funnelResponse, rollingResponse, recoveryResponse, checkpointResponse] = await Promise.all([
           loadPaperTradeOpportunities({
@@ -169,20 +197,34 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
             err instanceof Error ? err.message : "Unable to load opportunity accounting"
           );
         }
+      } finally {
+        inFlight = false;
+        if (!cancelled && document.visibilityState !== "hidden") {
+          timer = window.setTimeout(refreshOpportunities, 60_000);
+        }
       }
     }
 
-    refreshOpportunities();
-    const timer = window.setInterval(() => {
-      controller.abort();
-      controller = new AbortController();
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        if (timer) window.clearTimeout(timer);
+        timer = null;
+        controller?.abort();
+        return;
+      }
+      if (timer) window.clearTimeout(timer);
+      timer = null;
       refreshOpportunities();
-    }, 60_000);
+    }
+
+    refreshOpportunities();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       cancelled = true;
-      controller.abort();
-      window.clearInterval(timer);
+      controller?.abort();
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [symbol]);
 

@@ -15,6 +15,7 @@ from app.jobs.candle_completeness_job import run_candle_completeness_job
 from app.observability.candle_completeness import (
     get_cached_candle_completeness_report,
 )
+from app.observability.database_storage import build_database_storage_report
 
 
 PIPELINE_REQUIRED_STAGES = (
@@ -99,6 +100,7 @@ async def dependency_check():
         "active_database_scheme": engine.url.get_backend_name(),
         "using_sqlite_fallback": USING_SQLITE_FALLBACK,
         "evidence_storage": _evidence_storage(),
+        "database_pool": _database_pool_status(),
     }
 
 
@@ -113,12 +115,60 @@ def _evidence_storage():
     return backend.upper()
 
 
+def _database_pool_status():
+    settings = get_settings()
+    pool = engine.pool
+    configured_size = settings.database_pool_size
+    configured_max_overflow = settings.database_max_overflow
+    capacity = configured_size + configured_max_overflow
+    checked_in = _pool_metric(pool, "checkedin")
+    checked_out = _pool_metric(pool, "checkedout")
+    raw_overflow = _pool_metric(pool, "overflow")
+    overflow_in_use = max(0, raw_overflow) if raw_overflow is not None else None
+    utilization = (
+        round((checked_out / capacity) * 100, 2)
+        if checked_out is not None and capacity > 0
+        else None
+    )
+
+    return {
+        "implementation": type(pool).__name__,
+        "configured_size": configured_size,
+        "configured_max_overflow": configured_max_overflow,
+        "capacity": capacity,
+        "checked_in": checked_in,
+        "checked_out": checked_out,
+        "overflow_in_use": overflow_in_use,
+        "utilization_percent": utilization,
+        "status": "SATURATED" if checked_out is not None and checked_out >= capacity else "NORMAL",
+    }
+
+
+def _pool_metric(pool, name):
+    metric = getattr(pool, name, None)
+    if not callable(metric):
+        return None
+    try:
+        return int(metric())
+    except (TypeError, ValueError, NotImplementedError):
+        return None
+
+
 @router.get("/candles")
 def candle_completeness_health(refresh: bool = False):
     cached = get_cached_candle_completeness_report()
     if refresh or cached is None:
         return run_candle_completeness_job()
     return cached
+
+
+@router.get("/database-storage")
+def database_storage_health(table_limit: int = 25):
+    return build_database_storage_report(
+        engine,
+        get_settings(),
+        table_limit=table_limit,
+    )
 
 
 @router.get("/pipeline", response_model=PipelineHealthResponse)

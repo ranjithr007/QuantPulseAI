@@ -140,11 +140,13 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         )[1].split("]);", 1)[0]
 
         self.assertNotIn('"pnl"', scoped_pages)
-        self.assertIn('include_all: activePage === "pnl" ? true : null', dashboard_api)
+        self.assertNotIn('include_all: activePage === "pnl" ? true : null', dashboard_api)
+        self.assertIn("export async function loadPaperTrades", dashboard_api)
+        self.assertIn('status: "CLOSED"', pnl_section)
         self.assertIn("openPositions.map((trade)", pnl_section)
         self.assertIn("visibleTrades.map((trade)", pnl_section)
         self.assertNotIn("openPositions.slice(", pnl_section)
-        self.assertIn("tradeHistory.slice(pageStart", pnl_section)
+        self.assertIn("loadPaperTrades({", pnl_section)
         self.assertIn("Trade history pagination", pnl_section)
         self.assertIn("Stop-loss", pnl_section)
         self.assertIn("Target 1", pnl_section)
@@ -277,6 +279,19 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("${QUANTPULSE_API_UPSTREAM}/ws/", nginx)
         self.assertIn("${QUANTPULSE_API_UPSTREAM}/;", nginx)
         self.assertIn("ENV QUANTPULSE_API_UPSTREAM=", dockerfile)
+
+    def test_auxiliary_pollers_pause_hidden_pages_and_do_not_overlap(self):
+        notification_center = (
+            FRONTEND_ROOT / "src" / "components" / "NotificationCenter.jsx"
+        ).read_text(encoding="utf-8")
+        validation_badge = (
+            FRONTEND_ROOT / "src" / "components" / "Phase2ValidationBadge.jsx"
+        ).read_text(encoding="utf-8")
+
+        for source in (notification_center, validation_badge):
+            self.assertIn('document.visibilityState === "hidden"', source)
+            self.assertIn('document.addEventListener("visibilitychange"', source)
+            self.assertNotIn("window.setInterval", source)
 
 
 if __name__ == "__main__":

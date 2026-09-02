@@ -10,6 +10,8 @@ DEFAULT_JOB_IDS = [
     "whale_ai",
     "heatmap",
     "orderbook",
+    "walk_forward_queue",
+    "pipeline_retention",
 ]
 
 
@@ -117,7 +119,7 @@ JOB_DEFINITIONS = {
         module="app.jobs.heatmap_job",
         function="run_heatmap_job",
         trigger="interval",
-        seconds=40,
+        seconds=60,
     ),
     "orderbook": SchedulerJobDefinition(
         id="orderbook",
@@ -151,7 +153,7 @@ JOB_DEFINITIONS = {
         module="app.jobs.whale_intelligence_job",
         function="run_whale_intelligence_job",
         trigger="interval",
-        seconds=50,
+        seconds=120,
     ),
     "intelligence": SchedulerJobDefinition(
         id="intelligence",
@@ -184,6 +186,16 @@ JOB_DEFINITIONS = {
         function="run_backtest_job",
         trigger="interval",
         minutes=1,
+    ),
+    "walk_forward_queue": SchedulerJobDefinition(
+        id="walk_forward_queue",
+        name="Walk-forward validation queue",
+        module="app.jobs.walk_forward_queue_job",
+        function="run_walk_forward_queue_job",
+        trigger="interval",
+        seconds=10,
+        max_instances=1,
+        coalesce=True,
     ),
     "ml_dataset": SchedulerJobDefinition(
         id="ml_dataset",

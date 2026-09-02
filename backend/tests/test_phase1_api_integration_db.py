@@ -203,6 +203,49 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(perf_payload["closed_trades"], 0)
         self.assertEqual(perf_payload["win_rate"], 0)
 
+    def test_paper_trade_history_is_database_paginated_and_officially_scoped(self):
+        now = datetime.utcnow().replace(microsecond=0)
+        with TestSessionLocal() as db:
+            db.add_all(
+                [
+                    PaperTrade(
+                        symbol="ETHUSDT",
+                        side="LONG",
+                        entry_price=100.0,
+                        entry_timeframe="5m" if index == 0 else "1h",
+                        status="CLOSED",
+                        result="WIN",
+                        pnl_percent=1.0,
+                        closed_at=now + timedelta(seconds=index),
+                        created_at=now + timedelta(seconds=index),
+                    )
+                    for index in range(25)
+                ]
+            )
+            db.commit()
+
+        response = self.client.get(
+            "/paper-trade/trades",
+            params={
+                "status": "CLOSED",
+                "page": 2,
+                "limit": 10,
+                "official_timeframes_only": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total_count"], 24)
+        self.assertEqual(payload["count"], 10)
+        self.assertEqual(payload["page"], 2)
+        self.assertEqual(payload["total_pages"], 3)
+        self.assertTrue(payload["has_next"])
+        self.assertTrue(payload["has_previous"])
+        self.assertTrue(
+            all(item["entry_timeframe"] == "1h" for item in payload["records"])
+        )
+
     def test_fill_model_endpoint_returns_simulation_profile(self):
         response = self.client.get(
             "/paper-trade/fill-model",

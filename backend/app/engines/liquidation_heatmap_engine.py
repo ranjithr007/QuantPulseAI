@@ -1,13 +1,25 @@
+from datetime import datetime, timedelta, timezone
+
 from app.database.models.liquidations import Liquidation
+from app.utils.freshness import normalize_timestamp_to_naive_utc
+
+
+LIQUIDATION_HEATMAP_LOOKBACK_SECONDS = 4 * 60 * 60
 
 
 class LiquidationHeatmapEngine:
 
-    def analyze(self, db, symbol, current_price):
+    def analyze(self, db, symbol, current_price, *, as_of_timestamp=None):
+
+        as_of = normalize_timestamp_to_naive_utc(
+            as_of_timestamp or datetime.now(timezone.utc)
+        )
+        cutoff = as_of - timedelta(seconds=LIQUIDATION_HEATMAP_LOOKBACK_SECONDS)
 
         liquidations = (
             db.query(Liquidation)
             .filter(Liquidation.symbol == symbol)
+            .filter(Liquidation.event_time >= cutoff)
             .order_by(Liquidation.event_time.desc())
             .limit(500)
             .all()
@@ -73,4 +85,7 @@ class LiquidationHeatmapEngine:
             "target_price": target,
             "bias": bias,
             "confidence": round(confidence, 2),
+            "source_window_start": cutoff,
+            "source_window_end": as_of,
+            "source_event_count": len(liquidations),
         }

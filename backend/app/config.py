@@ -11,6 +11,8 @@ DEFAULT_SCHEDULER_JOBS = [
     "whale_ai",
     "heatmap",
     "orderbook",
+    "walk_forward_queue",
+    "pipeline_retention",
 ]
 DEFAULT_LIVE_MARKET_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
 DEFAULT_DEVELOPMENT_ORIGINS = [
@@ -93,7 +95,7 @@ class Settings:
         )
         self.pipeline_retention_enabled = _env_bool(
             "QUANTPULSE_PIPELINE_RETENTION_ENABLED",
-            False,
+            True,
         )
         self.pipeline_retention_days = int(
             os.getenv("QUANTPULSE_PIPELINE_RETENTION_DAYS", "30")

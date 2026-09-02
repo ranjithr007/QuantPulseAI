@@ -4,6 +4,12 @@ import { Link } from "react-router-dom";
 import Pill from "./ui/Pill";
 import { formatPercent, formatPrice, formatSigned } from "../utils/formatters";
 import { deriveRowEligibilityState } from "../utils/eligibility";
+import {
+  executorCandidatesForSymbol,
+  executorStrategyLabel,
+  isCandidateExecutorReady,
+  selectExecutorCandidate,
+} from "../utils/executorCompetition";
 import { formatTickAge, getLiveMarketState, liveStateClasses } from "../utils/liveMarket";
 
 export default function MarketSignalTable({
@@ -101,7 +107,7 @@ export default function MarketSignalTable({
                 </td>
                 <td className="px-2.5 py-2.5 text-slate-300 sm:px-3">{formatPercent(row.confidence, 0, "-")}</td>
                 <td className="px-2.5 py-2.5 sm:px-3">
-                  <span className={clsx("font-medium", row.rsScore >= 0 ? "text-emerald-300" : "text-rose-300")}>
+                  <span className={clsx("font-medium", row.rsScore === null ? "text-slate-400" : row.rsScore >= 0 ? "text-emerald-300" : "text-rose-300")}>
                     {formatSigned(row.rsScore, 0, "-")}
                   </span>
                 </td>
@@ -237,7 +243,10 @@ export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperT
   const longPct = resolveDirectionalPct(selectedRow, "LONG");
   const shortPct = resolveDirectionalPct(selectedRow, "SHORT");
   const riskReward = numberFrom(selectedRow.riskReward, watchRow.risk_reward, 0);
-  const stage = inferStage(selectedRow, watchRow);
+  const stageAnalysis = watchRow.stage_analysis || {};
+  const relativeStrength = watchRow.relative_strength || {};
+  const rotation = watchRow.rotation || {};
+  const stage = resolveStage(selectedRow, watchRow, stageAnalysis);
   const risk = deriveRowEligibilityState({ row: selectedRow, watchRow, minConfidence });
   const hasLiveRecord = Boolean(row.liveUpdatedAt);
   const liveState = getLiveMarketState({ liveStatus, updatedAt: row.liveUpdatedAt, hasLiveRecord });
@@ -250,7 +259,21 @@ export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperT
     priceSource: liveState.source,
     liveState,
     rsScore,
+    rsStatus: relativeStrength.status || "LEGACY",
+    rsRank: relativeStrength.rank ?? null,
+    rsUniverseSize: relativeStrength.universe_size ?? null,
+    rsReason: relativeStrength.reason || "Peer-relative return evidence is not available in this snapshot",
+    rsTimeframes: relativeStrength.timeframes || {},
+    rotationStatus: rotation.status || "UNAVAILABLE",
+    rotationQuadrant: rotation.quadrant || "UNAVAILABLE",
+    rotationMomentum: nullableNumberFrom(rotation.momentum_score),
+    rotationReason: rotation.reason || "Relative leadership rotation is unavailable",
     stage,
+    stageStatus: stageAnalysis.status || "LEGACY",
+    stageReason: stageAnalysis.reason || "Technical stage evidence is not available in this snapshot",
+    stageScore: nullableNumberFrom(stageAnalysis.score),
+    stageConfidence: nullableNumberFrom(stageAnalysis.confidence),
+    stageExecutionEligible: stageAnalysis.execution_eligible === true,
     regime: selectedRow.regime || watchRow.overall_bias || "WAIT",
     watchStatus: watchRow.status || "SCAN",
     longPct,
@@ -298,11 +321,8 @@ export function selectWatchlistSignal(row, watchRow) {
 
 export function deriveExecutorState(row, candidates = []) {
   const side = normalizeTradeSide(row.type);
-  const candidate = candidates.find(
-    (item) =>
-      String(item?.symbol || "").toUpperCase() === String(row.symbol || "").toUpperCase() &&
-      normalizeTradeSide(item?.side) === side
-  );
+  const symbolCandidates = executorCandidatesForSymbol(candidates, row.symbol);
+  const candidate = selectExecutorCandidate(candidates, row.symbol, side);
 
   if (!candidate) {
     return {
@@ -313,22 +333,29 @@ export function deriveExecutorState(row, candidates = []) {
     };
   }
 
+  const strategy = executorStrategyLabel(candidate);
+  const candidateSide = normalizeTradeSide(candidate.side);
+  const competitorCount = Number(candidate?.arbitration?.eligible_competitor_count || 0);
+  const executorBlockers = candidate?.arbitration?.executor_blockers || [];
   const riskFreshness = candidate?.risk_decision?.freshness || null;
-  if (riskFreshness?.is_stale) {
+  if (riskFreshness?.is_stale && !isCandidateExecutorReady(candidate)) {
     return {
       status: "STALE",
       label: "Risk stale",
       tone: "amber",
-      note: `Queued OPEN trade plan exists, but ${staleFreshnessNote(riskFreshness, "risk decision")}.`,
+      note: `${strategy} is queued, but ${staleFreshnessNote(riskFreshness, "risk decision")}.`,
     };
   }
 
-  if (candidate.eligible) {
+  if (isCandidateExecutorReady(candidate)) {
+    const competitionNote = competitorCount > 1
+      ? ` Selected 1 of ${competitorCount} eligible strategies.`
+      : "";
     return {
       status: "READY",
       label: "Executor ready",
       tone: "emerald",
-      note: "Queued OPEN trade plan passes executor checks.",
+      note: `${strategy} ${candidateSide || ""} is the official paper winner.${competitionNote}`.replace(/\s+/g, " ").trim(),
     };
   }
 
@@ -336,7 +363,10 @@ export function deriveExecutorState(row, candidates = []) {
     status: "BLOCKED",
     label: "Executor blocked",
     tone: "rose",
-    note: candidate.blocked_reasons?.[0] || "Queued OPEN trade plan is blocked.",
+    note:
+      executorBlockers[0] ||
+      candidate.blocked_reasons?.[0] ||
+      `${symbolCandidates.length} queued strategy plan${symbolCandidates.length === 1 ? " is" : "s are"} blocked.`,
   };
 }
 
@@ -444,6 +474,15 @@ function resolveDirectionalPct(row, side) {
 }
 
 function resolveRsScore(row, watchRow) {
+  const relativeStrength = watchRow?.relative_strength;
+  if (relativeStrength && Object.keys(relativeStrength).length) {
+    return relativeStrength.status === "READY"
+      ? nullableNumberFrom(relativeStrength.score)
+      : null;
+  }
+
+  // Compatibility only for snapshots served by an older backend. New
+  // snapshots always provide an explicit READY or UNAVAILABLE RS result.
   const timeframeKey = scoreKeyForTimeframe(row.timeframe);
   return numberFrom(
     row.signalScore,
@@ -471,7 +510,19 @@ function scoreKeyForTimeframe(timeframe) {
   }[String(timeframe || "").toLowerCase()] || null;
 }
 
-function inferStage(row, watchRow) {
+function resolveStage(row, watchRow, stageAnalysis) {
+  if (stageAnalysis && Object.keys(stageAnalysis).length) {
+    return stageAnalysis.status === "READY" && stageAnalysis.stage
+      ? stageAnalysis.stage
+      : "UNAVAILABLE";
+  }
+
+  // Backward-compatible display for snapshots created before server-side
+  // stage evidence was introduced. It is explicitly marked LEGACY by enrichRow.
+  return inferLegacyStage(row, watchRow);
+}
+
+function inferLegacyStage(row, watchRow) {
   const timeframeBias = timeframeBiasForRow(row, watchRow);
   const primaryText = `${row.regime || ""} ${timeframeBias || ""}`.trim().toUpperCase();
   const fallbackText = `${watchRow.overall_bias || ""} ${watchRow.bias_1d || ""} ${watchRow.bias_4h || ""} ${watchRow.bias_2h || ""} ${watchRow.bias_1h || ""} ${watchRow.bias_15m || ""} ${watchRow.bias_5m || ""}`.toUpperCase();

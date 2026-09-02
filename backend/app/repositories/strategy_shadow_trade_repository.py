@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import inspect
+from sqlalchemy import and_, case, func, inspect, or_
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.strategy_shadow_trade import StrategyShadowTrade
@@ -45,6 +45,75 @@ class StrategyShadowTradeRepository:
                 StrategyShadowTrade.strategy_version == strategy_version
             )
         return query.all()
+
+    def risk_snapshot_trades(self, db, *, window_start):
+        """Load only open positions and closed trades in the daily-risk window."""
+
+        self.ensure_table(db)
+        return (
+            db.query(StrategyShadowTrade)
+            .filter(
+                or_(
+                    StrategyShadowTrade.status == "OPEN",
+                    and_(
+                        StrategyShadowTrade.status == "CLOSED",
+                        StrategyShadowTrade.closed_at >= window_start,
+                    ),
+                )
+            )
+            .all()
+        )
+
+    def realized_pnl_by_strategy(self, db, strategy_keys):
+        """Return exact lifetime realized P&L without hydrating trade history."""
+
+        self.ensure_table(db)
+        normalized_keys = {
+            (str(strategy_id), str(strategy_version))
+            for strategy_id, strategy_version in (strategy_keys or [])
+            if strategy_id and strategy_version
+        }
+        if not normalized_keys:
+            return {}
+
+        scopes = [
+            and_(
+                StrategyShadowTrade.strategy_id == strategy_id,
+                StrategyShadowTrade.strategy_version == strategy_version,
+            )
+            for strategy_id, strategy_version in normalized_keys
+        ]
+        realized = case(
+            (
+                StrategyShadowTrade.status == "CLOSED",
+                func.coalesce(StrategyShadowTrade.realized_pnl_inr, 0.0),
+            ),
+            (
+                StrategyShadowTrade.status == "OPEN",
+                func.coalesce(StrategyShadowTrade.partial_realized_pnl_inr, 0.0),
+            ),
+            else_=0.0,
+        )
+        rows = (
+            db.query(
+                StrategyShadowTrade.strategy_id,
+                StrategyShadowTrade.strategy_version,
+                func.sum(realized).label("realized_pnl_inr"),
+            )
+            .filter(or_(*scopes))
+            .group_by(
+                StrategyShadowTrade.strategy_id,
+                StrategyShadowTrade.strategy_version,
+            )
+            .all()
+        )
+        return {
+            (row.strategy_id, row.strategy_version): round(
+                float(row.realized_pnl_inr or 0.0),
+                2,
+            )
+            for row in rows
+        }
 
     def has_open_trade(self, db, strategy_id, strategy_version, symbol):
         self.ensure_table(db)

@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from hashlib import sha256
@@ -89,8 +90,9 @@ SERIES_SPECS = {
 
 
 class FredMacroCollector:
-    _cache = {}
+    _cache = OrderedDict()
     _cache_lock = RLock()
+    _cache_max_entries = 4
 
     def __init__(self, api_key, *, timeout_seconds=10, cache_seconds=1800):
         self.api_key = str(api_key or "").strip()
@@ -232,6 +234,7 @@ class FredMacroCollector:
             cached = self._cache.get(cache_key)
             if cached is None:
                 return None
+            self._cache.move_to_end(cache_key)
             cached_at, payload = cached
             if monotonic() - cached_at > self.cache_seconds:
                 self._cache.pop(cache_key, None)
@@ -241,6 +244,9 @@ class FredMacroCollector:
     def _store_cache(self, cache_key, payload):
         with self._cache_lock:
             self._cache[cache_key] = (monotonic(), payload)
+            self._cache.move_to_end(cache_key)
+            while len(self._cache) > self._cache_max_entries:
+                self._cache.popitem(last=False)
 
     @classmethod
     def clear_cache(cls):

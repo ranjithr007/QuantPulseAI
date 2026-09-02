@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, String
+from sqlalchemy import Column, DateTime, Float, Index, Integer, String
 
 from app.database.sqlserver import Base
 
@@ -67,3 +67,17 @@ class PaperTrade(Base):
     opened_at = Column(DateTime, default=datetime.utcnow)
     closed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index(
+    "ix_paper_trades_pnl_history",
+    PaperTrade.status,
+    PaperTrade.entry_timeframe,
+    PaperTrade.created_at,
+    PaperTrade.id,
+)
+Index(
+    "ix_paper_trades_daily_risk",
+    PaperTrade.status,
+    PaperTrade.closed_at,
+)

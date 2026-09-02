@@ -44,16 +44,44 @@ export default function NotificationCenter({ getPageHref, view }) {
   }, []);
 
   useEffect(() => {
-    let activeController = new AbortController();
-    refresh(activeController.signal);
-    const intervalId = window.setInterval(() => {
-      activeController.abort();
+    let activeController = null;
+    let timeoutId = null;
+    let stopped = false;
+    let inFlight = false;
+
+    const schedule = () => {
+      if (stopped || document.visibilityState === "hidden") return;
+      timeoutId = window.setTimeout(poll, POLL_INTERVAL_MS);
+    };
+
+    const poll = async () => {
+      if (stopped || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
       activeController = new AbortController();
-      refresh(activeController.signal);
-    }, POLL_INTERVAL_MS);
+      await refresh(activeController.signal);
+      inFlight = false;
+      schedule();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        if (timeoutId) window.clearTimeout(timeoutId);
+        timeoutId = null;
+        activeController?.abort();
+        return;
+      }
+      if (timeoutId) window.clearTimeout(timeoutId);
+      timeoutId = null;
+      poll();
+    };
+
+    poll();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
-      window.clearInterval(intervalId);
-      activeController.abort();
+      stopped = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+      activeController?.abort();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [refresh]);
 

@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from sqlalchemy import true
 
 from app.database.models.funding_rates import FundingRate
@@ -5,6 +7,7 @@ from app.database.models.futures_mark_prices import FuturesMarkPrice
 from app.database.models.futures_margin_brackets import FuturesMarginBracket
 from app.database.models.open_interest import OpenInterest
 from app.repositories._db_utils import commit_or_rollback
+from app.utils.freshness import normalize_timestamp_to_naive_utc
 from app.utils.freshness import normalize_timestamp_to_utc
 
 
@@ -49,14 +52,37 @@ class DerivativeRepository:
         return record
 
     def save_open_interest(self, db, item):
-        db.add(
-            OpenInterest(
-                symbol=item["symbol"],
-                value=item["value"],
-                timestamp=item["time"],
-            )
+        symbol = str(item["symbol"]).upper()
+        timestamp = normalize_timestamp_to_naive_utc(item["time"])
+        bucket_start = timestamp.replace(
+            minute=(timestamp.minute // 2) * 2,
+            second=0,
+            microsecond=0,
         )
+        bucket_end = bucket_start + timedelta(minutes=2)
+        existing = (
+            db.query(OpenInterest)
+            .filter(
+                OpenInterest.symbol == symbol,
+                OpenInterest.timestamp >= bucket_start,
+                OpenInterest.timestamp < bucket_end,
+            )
+            .order_by(OpenInterest.timestamp.asc(), OpenInterest.id.asc())
+            .first()
+        )
+        if existing is not None:
+            # Preserve the first observation in the bucket. Updating it with a
+            # later value would rewrite historical evidence used by backtests.
+            return existing
+
+        record = OpenInterest(
+            symbol=symbol,
+            value=item["value"],
+            timestamp=timestamp,
+        )
+        db.add(record)
         commit_or_rollback(db)
+        return record
 
     def save_mark_prices(self, db, items):
         items = list(items or [])

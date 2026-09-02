@@ -32,6 +32,41 @@ class PaperWalletLedgerRepository:
             PaperWalletLedgerEntry.id.asc(),
         ).all()
 
+    def wallet_snapshot(self, db, *, recent_limit=100):
+        """Return exact wallet totals with only bounded recent ledger rows."""
+
+        self.ensure_table(db)
+        scope = or_(
+            PaperWalletLedgerEntry.symbol.is_(None),
+            ~func.upper(PaperWalletLedgerEntry.symbol).like(
+                f"{QA_PAPER_SYMBOL_PREFIX}%"
+            ),
+        )
+        count, realized_pnl = (
+            db.query(
+                func.count(PaperWalletLedgerEntry.id),
+                func.coalesce(func.sum(PaperWalletLedgerEntry.delta_inr), 0.0),
+            )
+            .filter(scope)
+            .one()
+        )
+        recent = (
+            db.query(PaperWalletLedgerEntry)
+            .filter(scope)
+            .order_by(
+                PaperWalletLedgerEntry.created_at.desc(),
+                PaperWalletLedgerEntry.id.desc(),
+            )
+            .limit(max(1, int(recent_limit)))
+            .all()
+        )
+        recent.reverse()
+        return {
+            "count": int(count or 0),
+            "realized_pnl_inr": round(float(realized_pnl or 0.0), 2),
+            "recent_entries": recent,
+        }
+
     def append_event(
         self,
         db,

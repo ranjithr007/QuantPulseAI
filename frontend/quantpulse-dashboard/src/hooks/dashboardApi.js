@@ -142,6 +142,20 @@ export async function loadIntelligenceBundle({ view, signal }) {
   return response || null;
 }
 
+export async function loadSignalBatch({ view, symbols, signal }) {
+  const response = await requestJson(
+    "/signals/batch",
+    {
+      timeframe: view.timeframe,
+      stale_after_seconds: staleAfterSeconds(view.timeframe),
+      symbols: symbols.join(","),
+    },
+    signal
+  );
+
+  return response || null;
+}
+
 export async function loadRiskBundle({ view, auto, signal }) {
   const response = await requestJson(
     `/risk/${view.symbol}/bundle`,
@@ -275,19 +289,30 @@ export async function loadPhase2EvidenceCheckpoints({ limit = 30, signal } = {})
 }
 
 export async function loadPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", signal }) {
+  return loadWalkForwardSummary({ symbol, signalSide, timeframe, signal });
+}
+
+export async function loadPaperTrades({
+  status,
+  symbol,
+  page = 1,
+  limit = 10,
+  officialTimeframesOnly = true,
+  signal,
+} = {}) {
   const response = await requestJson(
-    "/backtest/phase2-report",
+    "/paper-trade/trades",
     {
+      status,
       symbol,
-      signal: signalSide,
-      timeframe,
-      min_train_trades: 1,
+      page,
+      limit,
+      official_timeframes_only: officialTimeframesOnly,
     },
     signal,
-    120000
+    20000
   );
-
-  return response || null;
+  return response || { records: [], total_count: 0, page, page_size: limit, total_pages: 1 };
 }
 
 export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", validation, signal }) {
@@ -460,7 +485,6 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
         "/paper-trade/bundle",
         {
           symbol: paperSymbol,
-          include_all: activePage === "pnl" ? true : null,
         },
         signal
       ),
@@ -482,24 +506,11 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
     });
   }
 
-  if (needs.signals) {
-    overviewRequests.push({
-      key: "signalBatch",
-      promise: requestJson(
-        "/signals/batch",
-        {
-          ...common,
-          symbols: symbols.join(","),
-        },
-        signal
-      ),
-    });
-  }
-
-  const [overviewByKey] = await Promise.all([resolveBatch(overviewRequests)]);
+  const { values: overviewByKey, errors } = await resolveBatch(overviewRequests);
 
   return {
     overviewByKey,
+    errors,
   };
 }
 
@@ -509,12 +520,23 @@ function staleAfterSeconds(timeframe) {
 
 async function resolveBatch(requests) {
   const settled = await Promise.allSettled(requests.map((item) => item.promise));
-  return Object.fromEntries(
+  const values = Object.fromEntries(
     requests.map((item, index) => [
       item.key,
       settled[index].status === "fulfilled" ? settled[index].value : null,
     ])
   );
+  const errors = requests.flatMap((item, index) => {
+    const result = settled[index];
+    if (result.status === "fulfilled") return [];
+    return [{
+      key: item.key,
+      message: result.reason instanceof Error
+        ? result.reason.message
+        : String(result.reason || "Request failed"),
+    }];
+  });
+  return { values, errors };
 }
 
 async function requestJson(path, params = {}, signal, timeoutMs = 60000, method = "GET", body) {

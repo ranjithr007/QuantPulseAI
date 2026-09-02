@@ -6,6 +6,15 @@ class HeatmapRepository:
 
     def save(self, db, data):
 
-        db.add(LiquidationHeatmap(**data))
+        column_names = {column.name for column in LiquidationHeatmap.__table__.columns}
+        db.add(
+            LiquidationHeatmap(
+                **{
+                    key: value
+                    for key, value in (data or {}).items()
+                    if key in column_names and key not in {"id", "created_at"}
+                }
+            )
+        )
 
         commit_or_rollback(db)

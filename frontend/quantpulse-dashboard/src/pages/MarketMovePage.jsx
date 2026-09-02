@@ -97,7 +97,12 @@ export default function MarketMovePage({ view, selectedDetail }) {
                 icon={ArrowDown}
               />
             </div>
-            <EvidencePolicy macroAvailable={analysis.macroAvailable} quality={participation?.quality_state} />
+            <EvidencePolicy
+              macroAvailable={analysis.macroAvailable}
+              macroProvider={analysis.macroProvider}
+              macroStatus={analysis.macroStatus}
+              quality={participation?.quality_state}
+            />
           </div>
         </div>
         <MarketContextCard analysis={analysis} />
@@ -297,14 +302,17 @@ function ZoneCard({ title, value, note, tone, icon: Icon }) {
   );
 }
 
-function EvidencePolicy({ macroAvailable, quality }) {
+function EvidencePolicy({ macroAvailable, macroProvider, macroStatus, quality }) {
+  const macroMessage = macroAvailable
+    ? "Macro scoring is backed by a verified provider."
+    : macroProvider
+      ? `${macroProvider} is connected but currently ${macroStatus || "DEGRADED"}; its advisory score is excluded until the evidence is verified.`
+      : "Macro stays N/A until a verified provider is connected; news or Treasury drivers are never inferred or fabricated.";
   return (
     <div className="flex items-start gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-xs leading-5 text-slate-400">
       {macroAvailable ? <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />}
       <span>
-        Market evidence quality: <strong className="text-slate-200">{quality || "PENDING"}</strong>. {macroAvailable
-          ? "Macro scoring is backed by a verified provider."
-          : "Macro stays N/A until a verified provider is connected; news or Treasury drivers are never inferred or fabricated."}
+        Market evidence quality: <strong className="text-slate-200">{quality || "PENDING"}</strong>. {macroMessage}
       </span>
     </div>
   );
@@ -326,6 +334,31 @@ function buildMoveAnalysis(view, detail, participation) {
   const resistanceZone = timeframeEvidence?.resistance;
   const supportZone = timeframeEvidence?.support;
   const macroAvailable = participation?.external_context?.status === "VERIFIED";
+  const participationDerivatives = participation?.derivatives || null;
+  const fundingRate = participationDerivatives
+    ? optionalNumber(participationDerivatives.funding_rate)
+    : optionalNumber(
+      detail?.derivatives?.latest_funding_rate
+      ?? detail?.derivatives?.latestFundingRate
+      ?? detail?.derivatives?.funding?.latest?.rate
+    );
+  const openInterestFresh = participationDerivatives
+    ? participationDerivatives?.freshness?.open_interest?.is_stale === false
+    : true;
+  const openInterest = openInterestFresh
+    ? optionalNumber(
+      detail?.derivatives?.latest_open_interest
+      ?? detail?.derivatives?.latestOpenInterest
+      ?? detail?.derivatives?.openInterest?.latest?.value
+    )
+    : null;
+  const openInterestChange = participationDerivatives
+    ? optionalNumber(participationDerivatives.open_interest_change_percent)
+    : optionalNumber(
+      detail?.derivatives?.latest_open_interest_change_pct
+      ?? detail?.derivatives?.latestOpenInterestChangePct
+      ?? detail?.derivatives?.openInterest?.latest_change_pct
+    );
   const resistance = formatZone(resistanceZone, detail?.resistanceLevels?.r1, detail?.resistanceLevels?.r2);
   const support = formatZone(supportZone, detail?.supportLevels?.s2, detail?.supportLevels?.s1);
   const levelsAvailable = resistance !== "Calculating" && support !== "Calculating";
@@ -358,24 +391,16 @@ function buildMoveAnalysis(view, detail, participation) {
     support,
     supportNote: zoneNote(supportZone, "Nearest calculated support zone"),
     macroAvailable,
+    macroProvider: participation?.external_context?.inputs?.provider || null,
+    macroStatus: participation?.external_context?.status || "UNAVAILABLE",
     signalType: detail?.signalType || "WAIT",
     confidence: optionalNumber(detail?.confidence),
-    fundingRate: optionalNumber(
-      detail?.derivatives?.latest_funding_rate
-      ?? detail?.derivatives?.latestFundingRate
-      ?? detail?.derivatives?.funding?.latest?.rate
-    ),
-    fundingTrend: detail?.derivatives?.funding_trend || detail?.derivatives?.funding?.trend || "Funding feed pending",
-    openInterest: optionalNumber(
-      detail?.derivatives?.latest_open_interest
-      ?? detail?.derivatives?.latestOpenInterest
-      ?? detail?.derivatives?.openInterest?.latest?.value
-    ),
-    openInterestChange: optionalNumber(
-      detail?.derivatives?.latest_open_interest_change_pct
-      ?? detail?.derivatives?.latestOpenInterestChangePct
-      ?? detail?.derivatives?.openInterest?.latest_change_pct
-    ),
+    fundingRate,
+    fundingTrend: fundingRate === null
+      ? "Fresh funding evidence unavailable"
+      : detail?.derivatives?.funding_trend || detail?.derivatives?.funding?.trend || "Funding is fresh",
+    openInterest,
+    openInterestChange,
     marketStructure,
     activeRange,
     currentTone,
@@ -408,7 +433,15 @@ function buildEngines(detail, participation) {
   const whaleScore = whaleImbalance(detail);
 
   return [
-    { label: "Macro", score: macroScore, reason: macroScore === null ? "Verified macro provider not connected" : macroContext?.inputs?.reasons?.[0] || "Verified FRED macro context" },
+    {
+      label: "Macro",
+      score: macroScore,
+      reason: macroScore === null
+        ? macroInput === null
+          ? "Verified macro provider not connected"
+          : `${macroContext?.inputs?.provider || "Macro provider"} is ${macroContext.status || "DEGRADED"}; advisory ${formatSigned(normalizeExternalScore(macroInput), 0)} excluded from composite`
+        : macroContext?.inputs?.reasons?.[0] || "Verified FRED macro context",
+    },
     { label: "Liquidations", score: liquidationScore, reason: liquidationReason(liquidation) },
     { label: "Order Flow", score: componentScore(orderFlow, 25, Boolean(detail?.selectedOrderflow)), reason: orderFlow?.reason || "Order-flow evidence pending" },
     { label: "Whales", score: whaleScore, reason: whaleReason(detail, whaleScore) },
@@ -464,7 +497,7 @@ function whaleReason(detail, score) {
 }
 
 function liquidationReason(liquidation) {
-  if (liquidation?.data_quality !== "OBSERVED") return "Observed liquidation feed unavailable";
+  if (liquidation?.data_quality !== "OBSERVED") return liquidation?.reason || "Observed liquidation feed unavailable";
   if (liquidation.bias === "HUNT_SHORTS") return "Short liquidation cascade pressure";
   if (liquidation.bias === "HUNT_LONGS") return "Long liquidation cascade pressure";
   return "Liquidation pressure is balanced";

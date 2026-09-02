@@ -22,18 +22,31 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
                 "whale_ai",
                 "heatmap",
                 "orderbook",
+                "walk_forward_queue",
+                "pipeline_retention",
             ],
         )
 
     def test_market_evidence_collectors_are_enabled_by_default(self):
         liquidations = get_job_definition("liquidations")
         whales = get_job_definition("whales")
+        whale_ai = get_job_definition("whale_ai")
+        heatmap = get_job_definition("heatmap")
         orderbook = get_job_definition("orderbook")
 
         self.assertEqual(liquidations.trigger, "date")
         self.assertEqual(liquidations.function, "run_liquidation_job")
         self.assertEqual(whales.seconds, 120)
+        self.assertEqual(whale_ai.seconds, 120)
+        self.assertEqual(heatmap.seconds, 60)
         self.assertEqual(orderbook.minutes, 1)
+
+    def test_operational_pipeline_retention_is_enabled_by_default(self):
+        retention = get_job_definition("pipeline-retention")
+
+        self.assertIn("pipeline_retention", resolve_job_ids([]))
+        self.assertEqual(retention.function, "run_pipeline_retention_job")
+        self.assertEqual(retention.minutes, 24 * 60)
 
     def test_deterministic_pipeline_is_registered_for_explicit_promotion(self):
         job = get_job_definition("deterministic_pipeline")
@@ -121,6 +134,16 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
         self.assertIn('"paper_trade_execute"', source)
         self.assertIn('"paper_trade_monitor"', source)
         self.assertIn('"source": "pipeline_cycle"', source)
+
+    def test_walk_forward_queue_runs_on_worker_without_web_request_blocking(self):
+        job = get_job_definition("walk-forward-queue")
+
+        self.assertIsNotNone(job)
+        self.assertEqual(job.module, "app.jobs.walk_forward_queue_job")
+        self.assertEqual(job.function, "run_walk_forward_queue_job")
+        self.assertEqual(job.seconds, 10)
+        self.assertEqual(job.max_instances, 1)
+        self.assertTrue(job.coalesce)
 
     def test_scheduler_startup_is_dependency_safe(self):
         source = (APP_ROOT / "scheduler" / "scheduler.py").read_text(encoding="utf-8")

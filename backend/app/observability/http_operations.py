@@ -5,20 +5,28 @@ import logging
 import sys
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from datetime import datetime, timezone
 
 
 class SlidingWindowRateLimiter:
-    def __init__(self):
-        self._events = defaultdict(deque)
+    def __init__(self, max_keys=10_000):
+        self._max_keys = max(1, int(max_keys))
+        self._events = OrderedDict()
         self._lock = threading.Lock()
 
     def allow(self, key, limit, window_seconds=60, now=None):
         current = time.monotonic() if now is None else float(now)
         cutoff = current - float(window_seconds)
         with self._lock:
-            events = self._events[key]
+            events = self._events.get(key)
+            if events is None:
+                while len(self._events) >= self._max_keys:
+                    self._events.popitem(last=False)
+                events = deque()
+                self._events[key] = events
+            else:
+                self._events.move_to_end(key)
             while events and events[0] <= cutoff:
                 events.popleft()
             if len(events) >= int(limit):

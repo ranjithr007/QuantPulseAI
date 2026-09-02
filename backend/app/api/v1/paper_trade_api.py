@@ -25,7 +25,6 @@ from app.paper_trading.measurement import MeasurementGates
 from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
 from app.paper_trading.measurement import build_measurement_report
-from app.paper_trading.paper_trade_performance import paper_trade_performance
 from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.reentry_policy import PAPER_STOP_REENTRY_COOLDOWN_MINUTES
 from app.paper_trading.reentry_policy import same_side_stop_reentry_cooldown
@@ -85,26 +84,38 @@ PAPER_STOP_REENTRY_COOLDOWN_REASON = (
 def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     normalized_symbol = symbol.upper() if symbol else None
     repo = PaperTradeRepository()
-
-    trades = repo.all_trades(db, symbol=normalized_symbol)
-    auditable_trades = repo.all_trades(
+    official_timeframes = tuple(PHASE2_OFFICIAL_TIMEFRAMES)
+    open_trade_rows = repo.list_trades(
+        db,
+        status="OPEN",
+        symbol=normalized_symbol,
+        limit=open_limit,
+        entry_timeframes=official_timeframes,
+    )
+    closed_trade_rows = repo.list_trades(
+        db,
+        status="CLOSED",
+        symbol=normalized_symbol,
+        limit=closed_limit,
+        entry_timeframes=official_timeframes,
+    )
+    open_trades = [_paper_trade_payload(trade) for trade in open_trade_rows]
+    closed_trades = [_paper_trade_payload(trade) for trade in closed_trade_rows]
+    performance = repo.performance_summary(
+        db,
+        symbol=normalized_symbol,
+        entry_timeframes=official_timeframes,
+    )
+    visible_count = repo.count_trades(db, symbol=normalized_symbol)
+    auditable_count = repo.count_trades(
         db,
         symbol=normalized_symbol,
         include_quarantined=True,
     )
-    open_trades = [
-        _paper_trade_payload(trade)
-        for trade in repo.list_trades(db, status="OPEN", symbol=normalized_symbol, limit=open_limit)
-    ]
-    closed_trades = [
-        _paper_trade_payload(trade)
-        for trade in repo.list_trades(db, status="CLOSED", symbol=normalized_symbol, limit=closed_limit)
-    ]
-    total_pnl_percent = round(sum(item.get("pnl_percent", 0) or 0 for item in closed_trades), 2)
-    wins = sum(1 for item in closed_trades if (item.get("pnl_percent") or 0) > 0)
-    losses = sum(1 for item in closed_trades if (item.get("pnl_percent") or 0) < 0)
-    closed_count = len(closed_trades)
-    account_trades = trades if normalized_symbol is None else repo.all_trades(db)
+    account_trades = repo.risk_snapshot_trades(
+        db,
+        window_start=datetime.utcnow() - timedelta(hours=24),
+    )
     account_risk = _account_risk_snapshot(db, account_trades)
     paper_wallet = _paper_wallet_snapshot(
         db,
@@ -121,40 +132,43 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
         "ledgerScope": {
             "scope": "PAPER_PRODUCTION",
             "policy": "QA_SYMBOL_QUARANTINE_V1",
-            "visible_records": len(trades),
-            "quarantined_records": len(auditable_trades) - len(trades),
-            "auditable_records": len(auditable_trades),
+            "visible_records": visible_count,
+            "quarantined_records": auditable_count - visible_count,
+            "auditable_records": auditable_count,
         },
         "performance": {
-            **paper_trade_performance(trades),
-            "total_trades": len(trades),
-            "open_trades": len(open_trades),
-            "closed_trades": closed_count,
-            "wins": wins,
-            "losses": losses,
-            "win_rate": round((wins / closed_count) * 100, 2) if closed_count else 0,
-            "average_pnl_percent": round(total_pnl_percent / closed_count, 2) if closed_count else 0,
-            "total_pnl_percent": total_pnl_percent,
+            **performance,
             "closedTrades": closed_trades,
+            "history_records_returned": len(closed_trades),
+            "history_is_bounded": performance["closed_trades"] > len(closed_trades),
         },
-        "summary": _summarize_paper_trades(open_trades + closed_trades),
+        "summary": {
+            "open": performance["open_trades"],
+            "closed": performance["closed_trades"],
+            "wins": performance["wins"],
+            "losses": performance["losses"],
+        },
         "openTrades": {
-            "count": len(open_trades),
+            "count": performance["open_trades"],
             "records": open_trades,
         },
         "closedTrades": {
-            "count": len(closed_trades),
+            "count": performance["closed_trades"],
             "records": closed_trades,
+            "records_returned": len(closed_trades),
+            "has_more": performance["closed_trades"] > len(closed_trades),
         },
     }
 
 
 def _paper_wallet_snapshot(db, trades, account_risk=None):
     account_risk = account_risk or _account_risk_snapshot(db, trades)
-    ledger_entries = PaperWalletLedgerRepository().list_entries(db)
+    ledger = PaperWalletLedgerRepository().wallet_snapshot(db)
     return build_inr_paper_wallet(
         trades,
-        ledger_entries=ledger_entries,
+        ledger_entries=ledger["recent_entries"],
+        ledger_realized_pnl_inr=ledger["realized_pnl_inr"],
+        ledger_entry_count=ledger["count"],
         current_prices=account_risk.get("current_prices") or {},
         require_open_prices=True,
     )
@@ -245,12 +259,14 @@ def get_paper_trade_performance(symbol: str | None = Query(default=None)):
     try:
         normalized_symbol = symbol.upper() if symbol else None
         repo = PaperTradeRepository()
-        trades = repo.all_trades(db, symbol=normalized_symbol)
 
         return {
             "source": "paper_trade_performance",
             "symbol_filter": normalized_symbol,
-            "performance": paper_trade_performance(trades),
+            "performance": repo.performance_summary(
+                db,
+                symbol=normalized_symbol,
+            ),
         }
 
     except SQLAlchemyError as exc:
@@ -662,8 +678,8 @@ def get_paper_trade_bundle(
         return build_paper_trade_bundle(
             db,
             symbol=symbol,
-            open_limit=None if include_all else 120,
-            closed_limit=None if include_all else 200,
+            open_limit=120,
+            closed_limit=200,
         )
 
     except SQLAlchemyError:
@@ -682,6 +698,8 @@ def get_paper_trades(
     status: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    official_timeframes_only: bool = Query(default=False),
 ):
     db = SessionLocal()
 
@@ -689,6 +707,17 @@ def get_paper_trades(
         normalized_status = status.upper() if status else None
         normalized_symbol = symbol.upper() if symbol else None
         repo = PaperTradeRepository()
+        entry_timeframes = (
+            tuple(PHASE2_OFFICIAL_TIMEFRAMES)
+            if official_timeframes_only
+            else None
+        )
+        total_count = repo.count_trades(
+            db,
+            status=normalized_status,
+            symbol=normalized_symbol,
+            entry_timeframes=entry_timeframes,
+        )
         records = [
             _paper_trade_payload(trade)
             for trade in repo.list_trades(
@@ -696,6 +725,8 @@ def get_paper_trades(
                 status=normalized_status,
                 symbol=normalized_symbol,
                 limit=limit,
+                offset=(page - 1) * limit,
+                entry_timeframes=entry_timeframes,
             )
         ]
 
@@ -704,6 +735,12 @@ def get_paper_trades(
             "status_filter": normalized_status,
             "symbol_filter": normalized_symbol,
             "count": len(records),
+            "total_count": total_count,
+            "page": page,
+            "page_size": limit,
+            "total_pages": max(1, (total_count + limit - 1) // limit),
+            "has_next": page * limit < total_count,
+            "has_previous": page > 1,
             "summary": _summarize_paper_trades(records),
             "records": records,
         }
@@ -738,6 +775,14 @@ def get_paper_trade_candidates(
             for item in records
             if item["eligible"]
         ]
+        selected = [
+            item
+            for item in records
+            if (item.get("arbitration") or {}).get(
+                "selected_for_official_execution"
+            )
+            is True
+        ]
 
         return {
             "source": "paper_trade_candidates",
@@ -745,6 +790,7 @@ def get_paper_trade_candidates(
             "count": len(records),
             "eligible_count": len(eligible),
             "blocked_count": len(records) - len(eligible),
+            "official_selected_count": len(selected),
             "records": records,
         }
 
@@ -834,8 +880,8 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                         "strategy_id": plan_definition.get("id"),
                         "blocked_reasons": [
                             "Strategy remains in isolated Strategy Paper research; "
-                            "official paper execution is reserved for governed "
-                            "regime-routed strategies"
+                            "official paper execution requires the strategy's "
+                            "explicit execution flag"
                         ],
                     }
                 )
@@ -926,7 +972,10 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             )
 
             candidate = winner
-            account_trades = repo.all_trades(db)
+            account_trades = repo.risk_snapshot_trades(
+                db,
+                window_start=datetime.utcnow() - timedelta(hours=24),
+            )
             stop_reentry_cooldown = same_side_stop_reentry_cooldown(
                 account_trades,
                 candidate_symbol,
@@ -1392,6 +1441,77 @@ def _paper_trade_candidate_rank(candidate):
     )
 
 
+def _annotate_candidate_arbitration(records, auto):
+    """Expose the same per-symbol winner that official execution will use.
+
+    Several strategies may independently produce valid plans for one coin, but
+    the official paper book must still open at most one position for that coin.
+    Keeping this arbitration result in the API payload prevents clients from
+    accidentally treating the first database row as the selected strategy.
+    """
+
+    competitors_by_symbol = defaultdict(list)
+    executor_blockers_by_id = {}
+    for candidate in records:
+        plan = candidate.get("trade_plan") or {}
+        definition = strategy_definition(plan.get("strategy_id")) or {}
+        blockers = []
+        if candidate.get("eligible") is not True:
+            blockers.extend(candidate.get("blocked_reasons") or [])
+        if definition.get("official_execution_enabled") is not True:
+            blockers.append("Strategy is not enabled for official paper execution")
+        blockers.extend(_automation_execution_blockers(auto, candidate))
+        executor_blockers_by_id[id(candidate)] = list(dict.fromkeys(blockers))
+        if not blockers:
+            competitors_by_symbol[str(candidate.get("symbol") or "").upper()].append(
+                candidate
+            )
+
+    ranked_by_symbol = {
+        symbol: sorted(candidates, key=_paper_trade_candidate_rank, reverse=True)
+        for symbol, candidates in competitors_by_symbol.items()
+    }
+    annotated = []
+    for candidate in records:
+        symbol = str(candidate.get("symbol") or "").upper()
+        ranked = ranked_by_symbol.get(symbol, [])
+        selected = bool(ranked) and candidate is ranked[0]
+        rank = next(
+            (index for index, item in enumerate(ranked, start=1) if item is candidate),
+            None,
+        )
+        blockers = executor_blockers_by_id[id(candidate)]
+        if selected:
+            status = "SELECTED"
+        elif rank is not None:
+            status = "COMPETING"
+        else:
+            status = "BLOCKED"
+        annotated.append(
+            {
+                **candidate,
+                "arbitration": {
+                    "status": status,
+                    "selected_for_official_execution": selected,
+                    "rank": rank,
+                    "eligible_competitor_count": len(ranked),
+                    "selected_trade_plan_id": (
+                        (ranked[0].get("trade_plan") or {}).get("id")
+                        if ranked
+                        else None
+                    ),
+                    "selected_strategy_id": (
+                        (ranked[0].get("trade_plan") or {}).get("strategy_id")
+                        if ranked
+                        else None
+                    ),
+                    "executor_blockers": blockers,
+                },
+            }
+        )
+    return annotated
+
+
 def build_paper_trade_candidates(
     db,
     symbol=None,
@@ -1444,7 +1564,18 @@ def _execute_strategy_shadow_candidates(db, records, auto):
             "skipped": [],
         }
     repo = StrategyShadowTradeRepository()
-    shadow_history = repo.all_trades(db)
+    shadow_history = repo.risk_snapshot_trades(
+        db,
+        window_start=datetime.utcnow() - timedelta(hours=24),
+    )
+    strategy_keys = {
+        (
+            (candidate.get("trade_plan") or {}).get("strategy_id"),
+            (candidate.get("trade_plan") or {}).get("strategy_version"),
+        )
+        for candidate in records
+    }
+    realized_pnl_by_strategy = repo.realized_pnl_by_strategy(db, strategy_keys)
     live_marks = {}
 
     for candidate in records:
@@ -1549,6 +1680,10 @@ def _execute_strategy_shadow_candidates(db, records, auto):
             continue
         strategy_wallet = build_inr_paper_wallet(
             strategy_history,
+            trade_realized_pnl_inr=realized_pnl_by_strategy.get(
+                (strategy_id, strategy_version),
+                0.0,
+            ),
             current_prices=strategy_account_risk.get("current_prices") or {},
             require_open_prices=True,
         )
@@ -1735,18 +1870,18 @@ def _finish_paper_trade_candidates(
         )
     }
     current_signal_validations = {
-        (
-            trade.symbol,
-            str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
-        ): _current_signal_validation(
+        (trade_symbol, timeframe): _current_signal_validation(
             db,
-            trade.symbol,
-            str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
+            trade_symbol,
+            timeframe,
             stale_after_seconds,
         )
-        for trade in trades
+        for trade_symbol, timeframe in _required_current_signal_keys(trades)
     }
-    account_trades = PaperTradeRepository().all_trades(db)
+    account_trades = PaperTradeRepository().risk_snapshot_trades(
+        db,
+        window_start=datetime.utcnow() - timedelta(hours=24),
+    )
     account_risk = _account_risk_snapshot(db, account_trades)
     paper_wallet = _paper_wallet_snapshot(
         db,
@@ -1809,6 +1944,8 @@ def _finish_paper_trade_candidates(
         for trade in trades
     ]
 
+    records = _annotate_candidate_arbitration(records, auto)
+
     return normalized_symbol, records
 
 
@@ -1833,6 +1970,29 @@ def _strategy_core_signal_input(trade, payload):
     if not definition.get("requires_core_signal", False):
         return _CURRENT_SIGNAL_VALIDATION_UNSET
     return payload
+
+
+def _required_current_signal_keys(trades):
+    """Return unique symbol/timeframe keys that need core-signal revalidation.
+
+    Independent strategies carry their own immutable decision snapshot and do
+    not require the contradiction engine at the execution boundary.  Limiting
+    this work to strategies that explicitly opt in prevents duplicate, slow
+    recalculation for every competing plan while preserving the stricter gate
+    for Core Signal and Core Fusion.
+    """
+
+    return {
+        (
+            str(getattr(trade, "symbol", "") or "").upper(),
+            str(getattr(trade, "entry_timeframe", None) or "1h").lower(),
+        )
+        for trade in trades or []
+        if (strategy_definition(getattr(trade, "strategy_id", None)) or {}).get(
+            "requires_core_signal",
+            False,
+        )
+    }
 
 
 def _official_timeframe_records(records):

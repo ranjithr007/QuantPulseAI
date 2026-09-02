@@ -21,20 +21,30 @@ export default function StrategiesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const records = payload?.records || [];
+  const initialLoading = loading && !records.length;
 
   useEffect(() => {
     const controller = new AbortController();
+    let active = true;
     setLoading(true);
     setError("");
     loadStrategySummary({ signal: controller.signal })
-      .then(setPayload)
+      .then((response) => {
+        if (active) setPayload(response);
+      })
       .catch((requestError) => {
-        if (requestError?.name !== "AbortError") {
+        if (active && requestError?.name !== "AbortError") {
           setError(requestError?.message || "Strategy performance is unavailable");
         }
       })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [refreshKey]);
 
   return (
@@ -51,22 +61,29 @@ export default function StrategiesPage() {
           <button
             type="button"
             onClick={() => setRefreshKey((value) => value + 1)}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-900 px-3 text-sm text-slate-200 hover:border-cyan-400/30"
+            disabled={loading}
+            aria-busy={loading}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-900 px-3 text-sm text-slate-200 hover:border-cyan-400/30 disabled:cursor-wait disabled:opacity-60"
           >
-            <RefreshCw className={clsx("h-4 w-4", loading && "animate-spin")} /> Refresh
+            <RefreshCw className={clsx("h-4 w-4", loading && "animate-spin")} /> {loading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
 
-        {error ? <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div> : null}
+        {error ? (
+          <div role="alert" className="mt-3 flex flex-col gap-2 rounded-lg border border-rose-400/20 bg-rose-500/10 p-3 text-sm text-rose-200 sm:flex-row sm:items-center sm:justify-between">
+            <span>{error}{records.length ? " Showing the last successful strategy snapshot." : ""}</span>
+            <button type="button" onClick={() => setRefreshKey((value) => value + 1)} className="self-start rounded-md border border-rose-300/30 px-2.5 py-1 text-xs font-semibold hover:bg-rose-400/10 sm:self-auto">Retry</button>
+          </div>
+        ) : null}
         <ComparisonBanner comparison={payload?.comparison} />
         <div className="mt-4 space-y-4">
-          {loading ? (
+          {initialLoading ? (
             <div className="rounded-xl border border-sky-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
               Loading governed paper strategies…
             </div>
           ) : null}
-          {(payload?.records || []).map((strategy) => <StrategyPanel key={`${strategy.id}:${strategy.version}`} strategy={strategy} />)}
-          {!loading && !error && !(payload?.records || []).length ? (
+          {records.map((strategy) => <StrategyPanel key={`${strategy.id}:${strategy.version}`} strategy={strategy} />)}
+          {!loading && !error && !records.length ? (
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-8 text-center text-sm text-slate-400">No governed paper strategies are registered.</div>
           ) : null}
         </div>

@@ -68,37 +68,19 @@ async def run_liquidation_job_async(
 
         received_count += 1
 
-        print("\n" + "=" * 80)
-        print("LIQUIDATION EVENT RECEIVED")
-        print("=" * 80)
-        print(event)
-
         try:
-            # =========================================================
-            # Keep your existing database-save code here.
-            # Do not replace your repository or model names.
-            # =========================================================
-
             db = SessionLocal()
             try:
-
-                # print("LIQ:", event)
-
                 LiquidationRepository().save(db, event)
-
             except Exception as ex:
                 safe_rollback(db)
                 if not is_transient_network_error(ex):
                     print("Liquidation save error:", summarize_network_error(ex))
-
             finally:
-
                 db.close()
 
             saved_count += 1
             last_event = event
-
-            print("Liquidation event saved successfully")
 
         except Exception as error:
             print("Failed to save liquidation event:", error)

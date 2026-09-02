@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+
 from app.jobs.intelligence_job import run_intelligence_job
 from app.jobs.pipeline_cycle_job import run_pipeline_cycle_job
 from app.jobs.signal_quality_job import run_signal_quality_job
@@ -137,3 +139,43 @@ def test_pipeline_cycle_job_reports_failed_stage_and_continues():
     assert result["status"] == "PARTIAL"
     assert result["results"]["risk"]["status"] == "FAILED"
     assert result["results"]["paper_trade_execute"]["status"] == "OK"
+
+
+def test_pipeline_cycle_closes_ledger_session_when_finalization_fails():
+    fake_db = SimpleNamespace(close=Mock(), rollback=Mock())
+    pipeline_record = SimpleNamespace(id=7)
+    job_record = SimpleNamespace(id=8)
+
+    with patch("app.jobs.pipeline_cycle_job.USING_SQLITE_FALLBACK", False), patch(
+        "app.jobs.pipeline_cycle_job.SessionLocal", return_value=fake_db
+    ), patch(
+        "app.jobs.pipeline_cycle_job.PipelineRunRepository.recover_stale_running",
+        return_value={"status": "OK"},
+    ), patch(
+        "app.jobs.pipeline_cycle_job.PipelineRunRepository.start_pipeline",
+        return_value=(pipeline_record, True),
+    ), patch(
+        "app.jobs.pipeline_cycle_job.PipelineRunRepository.start_job",
+        return_value=(job_record, True),
+    ), patch(
+        "app.jobs.pipeline_cycle_job.PipelineRunRepository.finish_job"
+    ), patch(
+        "app.jobs.pipeline_cycle_job.PipelineRunRepository.finish_pipeline",
+        side_effect=RuntimeError("ledger unavailable"),
+    ), patch(
+        "app.jobs.pipeline_cycle_job.run_paper_trade_monitor_job",
+        return_value={"status": "OK"},
+    ), patch(
+        "app.jobs.pipeline_cycle_job.run_watchlist_persist_job",
+        return_value={"status": "OK"},
+    ), patch(
+        "app.jobs.pipeline_cycle_job.run_risk_job",
+        return_value={"status": "OK"},
+    ), patch(
+        "app.jobs.pipeline_cycle_job.run_paper_trade_execute_job",
+        return_value={"status": "OK"},
+    ):
+        with pytest.raises(RuntimeError, match="ledger unavailable"):
+            run_pipeline_cycle_job()
+
+    fake_db.close.assert_called_once()

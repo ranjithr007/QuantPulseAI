@@ -761,8 +761,12 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             capped = build_paper_trade_bundle(db, closed_limit=12)
             complete = build_paper_trade_bundle(db, closed_limit=None)
 
-        self.assertEqual(12, capped["closedTrades"]["count"])
+        self.assertEqual(15, capped["closedTrades"]["count"])
+        self.assertEqual(12, capped["closedTrades"]["records_returned"])
+        self.assertTrue(capped["closedTrades"]["has_more"])
         self.assertEqual(15, complete["closedTrades"]["count"])
+        self.assertEqual(15, complete["closedTrades"]["records_returned"])
+        self.assertFalse(complete["closedTrades"]["has_more"])
 
     def test_lifecycle_funnel_waits_without_manufacturing_a_trade(self):
         status, next_action = _phase2_lifecycle_state(

@@ -67,8 +67,8 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
 
         self.assertIn('@router.get("/performance")', source)
         self.assertIn("def get_paper_trade_performance", source)
-        self.assertIn("repo.all_trades", source)
-        self.assertIn("paper_trade_performance", source)
+        self.assertIn("repo.performance_summary", source)
+        self.assertNotIn("repo.all_trades(db, symbol=normalized_symbol)", source)
         self.assertIn('"source": "paper_trade_performance"', source)
         performance_source = (
             APP_ROOT / "paper_trading" / "paper_trade_performance.py"
@@ -122,7 +122,10 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
         self.assertIn('fill_profile.get("effective_risk_reward"', source)
         self.assertIn("def list_trades", source)
         self.assertIn("def all_trades", source)
-        self.assertIn("query.order_by(PaperTrade.created_at.desc())", source)
+        self.assertIn(
+            "query.order_by(PaperTrade.created_at.desc(), PaperTrade.id.desc())",
+            source,
+        )
 
     def test_paper_trade_has_an_alembic_migration(self):
         migration = (

@@ -92,3 +92,25 @@ def test_watchlist_cache_expires_after_ttl(monkeypatch):
     assert payloads == [{"symbol": "BTCUSDT"}]
     assert cache["hit"] is False
     assert build_calls == ["BTCUSDT", "BTCUSDT"]
+
+
+def test_watchlist_cache_bounds_distinct_parameter_sets(monkeypatch):
+    monkeypatch.setattr(signals_api, "WATCHLIST_CACHE_MAX_ENTRIES", 2)
+    monkeypatch.setattr(
+        signals_api.SymbolRepository,
+        "get_active_symbols",
+        lambda self, db: [SimpleNamespace(symbol="BTCUSDT")],
+    )
+    monkeypatch.setattr(
+        signals_api,
+        "_build_entry_trigger_payload",
+        lambda db, symbol, stack, stale_after_seconds: {"symbol": symbol},
+    )
+
+    signals_api._get_cached_watchlist_payloads(object(), ["1h"], 100)
+    signals_api._get_cached_watchlist_payloads(object(), ["1h"], 200)
+    signals_api._get_cached_watchlist_payloads(object(), ["1h"], 300)
+
+    assert len(signals_api._watchlist_payload_cache) == 2
+    assert (("1h",), 100) not in signals_api._watchlist_payload_cache
+    assert signals_api._watchlist_cache_key_locks == {}

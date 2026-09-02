@@ -16,12 +16,16 @@ const STAGE_COLORS = {
 
 export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol, auto, getSymbolHref }) {
   const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 40));
+  const classifiedRows = rows.filter((row) => STAGE_ORDER.includes(row.stage));
+  const unavailableRows = rows.filter((row) => !STAGE_ORDER.includes(row.stage));
   const groups = STAGE_ORDER.map((stage) => ({
     stage,
-    count: rows.filter((row) => row.stage === stage).length,
-    avgRs: average(rows.filter((row) => row.stage === stage).map((row) => row.rsScore)),
+    count: classifiedRows.filter((row) => row.stage === stage).length,
+    avgRs: average(classifiedRows.filter((row) => row.stage === stage).map((row) => row.rsScore)),
   }));
-  const dominant = [...groups].sort((a, b) => b.count - a.count)[0];
+  const dominant = classifiedRows.length
+    ? [...groups].sort((a, b) => b.count - a.count)[0]
+    : { stage: "UNAVAILABLE", count: 0, avgRs: 0 };
   const uptrend = groups.find((group) => group.stage === "Stage 2 Uptrend");
   const downtrend = groups.find((group) => group.stage === "Stage 4 Downtrend");
   const stageSpread = (uptrend?.avgRs || 0) - (downtrend?.avgRs || 0);
@@ -41,8 +45,17 @@ export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol,
           <MetricCard label="Dominant stage" value={dominant.stage} note={`${dominant.count} symbols`} icon={Layers3} accent={stageTone(dominant.stage)} />
           <MetricCard label="Uptrend count" value={uptrend?.count || 0} note="Stage 2 Uptrend" icon={TrendingUp} accent="emerald" />
           <MetricCard label="Downtrend count" value={downtrend?.count || 0} note="Stage 4 Downtrend" icon={TrendingDown} accent="rose" />
-          <MetricCard label="Universe" value={rows.length} note="Tracked symbols" icon={ScanLine} accent="cyan" />
+          <MetricCard label="Evidence coverage" value={`${classifiedRows.length}/${rows.length}`} note="Fresh four-timeframe classifications" icon={ScanLine} accent={unavailableRows.length ? "amber" : "cyan"} />
         </div>
+
+        {unavailableRows.length ? (
+          <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-900">
+            <div className="font-medium">Stage evidence unavailable for {unavailableRows.length} symbol{unavailableRows.length === 1 ? "" : "s"}</div>
+            <div className="mt-1 text-xs text-amber-800">
+              {unavailableRows.map((row) => `${row.symbol}: ${row.stageReason}`).join(" · ")}
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-3 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="Stage 2 avg RS" value={formatSigned(uptrend?.avgRs || 0, 0, "-")} note="Trend leaders" icon={TrendingUp} accent="emerald" compact />
@@ -87,7 +100,7 @@ export default function StageAnalysisPage({ signalRows, watchlist, activeSymbol,
             <StageColumn
               key={stage}
               stage={stage}
-              rows={rows.filter((row) => row.stage === stage)}
+              rows={classifiedRows.filter((row) => row.stage === stage)}
               activeSymbol={activeSymbol}
               getSymbolHref={getSymbolHref}
             />
@@ -124,6 +137,9 @@ function StageColumn({ stage, rows, activeSymbol, getSymbolHref }) {
               <span>RS {formatSigned(row.rsScore, 0)}</span>
               <span>{formatPercent(row.confidence, 0)}</span>
             </div>
+            <div className="mt-1.5 text-[11px] leading-4 text-slate-500" title={row.stageReason}>
+              {row.stageReason}
+            </div>
             <div className="mt-1.5">
               <Pill tone={row.riskTone}>{row.riskLabel}</Pill>
               {row.riskNote ? <div className="mt-1 text-[11px] leading-4 text-slate-500">{row.riskNote}</div> : null}
@@ -156,6 +172,7 @@ function stageTone(stage) {
   if (stage === "Stage 2 Uptrend") return "emerald";
   if (stage === "Stage 4 Downtrend") return "rose";
   if (stage === "Stage 3 Transition") return "amber";
+  if (stage === "UNAVAILABLE") return "slate";
   return "cyan";
 }
 

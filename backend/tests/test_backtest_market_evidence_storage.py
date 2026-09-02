@@ -9,6 +9,7 @@ from app.collectors.binances.liquidation_collector import _parse_liquidation_mes
 from app.collectors.binances.orderbook_collector import OrderBookCollector
 from app.database.models.funding_rates import FundingRate
 from app.database.models.liquidations import Liquidation
+from app.database.models.open_interest import OpenInterest
 from app.database.models.orderbook_snapshots import OrderBookSnapshot
 from app.database.models.spot_market_candles import SpotMarketCandle
 from app.database.models.whale_trades import WhaleTrade
@@ -45,6 +46,57 @@ def test_funding_repository_charges_one_exchange_event_once():
     assert first.id == second.id
     assert db.query(FundingRate).count() == 1
     assert db.query(FundingRate).one().rate == 0.0002
+
+
+def test_open_interest_repository_keeps_first_sample_in_each_two_minute_bucket():
+    # SQLite only auto-increments an exact INTEGER primary key; production uses
+    # BIGINT. Create the equivalent test table explicitly so repository behavior
+    # can be exercised without changing the production model.
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE open_interest (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol VARCHAR(20),
+                value FLOAT,
+                timestamp DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    db = sessionmaker(bind=engine)()
+    repository = DerivativeRepository()
+    start = datetime(2026, 8, 22, 8, 0, 10)
+
+    first = repository.save_open_interest(
+        db,
+        {"symbol": "btcusdt", "value": 100, "time": start},
+    )
+    repeated = repository.save_open_interest(
+        db,
+        {
+            "symbol": "BTCUSDT",
+            "value": 101,
+            "time": start + timedelta(minutes=1, seconds=40),
+        },
+    )
+    next_bucket = repository.save_open_interest(
+        db,
+        {
+            "symbol": "BTCUSDT",
+            "value": 102,
+            "time": start + timedelta(minutes=2),
+        },
+    )
+
+    rows = db.query(OpenInterest).order_by(OpenInterest.timestamp.asc()).all()
+    assert repeated is first
+    assert next_bucket is not first
+    assert len(rows) == 2
+    assert rows[0].value == 100
+    assert rows[0].timestamp == start
+    assert rows[1].value == 102
 
 
 def test_spot_repository_upserts_and_returns_point_in_time_history():

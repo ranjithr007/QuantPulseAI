@@ -567,6 +567,68 @@ def test_strategy_paper_wallet_keeps_positions_older_than_reporting_window(monke
     assert record["strategy_paper_history"][0]["symbol"] == "BTCUSDT"
 
 
+def test_strategy_summary_aggregates_lifetime_book_but_bounds_history(monkeypatch):
+    Session = _session_factory()
+    db = Session()
+    now = datetime.utcnow().replace(microsecond=0)
+    for index in range(25):
+        won = index % 2 == 0
+        created_at = now - timedelta(minutes=25 - index)
+        db.add(
+            StrategyShadowTrade(
+                trade_plan_id=1_000 + index,
+                risk_decision_id=2_000 + index,
+                symbol="BTCUSDT",
+                side="LONG" if won else "SHORT",
+                strategy_id=CORE_FUSION_STRATEGY_ID,
+                strategy_version=CORE_FUSION_STRATEGY_VERSION,
+                strategy_decision_snapshot_id=3_000 + index,
+                entry_price=100.0,
+                stop_loss=99.25,
+                initial_stop_loss=99.25,
+                target1=101.5,
+                target2=102.3,
+                position_notional_inr=150_000.0,
+                margin_used_inr=30_000.0,
+                entry_timeframe="1h",
+                status="CLOSED",
+                result="WIN" if won else "LOSS",
+                gross_pnl_percent=1.0 if won else -0.5,
+                fees_percent=0.15,
+                funding_cost_percent=0.01,
+                pnl_percent=0.84 if won else -0.66,
+                realized_pnl_inr=1_260.0 if won else -990.0,
+                exit_price=101.0 if won else 100.5,
+                opened_at=created_at,
+                closed_at=created_at,
+                created_at=created_at,
+            )
+        )
+    db.commit()
+    db.close()
+    monkeypatch.setattr(strategy_api, "SessionLocal", Session)
+
+    payload = strategy_api.get_strategy_summary(
+        strategy_id=CORE_FUSION_STRATEGY_ID,
+        since_days=30,
+        candidate_limit=24,
+    )
+    record = payload["records"][0]
+    lifetime = record["strategy_paper_lifetime_performance"]
+
+    assert lifetime["total_trades"] == 25
+    assert lifetime["closed_trades"] == 25
+    assert lifetime["wins"] == 13
+    assert lifetime["losses"] == 12
+    assert lifetime["net_pnl_inr"] == 4_500.0
+    assert lifetime["profit_factor"] == 1.3788
+    assert lifetime["max_drawdown_percent"] == 0.4919
+    assert len(record["strategy_paper_history"]) == 20
+    assert record["strategy_paper_history"][0]["id"] > record[
+        "strategy_paper_history"
+    ][-1]["id"]
+
+
 def test_forward_readiness_requires_performance_not_only_sample_size():
     readiness = strategy_api._forward_test_readiness(
         {

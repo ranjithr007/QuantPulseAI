@@ -14,12 +14,25 @@ class HealthResponse(BaseModel):
     admin_auth_required: bool
 
 
+class DatabasePoolHealth(BaseModel):
+    implementation: str
+    configured_size: int
+    configured_max_overflow: int
+    capacity: int
+    checked_in: Optional[int] = None
+    checked_out: Optional[int] = None
+    overflow_in_use: Optional[int] = None
+    utilization_percent: Optional[float] = None
+    status: str
+
+
 class DependencyHealthResponse(BaseModel):
     database_configured: bool
     database_url_scheme: str
     active_database_scheme: str
     using_sqlite_fallback: bool
     evidence_storage: str
+    database_pool: Optional[DatabasePoolHealth] = None
 
 
 class PipelineSummary(BaseModel):

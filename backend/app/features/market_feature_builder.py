@@ -20,14 +20,14 @@ class MarketFeatureBuilder:
         funding = (
             db.query(FundingRate)
             .filter(FundingRate.symbol == symbol)
-            .order_by(FundingRate.created_at.desc())
+            .order_by(FundingRate.funding_time.desc(), FundingRate.id.desc())
             .first()
         )
 
         oi = (
             db.query(OpenInterest)
             .filter(OpenInterest.symbol == symbol)
-            .order_by(OpenInterest.created_at.desc())
+            .order_by(OpenInterest.timestamp.desc(), OpenInterest.id.desc())
             .limit(2)
             .all()
         )

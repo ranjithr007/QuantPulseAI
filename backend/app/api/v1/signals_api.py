@@ -1,10 +1,14 @@
 import copy
+import json
 import threading
 import time
+from collections import OrderedDict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Body, HTTPException, Query
+from sqlalchemy import func
 from app.backtesting.point_in_time_intelligence import build_candle_intelligence_as_of
 from app.backtesting.replay_contract import build_point_in_time_stack
 from app.contracts.signals import SignalBatchResponse, SignalResponse
@@ -16,19 +20,23 @@ from app.contracts.specialized import (
 from app.services.decision_evaluation_service import evaluate_frozen_decision
 
 from app.database.models.market_candles import MarketCandle
+from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.database.sqlserver import SessionLocal
 from app.intelligence.contradiction_engine import build_contradiction_report
 from app.intelligence.data_quality_ledger import build_data_quality_observability
 from app.intelligence.probability_engine import build_probability_profile
 from app.intelligence.master_ai_engine import generate_master_signal
 from app.intelligence.master_ai_engine import score_master_signal_components
+from app.intelligence.market_stage_engine import analyze_market_stage
 from app.intelligence.multi_timeframe_engine import combine_timeframe_signals
+from app.intelligence.relative_strength_engine import rank_relative_strength
 from app.intelligence.scenario_engine import build_scenario_plan
 from app.intelligence.trade_setup_engine import build_entry_trigger_decision
 from app.intelligence.trade_setup_engine import build_trade_setup_decision
 from app.repositories.ai_signal_repository import AISignalRepository
 from app.repositories.candle_repository import get_candles_as_of
 from app.repositories.candle_repository import get_latest_candle
+from app.repositories.candle_repository import get_latest_candles
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.intelligence_repository import get_ai_inputs
 from app.repositories.master_signal_repository import MasterSignalRepository
@@ -54,6 +62,7 @@ from app.strategies.registry import CORE_FUSION_STRATEGY_ID
 from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
 from app.strategies.registry import CORE_FUSION_DECISION_VERSION
 from app.strategies.registry import CORE_SIGNAL_STRATEGY_ID
+from app.strategies.registry import CORE_SIGNAL_DECISION_VERSION
 from app.strategies.registry import LIQUIDATION_CARRY_STRATEGY_ID
 from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
 from app.strategies.registry import ORDERFLOW_SMC_STRATEGY_ID
@@ -97,9 +106,12 @@ WATCHLIST_PERMISSION_PRIORITY = {
 }
 STRATEGY_TIMEFRAME_PRIORITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
 WATCHLIST_CACHE_TTL_SECONDS = 15.0
+WATCHLIST_CACHE_MAX_ENTRIES = 32
+WATCHLIST_SNAPSHOT_MAX_AGE_SECONDS = 10 * 60
+WATCHLIST_WAIT_SIGNAL = "WAIT"
 WATCHLIST_LATENCY_BUDGET = LatencyBudget(p50_ms=250.0, p95_ms=750.0, p99_ms=1500.0)
 PHASE2_OPPORTUNITY_DECISION_VERSION = "phase2_opportunity_ledger_v1"
-_watchlist_payload_cache = {}
+_watchlist_payload_cache = OrderedDict()
 _watchlist_cache_key_locks = {}
 _watchlist_cache_guard = threading.Lock()
 _MARKET_PARTICIPATION_UNSET = object()
@@ -487,11 +499,8 @@ def _get_cached_watchlist_payloads(db, stack, stale_after_seconds):
     if cached is not None:
         return cached
 
-    with _watchlist_cache_guard:
-        key_lock = _watchlist_cache_key_locks.setdefault(key, threading.Lock())
-
     # Only one request computes a given timeframe stack at a time.
-    with key_lock:
+    with _watchlist_key_lock(key):
         cached = _read_watchlist_cache(key)
         if cached is not None:
             return cached
@@ -513,6 +522,9 @@ def _get_cached_watchlist_payloads(db, stack, stale_after_seconds):
                 "cached_at": cached_at,
                 "payloads": copy.deepcopy(payloads),
             }
+            _watchlist_payload_cache.move_to_end(key)
+            while len(_watchlist_payload_cache) > WATCHLIST_CACHE_MAX_ENTRIES:
+                _watchlist_payload_cache.popitem(last=False)
 
         return copy.deepcopy(payloads), _watchlist_cache_metadata(False, 0.0)
 
@@ -524,6 +536,7 @@ def _read_watchlist_cache(key):
         entry = _watchlist_payload_cache.get(key)
         if entry is None:
             return None
+        _watchlist_payload_cache.move_to_end(key)
 
         age_seconds = max(0.0, now - entry["cached_at"])
         if age_seconds >= WATCHLIST_CACHE_TTL_SECONDS:
@@ -535,12 +548,225 @@ def _read_watchlist_cache(key):
     return payloads, _watchlist_cache_metadata(True, age_seconds)
 
 
+@contextmanager
+def _watchlist_key_lock(key):
+    with _watchlist_cache_guard:
+        entry = _watchlist_cache_key_locks.get(key)
+        if entry is None:
+            entry = {"lock": threading.Lock(), "users": 0}
+            _watchlist_cache_key_locks[key] = entry
+        entry["users"] += 1
+
+    try:
+        with entry["lock"]:
+            yield
+    finally:
+        with _watchlist_cache_guard:
+            entry["users"] -= 1
+            if entry["users"] == 0:
+                _watchlist_cache_key_locks.pop(key, None)
+
+
 def _watchlist_cache_metadata(hit, age_seconds):
     return {
         "hit": hit,
         "age_seconds": round(age_seconds, 3),
         "ttl_seconds": int(WATCHLIST_CACHE_TTL_SECONDS),
     }
+
+
+def _get_persisted_watchlist_payloads(db, stack, stale_after_seconds):
+    """Read the latest worker-generated Core Signal scan without recomputing it.
+
+    The governed four-timeframe scan is intentionally expensive.  It belongs in
+    the scheduler worker, which persists one Core Signal decision snapshot per
+    coin.  HTTP requests consume the compact read model stored in those
+    snapshots so a cold API process never performs the full scan inline.
+    """
+    symbols = [
+        str(item.symbol).upper()
+        for item in SymbolRepository().get_active_symbols(db)
+    ]
+    if not symbols:
+        return [], _watchlist_snapshot_metadata([], [], [])
+
+    latest_snapshot_ids = (
+        db.query(func.max(DecisionSnapshot.id).label("snapshot_id"))
+        .filter(DecisionSnapshot.strategy_id == CORE_SIGNAL_STRATEGY_ID)
+        .filter(DecisionSnapshot.decision_version == CORE_SIGNAL_DECISION_VERSION)
+        .filter(DecisionSnapshot.symbol.in_(symbols))
+        .group_by(DecisionSnapshot.symbol)
+        .subquery()
+    )
+    snapshots = (
+        db.query(DecisionSnapshot)
+        .join(
+            latest_snapshot_ids,
+            latest_snapshot_ids.c.snapshot_id == DecisionSnapshot.id,
+        )
+        .all()
+    )
+    snapshots_by_symbol = {
+        str(item.symbol).upper(): item
+        for item in snapshots
+    }
+    payloads = []
+    missing_symbols = []
+    stale_symbols = []
+    snapshot_ages = []
+
+    for symbol in symbols:
+        snapshot = snapshots_by_symbol.get(symbol)
+        payload = _watchlist_payload_from_snapshot(snapshot)
+        age_seconds = _snapshot_age_seconds(snapshot)
+        if age_seconds is not None:
+            snapshot_ages.append(age_seconds)
+
+        if payload is None:
+            missing_symbols.append(symbol)
+            payloads.append(
+                _pending_watchlist_payload(
+                    symbol,
+                    stack,
+                    "Scheduled watchlist snapshot is pending",
+                )
+            )
+            continue
+
+        payload_stack = [
+            str(item.get("timeframe") or "").lower()
+            for item in payload.get("timeframes") or []
+        ]
+        if payload_stack != [str(item).lower() for item in stack]:
+            missing_symbols.append(symbol)
+            payloads.append(
+                _pending_watchlist_payload(
+                    symbol,
+                    stack,
+                    "Scheduled watchlist snapshot uses a different timeframe stack",
+                )
+            )
+            continue
+
+        if age_seconds is None or age_seconds > WATCHLIST_SNAPSHOT_MAX_AGE_SECONDS:
+            stale_symbols.append(symbol)
+            payload = _stale_watchlist_payload(payload)
+
+        payloads.append(payload)
+
+    return payloads, _watchlist_snapshot_metadata(
+        snapshot_ages,
+        missing_symbols,
+        stale_symbols,
+    )
+
+
+def _watchlist_payload_from_snapshot(snapshot):
+    if snapshot is None:
+        return None
+    try:
+        raw = json.loads(snapshot.snapshot_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    payload = (raw.get("context") or {}).get("watchlist_payload")
+    return copy.deepcopy(payload) if isinstance(payload, dict) else None
+
+
+def _snapshot_age_seconds(snapshot):
+    if snapshot is None or getattr(snapshot, "created_at", None) is None:
+        return None
+    created_at = snapshot.created_at
+    if created_at.tzinfo is not None:
+        created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
+    return max(0.0, (datetime.utcnow() - created_at).total_seconds())
+
+
+def _watchlist_snapshot_metadata(ages, missing_symbols, stale_symbols):
+    return {
+        "hit": bool(ages) and not missing_symbols,
+        "source": "persisted_core_signal_snapshot",
+        "age_seconds": round(max(ages), 3) if ages else None,
+        "ttl_seconds": WATCHLIST_SNAPSHOT_MAX_AGE_SECONDS,
+        "missing_symbols": list(missing_symbols),
+        "stale_symbols": list(stale_symbols),
+    }
+
+
+def _pending_watchlist_payload(symbol, stack, reason):
+    return {
+        "symbol": symbol,
+        "source": "persisted_core_signal_snapshot",
+        "mode": _mode_from_stack(stack),
+        "timeframes_used": list(stack),
+        "prediction_stack": list(stack),
+        "timeframes": [
+            {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "status": "NO_DATA",
+                "signal": WATCHLIST_WAIT_SIGNAL,
+                "bias": "WAIT",
+                "direction": "UNKNOWN",
+                "confidence": 0,
+                "score": 0,
+            }
+            for timeframe in stack
+        ],
+        "confirmation": {
+            "overall_bias": "WAIT",
+            "trade_permission": "WAIT",
+            "confidence": 0,
+        },
+        "trigger": {
+            "status": "WAIT",
+            "side": None,
+            "reason": reason,
+            "conditions": [
+                {
+                    "name": "scheduled_snapshot_fresh",
+                    "passed": False,
+                }
+            ],
+        },
+        "trade_plan": None,
+        "trade_plan_validation": {
+            "is_valid": False,
+            "errors": [reason],
+        },
+    }
+
+
+def _stale_watchlist_payload(payload):
+    stale = copy.deepcopy(payload)
+    reason = "Scheduled watchlist snapshot is stale"
+    stale["timeframes"] = [
+        {
+            **item,
+            "status": "STALE",
+            "freshness": {
+                **(item.get("freshness") or {}),
+                "status": "STALE",
+                "is_stale": True,
+            },
+        }
+        for item in (stale.get("timeframes") or [])
+    ]
+    stale["trigger"] = {
+        **(stale.get("trigger") or {}),
+        "status": "WAIT",
+        "side": None,
+        "reason": reason,
+        "conditions": [
+            *((stale.get("trigger") or {}).get("conditions") or []),
+            {"name": "scheduled_snapshot_fresh", "passed": False},
+        ],
+    }
+    stale["trade_plan"] = None
+    stale["trade_plan_validation"] = {
+        "is_valid": False,
+        "errors": [reason],
+    }
+    return stale
 
 
 def _clear_watchlist_cache():
@@ -561,7 +787,7 @@ def build_signal_watchlist_payload(
     stale_after_seconds=900,
 ):
     stack = _resolve_prediction_timeframe_stack(mode, lower, middle, higher)
-    payloads, cache = _get_cached_watchlist_payloads(
+    payloads, cache = _get_persisted_watchlist_payloads(
         db,
         stack,
         stale_after_seconds,
@@ -586,6 +812,7 @@ def build_signal_watchlist_payload(
         )
         for payload in payloads
     ]
+    records = rank_relative_strength(records)
     filtered_records, filters = _filter_watchlist(
         records,
         status,
@@ -2113,6 +2340,29 @@ def _persist_governed_strategy_snapshot(
         selected,
         payload.get("confirmation"),
     )
+    snapshot_context = {
+        "audit_scope": "PAPER_STRATEGY_CANDIDATE",
+        "execution_scope": "PAPER_ONLY",
+        "strategy_id": definition["id"],
+        "strategy_version": definition["version"],
+        "strategy_type": definition.get("strategy_type"),
+        "side": side,
+        "selected_timeframe": timeframe,
+        "selected_score": selected.get("score"),
+        "regime_route": selected.get("regime_route"),
+        "entry_location": selected.get("entry_location"),
+        "route_conditions": selected.get("route_conditions") or [],
+        "stop_model": (payload.get("trade_plan") or {}).get("stop_model"),
+        "execution_profile": (payload.get("trade_plan") or {}).get(
+            "execution_profile"
+        ),
+        "market_participation": market_participation or {},
+        "blocked_reasons": list(blocked_reasons),
+        "one_active_trade_per_symbol": True,
+    }
+    if definition["id"] == CORE_SIGNAL_STRATEGY_ID:
+        snapshot_context["watchlist_payload"] = _compact_watchlist_payload(payload)
+
     snapshot = build_decision_snapshot(
         payload["symbol"],
         timeframe,
@@ -2127,26 +2377,7 @@ def _persist_governed_strategy_snapshot(
         ),
         signal=trigger,
         trade_plan=payload.get("trade_plan"),
-        context={
-            "audit_scope": "PAPER_STRATEGY_CANDIDATE",
-            "execution_scope": "PAPER_ONLY",
-            "strategy_id": definition["id"],
-            "strategy_version": definition["version"],
-            "strategy_type": definition.get("strategy_type"),
-            "side": side,
-            "selected_timeframe": timeframe,
-            "selected_score": selected.get("score"),
-            "regime_route": selected.get("regime_route"),
-            "entry_location": selected.get("entry_location"),
-            "route_conditions": selected.get("route_conditions") or [],
-            "stop_model": (payload.get("trade_plan") or {}).get("stop_model"),
-            "execution_profile": (payload.get("trade_plan") or {}).get(
-                "execution_profile"
-            ),
-            "market_participation": market_participation or {},
-            "blocked_reasons": list(blocked_reasons),
-            "one_active_trade_per_symbol": True,
-        },
+        context=snapshot_context,
     )
     snapshot["decision_version"] = definition["decision_version"]
     snapshot["strategy_id"] = definition["id"]
@@ -2161,6 +2392,58 @@ def _persist_governed_strategy_snapshot(
         "decision": decision,
         "blocked_reasons": list(blocked_reasons),
         "decision_version": definition["decision_version"],
+    }
+
+
+def _compact_watchlist_payload(payload):
+    """Keep only fields required to rebuild a current watchlist row."""
+    timeframe_fields = (
+        "symbol",
+        "timeframe",
+        "status",
+        "signal",
+        "bias",
+        "direction",
+        "confidence",
+        "score",
+        "candle_time",
+        "freshness",
+        "feature_trend",
+        "feature_trend_score",
+        "feature_momentum_score",
+        "price_return_pct",
+        "return_sample_size",
+    )
+    confirmation_fields = (
+        "overall_bias",
+        "trade_permission",
+        "confidence",
+        "status",
+    )
+    return {
+        "symbol": payload.get("symbol"),
+        "source": "persisted_core_signal_snapshot",
+        "mode": payload.get("mode"),
+        "timeframes_used": list(payload.get("timeframes_used") or []),
+        "prediction_stack": list(payload.get("prediction_stack") or []),
+        "timeframes": [
+            {
+                field: item.get(field)
+                for field in timeframe_fields
+                if item.get(field) is not None
+            }
+            for item in (payload.get("timeframes") or [])
+        ],
+        "confirmation": {
+            field: (payload.get("confirmation") or {}).get(field)
+            for field in confirmation_fields
+            if (payload.get("confirmation") or {}).get(field) is not None
+        },
+        "trigger": copy.deepcopy(payload.get("trigger") or {}),
+        "trade_plan": copy.deepcopy(payload.get("trade_plan")),
+        "trade_plan_validation": copy.deepcopy(
+            payload.get("trade_plan_validation")
+        ),
     }
 
 
@@ -2547,6 +2830,20 @@ def _watchlist_row(
         else None,
     )
     risk_source = "persisted" if risk else "computed" if computed_risk else "trigger"
+    stage_analysis = analyze_market_stage(payload.get("timeframes") or [])
+    timeframe_performance = {
+        timeframe: {
+            "return_pct": (
+                item.get("price_return_pct")
+                if str(item.get("status") or "").upper() == "OK"
+                and not (item.get("freshness") or {}).get("is_stale")
+                else None
+            ),
+            "sample_size": item.get("return_sample_size"),
+            "candle_time": item.get("candle_time"),
+        }
+        for timeframe, item in timeframes.items()
+    }
 
     return {
         "symbol": payload["symbol"],
@@ -2574,6 +2871,8 @@ def _watchlist_row(
         "eligibility_allowed": eligibility["allowed"],
         "eligibility_status": eligibility["status"],
         "market_participation": participation,
+        "stage_analysis": stage_analysis,
+        "timeframe_performance": timeframe_performance,
         "combined_execution": {
             "allowed": eligibility["allowed"],
             "status": eligibility["status"],
@@ -2920,6 +3219,9 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
         }
 
     data = get_ai_inputs(db, symbol, timeframe)
+    return_profile = _return_profile(
+        get_latest_candles(db, symbol, timeframe, limit=21)
+    )
     signal = generate_master_signal(
         data["feature"], data["regime"], data["orderflow"], data["smc"]
     )
@@ -2948,6 +3250,11 @@ def _build_signal_diagnostics(db, symbol, timeframe, stale_after_seconds):
         "atr_source": (
             "MARKET_FEATURE" if observed_atr is not None else "UNAVAILABLE"
         ),
+        "feature_trend": getattr(data["feature"], "Trend", None),
+        "feature_trend_score": getattr(data["feature"], "TrendScore", None),
+        "feature_momentum_score": getattr(data["feature"], "MomentumScore", None),
+        "price_return_pct": return_profile["return_pct"],
+        "return_sample_size": return_profile["sample_size"],
         "candle_time": candle.candle_time,
         "freshness": freshness_status(
             candle_freshness_timestamp(candle),
@@ -3006,6 +3313,20 @@ def _observed_atr(feature):
     except (TypeError, ValueError):
         return None
     return atr if atr > 0 else None
+
+
+def _return_profile(candles):
+    ordered = list(candles or [])
+    if len(ordered) < 21:
+        return {"return_pct": None, "sample_size": len(ordered)}
+    first = float(ordered[-21].close_price)
+    last = float(ordered[-1].close_price)
+    if first == 0:
+        return {"return_pct": None, "sample_size": len(ordered)}
+    return {
+        "return_pct": round(((last - first) / abs(first)) * 100.0, 6),
+        "sample_size": 21,
+    }
 
 
 def _latest_persisted_signal(db, symbol, timeframe=None, stale_after_seconds=900):

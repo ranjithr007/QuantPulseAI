@@ -1,10 +1,13 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.v1.paper_trade_api import _annotate_candidate_arbitration
 from app.api.v1.paper_trade_api import _paper_trade_candidate_rank
+from app.api.v1.paper_trade_api import _required_current_signal_keys
 from app.api.v1.signals_api import _persist_ready_watchlist_payload
 from app.api.v1.signals_api import _persist_strategy_candidates
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
@@ -25,6 +28,47 @@ def _session():
     )
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
+
+
+def test_every_registered_strategy_competes_for_official_paper_execution():
+    assert STRATEGY_REGISTRY
+    assert all(
+        definition["status"] == "ACTIVE"
+        and definition["execution_scope"] == "PAPER_ONLY"
+        and definition["official_execution_enabled"] is True
+        and definition["one_active_trade_per_symbol"] is True
+        for definition in STRATEGY_REGISTRY.values()
+    )
+
+
+def test_executor_revalidates_core_signal_once_per_required_symbol_timeframe():
+    trades = [
+        SimpleNamespace(
+            symbol="BTCUSDT",
+            entry_timeframe="1h",
+            strategy_id=CORE_SIGNAL_STRATEGY_ID,
+        ),
+        SimpleNamespace(
+            symbol="BTCUSDT",
+            entry_timeframe="1h",
+            strategy_id=CORE_FUSION_STRATEGY_ID,
+        ),
+        SimpleNamespace(
+            symbol="ETHUSDT",
+            entry_timeframe="4h",
+            strategy_id=CORE_FUSION_STRATEGY_ID,
+        ),
+        SimpleNamespace(
+            symbol="BNBUSDT",
+            entry_timeframe="2h",
+            strategy_id=MARKET_MOVE_STRATEGY_ID,
+        ),
+    ]
+
+    assert _required_current_signal_keys(trades) == {
+        ("BTCUSDT", "1h"),
+        ("ETHUSDT", "4h"),
+    }
 
 
 def _core_payload(now, *, ready=True):
@@ -375,3 +419,106 @@ def test_combined_strategy_wins_a_true_rank_tie_without_multiple_coin_entries():
     }
 
     assert _paper_trade_candidate_rank(combined) > _paper_trade_candidate_rank(individual)
+
+
+def test_candidate_payload_marks_exactly_one_official_winner_per_coin():
+    now = datetime.now(timezone.utc)
+    automation = {
+        "enabled": True,
+        "locked": False,
+        "emergencyStop": False,
+        "allowedSymbols": ["BTCUSDT", "ETHUSDT"],
+        "minConfidence": 40,
+        "direction": "BOTH",
+        "executionMode": "PAPER",
+        "liveExecutionEnabled": False,
+        "maxLeverage": 5,
+        "maxPositionSize": 200_000,
+    }
+
+    def candidate(symbol, strategy_id, plan_id, confidence):
+        return {
+            "symbol": symbol,
+            "side": "LONG",
+            "eligible": True,
+            "blocked_reasons": [],
+            "risk_decision": {"confidence": confidence},
+            "paper_sizing": {
+                "leverage": 2,
+                "position_notional_inr": 100_000,
+            },
+            "trade_plan": {
+                "id": plan_id,
+                "strategy_id": strategy_id,
+                "confidence": confidence,
+                "risk_reward": 2.1,
+                "entry_timeframe": "1h",
+                "created_at": now,
+            },
+        }
+
+    btc_market = candidate("BTCUSDT", MARKET_MOVE_STRATEGY_ID, 1, 55)
+    btc_fusion = candidate("BTCUSDT", CORE_FUSION_STRATEGY_ID, 2, 65)
+    eth_market = candidate("ETHUSDT", MARKET_MOVE_STRATEGY_ID, 3, 60)
+
+    records = _annotate_candidate_arbitration(
+        [btc_market, btc_fusion, eth_market], automation
+    )
+    selected = [
+        item
+        for item in records
+        if item["arbitration"]["selected_for_official_execution"]
+    ]
+
+    assert {(item["symbol"], item["trade_plan"]["id"]) for item in selected} == {
+        ("BTCUSDT", 2),
+        ("ETHUSDT", 3),
+    }
+    assert records[0]["arbitration"] == {
+        "status": "COMPETING",
+        "selected_for_official_execution": False,
+        "rank": 2,
+        "eligible_competitor_count": 2,
+        "selected_trade_plan_id": 2,
+        "selected_strategy_id": CORE_FUSION_STRATEGY_ID,
+        "executor_blockers": [],
+    }
+
+
+def test_candidate_arbitration_exposes_automation_blocker():
+    candidate = {
+        "symbol": "BTCUSDT",
+        "side": "LONG",
+        "eligible": True,
+        "blocked_reasons": [],
+        "risk_decision": {"confidence": 65},
+        "paper_sizing": {"leverage": 2, "position_notional_inr": 100_000},
+        "trade_plan": {
+            "id": 1,
+            "strategy_id": CORE_SIGNAL_STRATEGY_ID,
+            "confidence": 65,
+            "risk_reward": 2.1,
+            "entry_timeframe": "1h",
+            "created_at": datetime.now(timezone.utc),
+        },
+    }
+    automation = {
+        "enabled": False,
+        "locked": False,
+        "emergencyStop": False,
+        "allowedSymbols": ["BTCUSDT"],
+        "minConfidence": 40,
+        "direction": "BOTH",
+        "executionMode": "PAPER",
+        "liveExecutionEnabled": False,
+        "maxLeverage": 5,
+        "maxPositionSize": 200_000,
+    }
+
+    record = _annotate_candidate_arbitration([candidate], automation)[0]
+
+    assert record["arbitration"]["status"] == "BLOCKED"
+    assert record["arbitration"]["selected_for_official_execution"] is False
+    assert record["arbitration"]["executor_blockers"] == [
+        "Paper-trade automation is disabled"
+    ]

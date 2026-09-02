@@ -181,3 +181,15 @@ def test_dollar_index_allows_one_publication_weekend_but_not_two():
     assert missed_cycle["status"] == "DEGRADED"
     assert missed_cycle["series"]["DTWEXBGS"]["age_days"] == 11
     assert missed_cycle["series"]["DTWEXBGS"]["is_stale"] is True
+
+
+def test_fred_cache_is_bounded_when_credentials_rotate():
+    FredMacroCollector.clear_cache()
+    collector = FredMacroCollector("test-key")
+
+    for index in range(FredMacroCollector._cache_max_entries + 2):
+        collector._store_cache(f"key-{index}", {"index": index})
+
+    assert len(FredMacroCollector._cache) == FredMacroCollector._cache_max_entries
+    assert "key-0" not in FredMacroCollector._cache
+    assert "key-1" not in FredMacroCollector._cache

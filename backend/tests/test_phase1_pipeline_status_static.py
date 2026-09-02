@@ -24,7 +24,8 @@ class Phase1PipelineStatusStaticTests(unittest.TestCase):
         self.assertIn("build_paper_trade_candidates", source)
         self.assertIn("trades=open_trade_plans", source)
         self.assertIn("PaperTradeRepository", source)
-        self.assertIn("paper_trade_performance", source)
+        self.assertIn("paper_repo.performance_summary", source)
+        self.assertNotIn("paper_repo.all_trades", source)
 
     def test_pipeline_status_exposes_required_stages_and_blockers(self):
         source = PIPELINE_API.read_text(encoding="utf-8")

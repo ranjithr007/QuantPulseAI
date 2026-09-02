@@ -5,8 +5,6 @@ from app.api.v1.signals_api import build_signal_watchlist_payload
 from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.database.models.risk_decision import RiskDecision
 from app.database.sqlserver import SessionLocal
-from app.paper_trading.paper_trade_performance import paper_trade_performance
-from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
 from app.observability.performance_budget import LatencyBudget
@@ -64,17 +62,10 @@ def get_pipeline_status(
             for item in candidates
             if item["eligible"]
         ]
-        paper_trades = _official_paper_trades(paper_repo.all_trades(db))
-        open_paper_trades = [
-            trade
-            for trade in paper_trades
-            if trade.status == "OPEN"
-        ]
-        closed_paper_trades = [
-            trade
-            for trade in paper_trades
-            if trade.status == "CLOSED"
-        ]
+        paper_performance = paper_repo.performance_summary(
+            db,
+            entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
+        )
         stages = {
             "watchlist": _watchlist_stage(watchlist),
             "trade_plans": _trade_plan_stage(open_trade_plans),
@@ -83,11 +74,8 @@ def get_pipeline_status(
                 candidates,
                 eligible_candidates,
             ),
-            "paper_trades": _paper_trade_stage(
-                open_paper_trades,
-                closed_paper_trades,
-            ),
-            "performance": paper_trade_performance(paper_trades),
+            "paper_trades": _paper_trade_stage(paper_performance),
+            "performance": paper_performance,
         }
 
         return {
@@ -128,7 +116,6 @@ def get_pipeline_performance(
         trade_repo = TradePlanRepository()
         paper_repo = PaperTradeRepository()
         open_trade_plans = _official_trade_plans(trade_repo.get_open_trades(db))
-        paper_trades = _official_paper_trades(paper_repo.all_trades(db))
 
         def _watchlist():
             return build_signal_watchlist_payload(
@@ -165,10 +152,17 @@ def get_pipeline_performance(
             )
 
         def _paper_trades():
-            return paper_trades
+            performance = paper_repo.performance_summary(
+                db,
+                entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
+            )
+            return _paper_trade_stage(performance)
 
         def _performance():
-            return paper_trade_performance(paper_trades)
+            return paper_repo.performance_summary(
+                db,
+                entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
+            )
 
         stage_report = build_stage_latency_report(
             {
@@ -231,13 +225,6 @@ def _official_trade_plans(trades):
     ]
 
 
-def _official_paper_trades(trades):
-    return production_paper_trade_records(
-        trades,
-        require_official_timeframe=True,
-    )
-
-
 def _paper_evidence_scope():
     return {
         "market": "FUTURES",
@@ -284,11 +271,12 @@ def _paper_candidate_stage(candidates, eligible_candidates):
     }
 
 
-def _paper_trade_stage(open_paper_trades, closed_paper_trades):
+def _paper_trade_stage(performance):
+    open_count = int(performance.get("open_trades") or 0)
     return {
-        "open_count": len(open_paper_trades),
-        "closed_count": len(closed_paper_trades),
-        "has_open": bool(open_paper_trades),
+        "open_count": open_count,
+        "closed_count": int(performance.get("closed_trades") or 0),
+        "has_open": open_count > 0,
     }
 
 

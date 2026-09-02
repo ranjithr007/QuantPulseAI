@@ -7,9 +7,11 @@ import Pill from "../components/ui/Pill";
 import { formatPercent, formatPrice, formatSigned, tooltipStyle } from "../utils/formatters";
 
 export default function RsRankingPage({ signalRows, watchlist, activeSymbol, auto, getSymbolHref }) {
-  const rankedRows = signalRows
-    .map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 40))
+  const rows = signalRows.map((row) => enrichRow(row, watchlist, undefined, auto?.minConfidence ?? 40));
+  const rankedRows = rows
+    .filter((row) => row.rsStatus === "READY" && row.rsScore !== null)
     .sort((a, b) => b.rsScore - a.rsScore);
+  const unavailableRows = rows.filter((row) => row.rsStatus !== "READY" || row.rsScore === null);
   const leader = rankedRows[0];
   const laggard = rankedRows[rankedRows.length - 1];
   const positiveCount = rankedRows.filter((row) => row.rsScore >= 0).length;
@@ -25,13 +27,22 @@ export default function RsRankingPage({ signalRows, watchlist, activeSymbol, aut
             <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">RS Ranking</div>
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Relative strength ranking</h2>
           </div>
-          <Pill tone="cyan">{rankedRows.length} symbols</Pill>
+          <Pill tone={unavailableRows.length ? "amber" : "cyan"}>{rankedRows.length}/{rows.length} ranked</Pill>
         </div>
+
+        {unavailableRows.length ? (
+          <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-900">
+            <div className="font-medium">Relative-strength evidence unavailable for {unavailableRows.length} symbol{unavailableRows.length === 1 ? "" : "s"}</div>
+            <div className="mt-1 text-xs text-amber-800">
+              {unavailableRows.map((row) => `${row.symbol}: ${row.rsReason}`).join(" · ")}
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="RS leader" value={leader?.symbol || "-"} note={formatSigned(leader?.rsScore, 0, "-")} icon={Award} accent="emerald" />
           <MetricCard label="RS laggard" value={laggard?.symbol || "-"} note={formatSigned(laggard?.rsScore, 0, "-")} icon={Gauge} accent="rose" />
-          <MetricCard label="Positive RS" value={positiveCount} note={`${rankedRows.length} total`} icon={TrendingUp} accent="cyan" />
+          <MetricCard label="Positive RS" value={positiveCount} note={`${rankedRows.length} ranked`} icon={TrendingUp} accent="cyan" />
           <MetricCard label="Eligible" value={rankedRows.filter((row) => row.riskLabel === "Eligible" || row.riskLabel === "Ready to execute").length} note="Risk gate" icon={ShieldCheck} accent="emerald" />
         </div>
 
@@ -50,7 +61,7 @@ export default function RsRankingPage({ signalRows, watchlist, activeSymbol, aut
         <div className="mt-3.5 rounded-lg border border-white/10 bg-slate-900/70 p-3">
           <div className="mb-3">
             <div className="text-sm font-medium text-white">RS score distribution</div>
-            <div className="text-xs text-slate-500">Higher scores indicate stronger leadership candidates</div>
+            <div className="text-xs text-slate-500">Peer percentile of 20-bar returns across 1h / 2h / 4h / 1d; higher timeframes carry more weight</div>
           </div>
           <div className="h-60">
             <ResponsiveContainer width="100%" height="100%">
@@ -72,7 +83,7 @@ export default function RsRankingPage({ signalRows, watchlist, activeSymbol, aut
         <div className="mt-3.5 overflow-hidden rounded-lg border border-white/10 bg-slate-900/70">
           <div className="border-b border-white/10 px-3.5 py-2.5">
             <div className="text-sm font-medium text-white">Ranking table</div>
-            <div className="text-xs text-slate-500">RS, confidence, stage, price, risk, and details</div>
+            <div className="text-xs text-slate-500">Cross-sectional price strength is separate from signal confidence and execution eligibility</div>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-[960px] divide-y divide-white/5 text-left text-sm">
@@ -95,7 +106,7 @@ export default function RsRankingPage({ signalRows, watchlist, activeSymbol, aut
                     <td className="px-3 py-2.5 text-slate-400">#{index + 1}</td>
                     <td className="px-3 py-2.5 font-medium text-white">{row.symbol}</td>
                     <td className={row.rsScore >= 0 ? "px-3 py-2.5 font-medium text-emerald-300" : "px-3 py-2.5 font-medium text-rose-300"}>
-                      {formatSigned(row.rsScore, 0)}
+                      {formatSigned(row.rsScore, 0)} <span className="text-[11px] font-normal text-slate-500">rank #{row.rsRank}/{row.rsUniverseSize}</span>
                     </td>
                     <td className="px-3 py-2.5">
                       <Pill tone={row.type === "BUY" ? "emerald" : row.type === "SELL" ? "rose" : "slate"}>{row.type}</Pill>

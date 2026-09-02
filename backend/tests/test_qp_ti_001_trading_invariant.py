@@ -404,7 +404,7 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
         def acquire_account_execution_lock(self, db):
             lock_calls.append("lock")
 
-        def all_trades(self, db):
+        def risk_snapshot_trades(self, db, *, window_start):
             return []
 
         def has_open_trade(self, db, symbol, side=None):
@@ -471,7 +471,7 @@ def test_shadow_research_failure_never_blocks_official_paper_execution(monkeypat
         def acquire_account_execution_lock(self, db):
             return True
 
-        def all_trades(self, db):
+        def risk_snapshot_trades(self, db, *, window_start):
             return []
 
         def has_open_trade(self, db, symbol, side=None):
@@ -604,7 +604,7 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
         def acquire_account_execution_lock(self, db):
             pass
 
-        def all_trades(self, db):
+        def risk_snapshot_trades(self, db, *, window_start):
             return []
 
         def has_open_trade(self, db, symbol, side=None):
@@ -670,7 +670,7 @@ def test_executor_uses_remaining_safe_margin_instead_of_rejecting_trade(monkeypa
         def acquire_account_execution_lock(self, db):
             pass
 
-        def all_trades(self, db):
+        def risk_snapshot_trades(self, db, *, window_start):
             return []
 
         def has_open_trade(self, db, symbol, side=None):
@@ -740,7 +740,7 @@ def test_executor_blocks_only_same_side_during_post_stop_cooldown(monkeypatch):
         def acquire_account_execution_lock(self, db):
             pass
 
-        def all_trades(self, db):
+        def risk_snapshot_trades(self, db, *, window_start):
             return [stopped_trade]
 
         def has_open_trade(self, db, symbol, side=None):
@@ -873,7 +873,7 @@ def test_executor_allows_opposite_side_during_post_stop_cooldown(monkeypatch):
         def acquire_account_execution_lock(self, db):
             pass
 
-        def all_trades(self, db):
+        def risk_snapshot_trades(self, db, *, window_start):
             return [stopped_trade]
 
         def has_open_trade(self, db, symbol, side=None):
@@ -946,7 +946,7 @@ def test_executor_rechecks_account_capacity_under_lock_for_each_symbol(monkeypat
             nonlocal lock_count
             lock_count += 1
 
-        def all_trades(self, db):
+        def risk_snapshot_trades(self, db, *, window_start):
             return list(open_trades)
 
         def has_open_trade(self, db, symbol, side=None):

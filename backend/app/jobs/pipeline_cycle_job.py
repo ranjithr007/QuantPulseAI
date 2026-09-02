@@ -39,65 +39,68 @@ def run_pipeline_cycle_job():
                 ledger_db = None
             print(f"Pipeline ledger unavailable: {summarize_network_error(exc)}")
 
-    for name, job in [
-        ("paper_trade_monitor", run_paper_trade_monitor_job),
-        ("watchlist_persist", run_watchlist_persist_job),
-        ("risk", run_risk_job),
-        ("paper_trade_execute", run_paper_trade_execute_job),
-    ]:
-        job_record = None
-        if ledger_db is not None and pipeline_record is not None:
+    try:
+        for name, job in [
+            ("paper_trade_monitor", run_paper_trade_monitor_job),
+            ("watchlist_persist", run_watchlist_persist_job),
+            ("risk", run_risk_job),
+            ("paper_trade_execute", run_paper_trade_execute_job),
+        ]:
+            job_record = None
+            if ledger_db is not None and pipeline_record is not None:
+                try:
+                    job_record, _ = ledger.start_job(
+                        ledger_db,
+                        pipeline_record.id,
+                        name,
+                        idempotency_key=f"{generation_id}:{name}",
+                        input_generation_id=generation_id,
+                    )
+                except Exception as exc:
+                    print(f"Pipeline job ledger unavailable for {name}: {summarize_network_error(exc)}")
             try:
-                job_record, _ = ledger.start_job(
-                    ledger_db,
-                    pipeline_record.id,
-                    name,
-                    idempotency_key=f"{generation_id}:{name}",
-                    input_generation_id=generation_id,
-                )
-            except Exception as exc:
-                print(f"Pipeline job ledger unavailable for {name}: {summarize_network_error(exc)}")
-        try:
-            results[name] = job()
-            if job_record is not None:
-                ledger.finish_job(
-                    ledger_db,
-                    job_record.id,
-                    status="COMPLETED",
-                    rows_written=_rows_written(results[name]),
-                    output_generation_id=generation_id,
-                )
-        except Exception as ex:
-            results[name] = {"status": "FAILED", "error": summarize_network_error(ex)}
-            if job_record is not None:
-                ledger.finish_job(
-                    ledger_db,
-                    job_record.id,
-                    status="FAILED",
-                    error_category=type(ex).__name__,
-                    error_message=summarize_network_error(ex),
-                    output_generation_id=generation_id,
-                )
+                results[name] = job()
+                if job_record is not None:
+                    ledger.finish_job(
+                        ledger_db,
+                        job_record.id,
+                        status="COMPLETED",
+                        rows_written=_rows_written(results[name]),
+                        output_generation_id=generation_id,
+                    )
+            except Exception as ex:
+                results[name] = {"status": "FAILED", "error": summarize_network_error(ex)}
+                if job_record is not None:
+                    ledger.finish_job(
+                        ledger_db,
+                        job_record.id,
+                        status="FAILED",
+                        error_category=type(ex).__name__,
+                        error_message=summarize_network_error(ex),
+                        output_generation_id=generation_id,
+                    )
 
-    status = _pipeline_cycle_status(results)
+        status = _pipeline_cycle_status(results)
 
-    if pipeline_record is not None and ledger_db is not None:
-        ledger.finish_pipeline(ledger_db, pipeline_record.id, status=status)
-        ledger_db.close()
+        if pipeline_record is not None and ledger_db is not None:
+            ledger.finish_pipeline(ledger_db, pipeline_record.id, status=status)
 
-    return {
-        "source": "pipeline_cycle",
-        "generation_id": generation_id,
-        "pipeline_run_id": getattr(pipeline_record, "id", None),
-        "status": status,
-        "order": [
-            "paper_trade_monitor",
-            "watchlist_persist",
-            "risk",
-            "paper_trade_execute",
-        ],
-        "results": results,
-    }
+        return {
+            "source": "pipeline_cycle",
+            "generation_id": generation_id,
+            "pipeline_run_id": getattr(pipeline_record, "id", None),
+            "status": status,
+            "order": [
+                "paper_trade_monitor",
+                "watchlist_persist",
+                "risk",
+                "paper_trade_execute",
+            ],
+            "results": results,
+        }
+    finally:
+        if ledger_db is not None:
+            ledger_db.close()
 
 
 def _rows_written(result):

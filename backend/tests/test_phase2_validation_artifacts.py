@@ -109,32 +109,27 @@ def test_persist_phase2_validation_artifact_serializes_trade_datetimes(tmp_path,
     assert trade["exit_time"] == "2026-08-11T09:00:00"
 
 
-def test_phase2_export_route_returns_artifact_payload(monkeypatch):
-    monkeypatch.setattr(backtest_api, "execute_walk_forward", lambda *args, **kwargs: _walk_forward())
+def test_phase2_export_requires_completed_async_result(monkeypatch):
     monkeypatch.setattr(
         backtest_api,
-        "build_phase2_validation_report",
-        lambda result, **kwargs: _report(),
-    )
-    monkeypatch.setattr(
-        backtest_api,
-        "persist_phase2_validation_artifact",
-        lambda report, result, **kwargs: {
-            "saved": True,
-            "json_path": "outputs/phase2_validation_reports/example.json",
-            "markdown_path": "outputs/phase2_validation_reports/example.md",
-        },
+        "execute_walk_forward",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("export must not run walk-forward synchronously")
+        ),
     )
 
-    payload = backtest_api.export_phase2_validation_report(
-        symbol="DOGEUSDT",
-        signal="LONG",
-        timeframe="1h",
-    )
-
-    assert payload["source"] == "phase2_validation_export_v1"
-    assert payload["artifact"]["saved"] is True
-    assert payload["report"]["overall_status"] == "PARTIAL"
+    try:
+        backtest_api.export_phase2_validation_report(
+            symbol="DOGEUSDT",
+            signal="LONG",
+            timeframe="1h",
+        )
+    except Exception as exc:
+        assert exc.status_code == 422
+        assert exc.detail["code"] == "COMPLETED_WALK_FORWARD_REQUIRED"
+        assert exc.detail["submit_url"] == "/api/backtest/walk-forward/jobs"
+    else:
+        raise AssertionError("export without an asynchronous result must fail closed")
 
 
 def test_phase2_export_reuses_completed_async_result_without_recalculation(monkeypatch):

@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi import FastAPI
@@ -7,6 +10,7 @@ from app.api.v1 import backtest_api
 from app.backtesting import walk_forward_jobs
 from app.database.models.walk_forward_jobs import WalkForwardJob
 from app.database.sqlserver import Base
+from app.jobs.walk_forward_queue_job import run_walk_forward_queue_job
 
 
 def _client(monkeypatch, tmp_path):
@@ -116,10 +120,148 @@ def test_walk_forward_job_records_failure_without_timing_out_request(
     assert failed.json()["response"] is None
 
 
+def test_production_api_queues_replay_for_worker_instead_of_running_it(
+    monkeypatch,
+    tmp_path,
+):
+    client = _client(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        backtest_api,
+        "get_settings",
+        lambda: SimpleNamespace(process_role="api"),
+    )
+    monkeypatch.setattr(
+        backtest_api,
+        "execute_walk_forward",
+        lambda **parameters: calls.append(parameters)
+        or {"engine_version": "walk_forward_v1", "fold_count": 4},
+    )
+    monkeypatch.setattr(
+        backtest_api,
+        "build_phase2_validation_report",
+        lambda result, **_scope: {"overall_status": "PASS"},
+    )
+    monkeypatch.setattr(backtest_api, "_load_paper_measurement", lambda _symbol: None)
+
+    submitted = client.post(
+        "/backtest/walk-forward/jobs",
+        params={
+            "symbol": "SOLUSDT",
+            "signal": "LONG",
+            "timeframe": "1h",
+            "limit": 20,
+            "train_size": 8,
+            "test_size": 2,
+            "step_size": 2,
+        },
+    )
+
+    assert submitted.status_code == 202
+    job_id = submitted.json()["job_id"]
+    assert submitted.json()["status"] == "QUEUED"
+    assert calls == []
+
+    worker_result = run_walk_forward_queue_job()
+    completed = client.get(f"/backtest/walk-forward/jobs/{job_id}").json()
+
+    assert worker_result["status"] == "COMPLETED"
+    assert worker_result["job_id"] == job_id
+    assert completed["status"] == "COMPLETED"
+    assert completed["response"]["result"]["fold_count"] == 4
+    assert len(calls) == 1
+
+
 def test_unknown_walk_forward_job_is_404(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     response = client.get("/backtest/walk-forward/jobs/not-a-valid-id")
     assert response.status_code == 404
+
+
+def test_abandoned_queued_job_expires_with_retryable_error(monkeypatch, tmp_path):
+    _client(monkeypatch, tmp_path)
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    record, created = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "BTCUSDT", "timeframe": "1h", "signal": "LONG"},
+        now=now,
+    )
+
+    expired = walk_forward_jobs.expire_stale_walk_forward_job(
+        record["job_id"],
+        now=now + timedelta(seconds=121),
+    )
+
+    assert created is True
+    assert expired["status"] == "FAILED"
+    assert "abandoned while queued" in expired["error"]
+    assert "Retry the validation" in expired["error"]
+
+    retried, recreated = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "BTCUSDT", "timeframe": "1h", "signal": "LONG"},
+        now=now + timedelta(seconds=122),
+    )
+    assert recreated is True
+    assert retried["job_id"] == record["job_id"]
+    assert retried["status"] == "QUEUED"
+    assert retried["error"] is None
+
+
+def test_abandoned_running_job_expires_but_recent_job_does_not(monkeypatch, tmp_path):
+    _client(monkeypatch, tmp_path)
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    record, _ = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "ETHUSDT", "timeframe": "2h", "signal": "SHORT"},
+        now=now,
+    )
+    walk_forward_jobs.mark_walk_forward_job_running(record["job_id"], now=now)
+
+    recent = walk_forward_jobs.expire_stale_walk_forward_job(
+        record["job_id"],
+        now=now + timedelta(minutes=19),
+    )
+    expired = walk_forward_jobs.expire_stale_walk_forward_job(
+        record["job_id"],
+        now=now + timedelta(minutes=21),
+    )
+
+    assert recent["status"] == "RUNNING"
+    assert expired["status"] == "FAILED"
+    assert "abandoned while running" in expired["error"]
+
+
+def test_new_submission_purges_only_expired_terminal_jobs(monkeypatch, tmp_path):
+    _client(monkeypatch, tmp_path)
+    old = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+
+    completed, _ = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "BTCUSDT", "timeframe": "1h", "signal": "LONG"},
+        now=old,
+    )
+    walk_forward_jobs.complete_walk_forward_job(
+        completed["job_id"], {"result": "large"}, now=old
+    )
+    failed, _ = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "ETHUSDT", "timeframe": "2h", "signal": "SHORT"},
+        now=old + timedelta(minutes=5),
+    )
+    walk_forward_jobs.fail_walk_forward_job(failed["job_id"], "failed", now=old)
+    running, _ = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "XRPUSDT", "timeframe": "4h", "signal": "LONG"},
+        now=old + timedelta(minutes=10),
+    )
+    walk_forward_jobs.mark_walk_forward_job_running(running["job_id"], now=old)
+
+    current, created = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "SOLUSDT", "timeframe": "1d", "signal": "SHORT"},
+        now=now,
+    )
+
+    assert created is True
+    assert walk_forward_jobs.load_walk_forward_job(completed["job_id"]) is None
+    assert walk_forward_jobs.load_walk_forward_job(failed["job_id"]) is None
+    assert walk_forward_jobs.load_walk_forward_job(running["job_id"])["status"] == "RUNNING"
+    assert walk_forward_jobs.load_walk_forward_job(current["job_id"])["status"] == "QUEUED"
 
 
 def test_synchronous_walk_forward_is_retired_without_executing(monkeypatch, tmp_path):
@@ -138,6 +280,26 @@ def test_synchronous_walk_forward_is_retired_without_executing(monkeypatch, tmp_
 
     assert response.status_code == 410
     assert response.json()["detail"]["code"] == "SYNCHRONOUS_WALK_FORWARD_RETIRED"
+    assert response.json()["detail"]["submit_url"] == "/api/backtest/walk-forward/jobs"
+    assert executed == []
+
+
+def test_synchronous_phase2_report_is_retired_without_executing(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    executed = []
+    monkeypatch.setattr(
+        backtest_api,
+        "execute_walk_forward",
+        lambda **parameters: executed.append(parameters),
+    )
+
+    response = client.get(
+        "/backtest/phase2-report",
+        params={"symbol": "BTCUSDT", "signal": "LONG", "timeframe": "1h"},
+    )
+
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "SYNCHRONOUS_PHASE2_REPORT_RETIRED"
     assert response.json()["detail"]["submit_url"] == "/api/backtest/walk-forward/jobs"
     assert executed == []
 

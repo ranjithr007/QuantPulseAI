@@ -78,3 +78,8 @@ Index(
     sqlite_where=text("status = 'OPEN'"),
     mssql_where=text("status = 'OPEN'"),
 )
+Index(
+    "ix_strategy_shadow_trades_daily_risk",
+    StrategyShadowTrade.status,
+    StrategyShadowTrade.closed_at,
+)

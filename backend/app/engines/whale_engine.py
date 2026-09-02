@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+from sqlalchemy import case, func
+
 from app.database.models.whale_trades import WhaleTrade
 
 
@@ -9,25 +11,32 @@ class WhaleEngine:
 
         since = datetime.now() - timedelta(minutes=15)
 
-        trades = (
-            db.query(WhaleTrade)
+        buy_volume, sell_volume = (
+            db.query(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (WhaleTrade.side == "BUY", WhaleTrade.value_usd),
+                            else_=0.0,
+                        )
+                    ),
+                    0.0,
+                ),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (WhaleTrade.side == "SELL", WhaleTrade.value_usd),
+                            else_=0.0,
+                        )
+                    ),
+                    0.0,
+                ),
+            )
             .filter(WhaleTrade.symbol == symbol, WhaleTrade.trade_time >= since)
-            .all()
+            .one()
         )
-
-        buy_volume = 0
-
-        sell_volume = 0
-
-        for trade in trades:
-
-            if trade.side == "BUY":
-
-                buy_volume += trade.value_usd
-
-            else:
-
-                sell_volume += trade.value_usd
+        buy_volume = float(buy_volume or 0.0)
+        sell_volume = float(sell_volume or 0.0)
 
         net = buy_volume - sell_volume
 

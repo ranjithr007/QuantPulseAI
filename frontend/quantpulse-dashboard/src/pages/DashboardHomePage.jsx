@@ -17,6 +17,7 @@ import AdvancedTradingViewPanel from "../components/signal-details/AdvancedTradi
 import MetricCard from "../components/ui/MetricCard";
 import Pill from "../components/ui/Pill";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
+import { candidateExecutorBlockers, isCandidateExecutorReady } from "../utils/executorCompetition";
 import { formatDate, formatNumber, formatPercent, formatPrice, formatSigned } from "../utils/formatters";
 import { dedupeReasonList } from "../utils/reasonDisplay";
 import { humanizeMachineStatus } from "../utils/text";
@@ -240,7 +241,7 @@ function BiasPanel({ longPct, shortPct, selectedDetail, activeTradePlan }) {
 function AutomationPanel({ autoDecision, selectedRisk, openTrades, selectedDetail, eligibilityState, selectedPaperTradeCandidate }) {
     const blockedReasons = dedupeReasonList(autoDecision.reasons || []).slice(0, 3);
     const warningReasons = dedupeReasonList(autoDecision.warnings || []);
-    const executorBlockedReasons = dedupeReasonList(selectedPaperTradeCandidate?.blocked_reasons || []);
+    const executorBlockedReasons = dedupeReasonList(candidateExecutorBlockers(selectedPaperTradeCandidate));
     const riskTone = selectedRisk?.is_usable === false ? "rose" : selectedRisk?.decision === "APPROVE" ? "emerald" : "cyan";
     const entryTrigger = selectedDetail?.timing?.trigger || selectedDetail?.entryTrigger?.trigger || selectedDetail?.timing || selectedDetail?.entryTrigger || null;
     const tradeSetup = selectedDetail?.prediction?.setup || selectedDetail?.tradeSetup?.setup || selectedDetail?.prediction || selectedDetail?.tradeSetup || null;
@@ -303,9 +304,9 @@ function AutomationPanel({ autoDecision, selectedRisk, openTrades, selectedDetai
                 />
                 <CompactDiagnostic
                     label="Top block"
-                    value={topReasonLabel(autoDecision.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
-                    note={topReasonNote(autoDecision.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
-                    tone={topReasonTone(autoDecision.reasons, selectedPaperTradeCandidate?.blocked_reasons)}
+                    value={topReasonLabel(autoDecision.reasons, executorBlockedReasons)}
+                    note={topReasonNote(autoDecision.reasons, executorBlockedReasons)}
+                    tone={topReasonTone(autoDecision.reasons, executorBlockedReasons)}
                 />
                 <CompactDiagnostic
                     label="Timing"
@@ -456,7 +457,8 @@ function paperTradeLifecycle({ symbol, eligibilityState, selectedPaperTradeCandi
     const selectedOpenTrade = openTrades.find((trade) => String(trade?.symbol || "").toUpperCase() === String(symbol || "").toUpperCase());
     const eligible = ["Eligible", "Ready to execute"].includes(String(eligibilityState?.label || ""));
     const candidateExists = Boolean(selectedPaperTradeCandidate);
-    const executorReady = Boolean(selectedPaperTradeCandidate?.eligible);
+    const executorReady = isCandidateExecutorReady(selectedPaperTradeCandidate);
+    const executorBlockers = candidateExecutorBlockers(selectedPaperTradeCandidate);
     const openNow = Boolean(selectedOpenTrade);
     const queuedAt = selectedPaperTradeCandidate?.trade_plan?.created_at || null;
     const executorCheckedAt = selectedPaperTradeCandidate?.risk_decision?.created_at || queuedAt || null;
@@ -494,7 +496,7 @@ function paperTradeLifecycle({ symbol, eligibilityState, selectedPaperTradeCandi
             note: executorReady
                 ? (riskStale ? `Queued candidate would be ready, but ${staleNote}.` : "Queued candidate passes executor checks.")
                 : candidateExists
-                    ? (riskStale ? "Executor needs a fresh risk decision before treating this candidate as ready." : (selectedPaperTradeCandidate?.blocked_reasons?.[0] || "Queued candidate is blocked by executor checks."))
+                    ? (riskStale ? "Executor needs a fresh risk decision before treating this candidate as ready." : (executorBlockers[0] || "Queued candidate is blocked by executor checks."))
                     : "Executor has nothing to evaluate yet.",
             when: stageTimestampLabel(executorCheckedAt),
         },

@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).parents[2]
 def test_postgresql_baseline_fingerprint_is_reviewed_and_stable():
     statements = postgresql_baseline.compiled_postgresql_schema()
 
-    assert len(statements) == 155
+    assert len(statements) == 158
     assert postgresql_baseline.postgresql_schema_fingerprint() == (
         postgresql_baseline.POSTGRESQL_BASELINE_FINGERPRINT
     )
@@ -75,6 +75,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260827_app_notifications.py",
         "pg_20260828_usage_indexes.py",
         "pg_20260831_strategy_summary_indexes.py",
+        "pg_20260902_pnl_query_indexes.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -151,3 +152,11 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     assert 'down_revision = "pg_20260828_usage_indexes"' in strategy_indexes
     assert 'revision = "pg_20260831_strategy_indexes"' in strategy_indexes
     assert "postgresql_concurrently=True" in strategy_indexes
+
+    pnl_indexes = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260902_pnl_query_indexes.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260831_strategy_indexes"' in pnl_indexes
+    assert 'revision = "pg_20260902_pnl_indexes"' in pnl_indexes
+    assert "ix_paper_trades_pnl_history" in pnl_indexes
+    assert "ix_paper_trades_daily_risk" in pnl_indexes
+    assert "ix_strategy_shadow_trades_daily_risk" in pnl_indexes
+    assert "postgresql_concurrently=True" in pnl_indexes

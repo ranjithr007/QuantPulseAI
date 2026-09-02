@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
-from sqlalchemy import case, func
+from sqlalchemy import and_, case, func, or_
 
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
@@ -84,9 +84,6 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
     trades = strategy_data["paper_trades"].get(key, [])
     strategy_book_trades = strategy_data["strategy_paper_trades"].get(key, [])
     snapshot_counts = strategy_data["snapshot_counts"].get(key, {})
-    shadow_trades = [
-        item for item in strategy_book_trades if item.created_at >= cutoff
-    ]
     candidates = _latest_candidates(
         snapshots,
         plans,
@@ -94,19 +91,28 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
         strategy_book_trades,
         candidate_limit,
     )
-    official_performance = _strategy_performance(trades)
-    shadow_performance = _strategy_performance(shadow_trades)
-    strategy_book_performance = _strategy_performance(strategy_book_trades)
+    official_performance = strategy_data["official_performance"].get(
+        key, _empty_strategy_performance()
+    )
+    shadow_performance = strategy_data["strategy_paper_performance"].get(
+        key, _empty_strategy_performance()
+    )
+    strategy_book_performance = strategy_data[
+        "strategy_paper_lifetime_performance"
+    ].get(key, _empty_strategy_performance())
+    strategy_book_history = strategy_data["strategy_paper_history"].get(key, [])
     return {
         **definition,
         "coverage": {
             "decision_snapshots": snapshot_counts.get("total", 0),
             "trade_plans": strategy_data["plan_counts"].get(key, 0),
             "risk_decisions": strategy_data["risk_counts"].get(key, 0),
-            "paper_trades": len(trades),
-            "shadow_trades": len(shadow_trades),
-            "strategy_paper_trades": len(shadow_trades),
-            "strategy_paper_lifetime_trades": len(strategy_book_trades),
+            "paper_trades": official_performance["total_trades"],
+            "shadow_trades": shadow_performance["total_trades"],
+            "strategy_paper_trades": shadow_performance["total_trades"],
+            "strategy_paper_lifetime_trades": strategy_book_performance[
+                "total_trades"
+            ],
             "eligible_signals": snapshot_counts.get("eligible", 0),
             "blocked_signals": snapshot_counts.get("blocked", 0),
         },
@@ -128,7 +134,7 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
         },
         "strategy_paper_history": [
             _strategy_paper_trade_payload(item)
-            for item in reversed(strategy_book_trades[-20:])
+            for item in strategy_book_history
         ],
         "official_performance": official_performance,
         "forward_test_readiness": _forward_test_readiness(shadow_performance),
@@ -152,6 +158,10 @@ def _load_strategy_data(db, definitions, cutoff):
             "risk_counts": {},
             "paper_trades": {},
             "strategy_paper_trades": {},
+            "official_performance": {},
+            "strategy_paper_performance": {},
+            "strategy_paper_lifetime_performance": {},
+            "strategy_paper_history": {},
         }
 
     snapshot_count_rows = (
@@ -232,18 +242,50 @@ def _load_strategy_data(db, definitions, cutoff):
         .group_by(RiskDecision.strategy_id, RiskDecision.strategy_version)
         .all()
     )
+    candidate_scope = [
+        model.strategy_decision_snapshot_id.in_(snapshot_ids)
+        for model in (PaperTrade, StrategyShadowTrade)
+    ]
     paper_trades = production_paper_trade_records(
         db.query(PaperTrade)
         .filter(PaperTrade.strategy_id.in_(strategy_ids))
-        .filter(PaperTrade.created_at >= cutoff)
+        .filter(or_(candidate_scope[0], PaperTrade.status == "OPEN"))
         .order_by(PaperTrade.created_at.asc(), PaperTrade.id.asc())
         .all()
     )
     strategy_paper_trades = (
         db.query(StrategyShadowTrade)
         .filter(StrategyShadowTrade.strategy_id.in_(strategy_ids))
+        .filter(
+            or_(candidate_scope[1], StrategyShadowTrade.status == "OPEN")
+        )
         .order_by(StrategyShadowTrade.created_at.asc(), StrategyShadowTrade.id.asc())
         .all()
+    )
+
+    official_performance = _load_strategy_performance(
+        db,
+        PaperTrade,
+        strategy_ids,
+        cutoff=cutoff,
+        exclude_qa_symbols=True,
+    )
+    strategy_paper_performance = _load_strategy_performance(
+        db,
+        StrategyShadowTrade,
+        strategy_ids,
+        cutoff=cutoff,
+    )
+    strategy_paper_lifetime_performance = _load_strategy_performance(
+        db,
+        StrategyShadowTrade,
+        strategy_ids,
+    )
+    strategy_paper_history = _load_recent_strategy_rows(
+        db,
+        StrategyShadowTrade,
+        strategy_ids,
+        per_strategy_limit=20,
     )
 
     return {
@@ -267,7 +309,227 @@ def _load_strategy_data(db, definitions, cutoff):
         },
         "paper_trades": _group_strategy_rows(paper_trades),
         "strategy_paper_trades": _group_strategy_rows(strategy_paper_trades),
+        "official_performance": official_performance,
+        "strategy_paper_performance": strategy_paper_performance,
+        "strategy_paper_lifetime_performance": (
+            strategy_paper_lifetime_performance
+        ),
+        "strategy_paper_history": strategy_paper_history,
     }
+
+
+def _load_strategy_performance(
+    db,
+    model,
+    strategy_ids,
+    *,
+    cutoff=None,
+    exclude_qa_symbols=False,
+):
+    """Aggregate strategy results in SQL instead of hydrating the full ledger."""
+
+    closed = func.upper(model.status) == "CLOSED"
+    opened = func.upper(model.status) == "OPEN"
+    realized = func.coalesce(model.realized_pnl_inr, 0.0)
+    query = db.query(
+        model.strategy_id,
+        model.strategy_version,
+        func.count(model.id).label("total_trades"),
+        func.sum(case((opened, 1), else_=0)).label("open_trades"),
+        func.sum(case((closed, 1), else_=0)).label("closed_trades"),
+        func.sum(
+            case((and_(closed, func.upper(model.result) == "WIN"), 1), else_=0)
+        ).label("wins"),
+        func.sum(
+            case((and_(closed, func.upper(model.result) == "LOSS"), 1), else_=0)
+        ).label("losses"),
+        func.sum(case((func.upper(model.side) == "LONG", 1), else_=0)).label(
+            "long_trades"
+        ),
+        func.sum(case((func.upper(model.side) == "SHORT", 1), else_=0)).label(
+            "short_trades"
+        ),
+        func.sum(case((closed, realized), else_=0.0)).label("net_pnl_inr"),
+        func.sum(
+            case((closed, func.coalesce(model.gross_pnl_percent, 0.0)), else_=0.0)
+        ).label("gross_trade_pnl_percent"),
+        func.sum(
+            case((closed, func.coalesce(model.pnl_percent, 0.0)), else_=0.0)
+        ).label("net_trade_pnl_percent"),
+        func.sum(
+            case((closed, func.coalesce(model.fees_percent, 0.0)), else_=0.0)
+        ).label("fees_percent"),
+        func.sum(
+            case(
+                (closed, func.coalesce(model.funding_cost_percent, 0.0)),
+                else_=0.0,
+            )
+        ).label("funding_cost_percent"),
+        func.sum(case((and_(closed, realized > 0), realized), else_=0.0)).label(
+            "gross_gains"
+        ),
+        func.sum(case((and_(closed, realized < 0), realized), else_=0.0)).label(
+            "gross_losses"
+        ),
+    ).filter(model.strategy_id.in_(strategy_ids))
+    if cutoff is not None:
+        query = query.filter(model.created_at >= cutoff)
+    if exclude_qa_symbols:
+        query = query.filter(func.upper(model.symbol).notlike("QA%"))
+    rows = query.group_by(model.strategy_id, model.strategy_version).all()
+    drawdowns = _load_strategy_drawdowns(
+        db,
+        model,
+        strategy_ids,
+        cutoff=cutoff,
+        exclude_qa_symbols=exclude_qa_symbols,
+    )
+    return {
+        (row.strategy_id, row.strategy_version): _performance_from_aggregate(
+            row,
+            drawdowns.get((row.strategy_id, row.strategy_version), 0.0),
+        )
+        for row in rows
+    }
+
+
+def _load_strategy_drawdowns(
+    db,
+    model,
+    strategy_ids,
+    *,
+    cutoff=None,
+    exclude_qa_symbols=False,
+):
+    """Calculate maximum drawdown with SQL windows, returning one row per book."""
+
+    order_time = func.coalesce(model.closed_at, model.created_at)
+    realized = func.coalesce(model.realized_pnl_inr, 0.0)
+    partition = (model.strategy_id, model.strategy_version)
+    equity_query = db.query(
+        model.strategy_id.label("strategy_id"),
+        model.strategy_version.label("strategy_version"),
+        model.id.label("trade_id"),
+        order_time.label("order_time"),
+        (
+            PAPER_CAPITAL_INR
+            + func.sum(realized).over(
+                partition_by=partition,
+                order_by=(order_time, model.id),
+                rows=(None, 0),
+            )
+        ).label("equity"),
+    ).filter(model.strategy_id.in_(strategy_ids))
+    equity_query = equity_query.filter(func.upper(model.status) == "CLOSED")
+    if cutoff is not None:
+        equity_query = equity_query.filter(model.created_at >= cutoff)
+    if exclude_qa_symbols:
+        equity_query = equity_query.filter(func.upper(model.symbol).notlike("QA%"))
+    equity = equity_query.subquery()
+    with_peak = db.query(
+        equity.c.strategy_id,
+        equity.c.strategy_version,
+        equity.c.equity,
+        func.max(equity.c.equity)
+        .over(
+            partition_by=(equity.c.strategy_id, equity.c.strategy_version),
+            order_by=(equity.c.order_time, equity.c.trade_id),
+            rows=(None, 0),
+        )
+        .label("peak"),
+    ).subquery()
+    running_peak = case(
+        (with_peak.c.peak < PAPER_CAPITAL_INR, PAPER_CAPITAL_INR),
+        else_=with_peak.c.peak,
+    )
+    drawdown = case(
+        (
+            running_peak > 0,
+            (running_peak - with_peak.c.equity) / running_peak * 100.0,
+        ),
+        else_=0.0,
+    )
+    rows = (
+        db.query(
+            with_peak.c.strategy_id,
+            with_peak.c.strategy_version,
+            func.max(drawdown).label("max_drawdown_percent"),
+        )
+        .group_by(with_peak.c.strategy_id, with_peak.c.strategy_version)
+        .all()
+    )
+    return {
+        (row.strategy_id, row.strategy_version): round(
+            float(row.max_drawdown_percent or 0.0), 4
+        )
+        for row in rows
+    }
+
+
+def _load_recent_strategy_rows(db, model, strategy_ids, *, per_strategy_limit):
+    ranked = db.query(
+        model.id.label("row_id"),
+        func.row_number()
+        .over(
+            partition_by=(model.strategy_id, model.strategy_version),
+            order_by=(model.created_at.desc(), model.id.desc()),
+        )
+        .label("row_number"),
+    ).filter(model.strategy_id.in_(strategy_ids)).subquery()
+    rows = (
+        db.query(model)
+        .join(ranked, ranked.c.row_id == model.id)
+        .filter(ranked.c.row_number <= per_strategy_limit)
+        .order_by(
+            model.strategy_id.asc(),
+            model.strategy_version.asc(),
+            model.created_at.desc(),
+            model.id.desc(),
+        )
+        .all()
+    )
+    return _group_strategy_rows(rows)
+
+
+def _performance_from_aggregate(row, max_drawdown_percent):
+    total = int(row.total_trades or 0)
+    closed = int(row.closed_trades or 0)
+    wins = int(row.wins or 0)
+    net_pnl_inr = round(float(row.net_pnl_inr or 0.0), 2)
+    gains = float(row.gross_gains or 0.0)
+    losses = abs(float(row.gross_losses or 0.0))
+    profit_factor = (
+        round(gains / losses, 4)
+        if losses
+        else (999.0 if gains else None)
+    )
+    return {
+        "total_trades": total,
+        "open_trades": int(row.open_trades or 0),
+        "closed_trades": closed,
+        "wins": wins,
+        "losses": int(row.losses or 0),
+        "long_trades": int(row.long_trades or 0),
+        "short_trades": int(row.short_trades or 0),
+        "win_rate": round(wins / closed * 100, 2) if closed else 0.0,
+        "net_pnl_inr": net_pnl_inr,
+        "account_return_percent": round(net_pnl_inr / PAPER_CAPITAL_INR * 100, 4),
+        "gross_trade_pnl_percent": round(
+            float(row.gross_trade_pnl_percent or 0.0), 4
+        ),
+        "net_trade_pnl_percent": round(
+            float(row.net_trade_pnl_percent or 0.0), 4
+        ),
+        "fees_percent": round(float(row.fees_percent or 0.0), 4),
+        "funding_cost_percent": round(float(row.funding_cost_percent or 0.0), 4),
+        "max_drawdown_percent": round(float(max_drawdown_percent or 0.0), 4),
+        "profit_factor": profit_factor,
+        "expectancy_inr": round(net_pnl_inr / closed, 2) if closed else 0.0,
+    }
+
+
+def _empty_strategy_performance():
+    return _strategy_performance([])
 
 
 def _group_strategy_rows(rows):
