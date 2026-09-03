@@ -179,7 +179,12 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
     performance: officialPerformance || current.performance,
     accountRisk: paperTradeBundle.accountRisk || current.accountRisk,
     paperWallet: paperTradeBundle.paperWallet || current.paperWallet,
-    ledgerScope: paperTradeBundle.ledgerScope || current.ledgerScope,
+    ledgerScope: paperTradeBundle.ledgerScope
+      ? {
+          ...paperTradeBundle.ledgerScope,
+          symbol_filter: paperTradeBundle.symbol_filter ?? null,
+        }
+      : current.ledgerScope,
     openTrades: hasPaperTradePayload ? officialOpenTrades : current.openTrades,
     closedTrades: hasPaperTradePayload ? officialClosedTrades : current.closedTrades,
     selected: {

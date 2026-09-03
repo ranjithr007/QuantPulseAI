@@ -64,6 +64,11 @@ export default function PnLSection({
   selectedRisk,
   selectedPaperTradeCandidate,
 }) {
+  const accountLedgerPending = !ledgerScope || ledgerScope.symbol_filter !== null;
+  if (accountLedgerPending) {
+    return <PnlLedgerLoading />;
+  }
+
   const totalTrades = (closedTradeCount ?? tradeHistory.length) + openPositions.length;
   const avgProfit = averagePnl(tradeHistory, true);
   const avgLoss = averagePnl(tradeHistory, false);
@@ -533,6 +538,23 @@ function PaperWalletStrip({ wallet, openPositions }) {
       <WalletDatum label="Available margin" value={formatInr(available)} note="Equity minus committed margin" />
       <WalletDatum label="Position sizing" value="75% / 85%" note={`${formatInr(150000)} minimum / ${formatInr(170000)} maximum notional`} />
     </div>
+  );
+}
+
+function PnlLedgerLoading() {
+  return (
+    <section className="border-b border-white/5">
+      <div className="mx-auto w-full max-w-[1680px] px-4 py-4 sm:px-6 lg:px-8">
+        <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">PnL Dashboard</div>
+        <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Trade performance</h2>
+        <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-4 py-4 text-sm text-cyan-100" role="status">
+          <div className="font-medium">Loading the account-wide paper ledger...</div>
+          <div className="mt-1 text-xs text-cyan-200/80">
+            Open positions, wallet balances, and PNL totals will appear together after the authoritative account bundle is ready.
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 

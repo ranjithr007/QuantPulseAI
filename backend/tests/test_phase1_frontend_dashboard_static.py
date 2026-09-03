@@ -131,6 +131,9 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         dashboard_api = (FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js").read_text(
             encoding="utf-8"
         )
+        dashboard_data = (
+            FRONTEND_ROOT / "src" / "hooks" / "useDashboardData.jsx"
+        ).read_text(encoding="utf-8")
         pnl_section = (
             FRONTEND_ROOT / "src" / "components" / "PnLSection.jsx"
         ).read_text(encoding="utf-8")
@@ -168,6 +171,9 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('label="Available margin"', pnl_section)
         self.assertIn("wallet?.wallet_balance_inr", pnl_section)
         self.assertIn("wallet?.equity_inr", pnl_section)
+        self.assertIn("paperTradeBundle.symbol_filter ?? null", dashboard_data)
+        self.assertIn("ledgerScope.symbol_filter !== null", pnl_section)
+        self.assertIn("Loading the account-wide paper ledger", pnl_section)
 
         formatters = (
             FRONTEND_ROOT / "src" / "utils" / "formatters.js"
