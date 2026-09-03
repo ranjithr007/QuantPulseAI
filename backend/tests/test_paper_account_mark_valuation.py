@@ -48,7 +48,9 @@ def test_fresh_final_five_minute_mark_values_open_account_risk(monkeypatch):
     monkeypatch.setattr(
         paper_trade_api,
         "DerivativeRepository",
-        lambda: SimpleNamespace(latest_mark_price=lambda *args, **kwargs: mark),
+        lambda: SimpleNamespace(
+            latest_mark_prices=lambda *args, **kwargs: {"BTCUSDT": mark}
+        ),
     )
     _settings(monkeypatch)
 
@@ -70,7 +72,9 @@ def test_stale_five_minute_mark_fails_closed_without_entry_fallback(monkeypatch)
     monkeypatch.setattr(
         paper_trade_api,
         "DerivativeRepository",
-        lambda: SimpleNamespace(latest_mark_price=lambda *args, **kwargs: mark),
+        lambda: SimpleNamespace(
+            latest_mark_prices=lambda *args, **kwargs: {"BTCUSDT": mark}
+        ),
     )
     _settings(monkeypatch)
 

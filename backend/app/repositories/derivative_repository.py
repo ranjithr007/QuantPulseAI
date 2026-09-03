@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from sqlalchemy import true
+from sqlalchemy import and_, func, true
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.futures_mark_prices import FuturesMarkPrice
@@ -26,6 +26,53 @@ class DerivativeRepository:
             )
             .first()
         )
+
+    def latest_mark_prices(self, db, symbols, timeframe="5m"):
+        """Load the latest final mark for every requested symbol in one query."""
+
+        normalized_symbols = sorted(
+            {
+                str(symbol).strip().upper()
+                for symbol in (symbols or ())
+                if str(symbol).strip()
+            }
+        )
+        if not normalized_symbols:
+            return {}
+
+        latest_times = (
+            db.query(
+                FuturesMarkPrice.symbol.label("symbol"),
+                func.max(FuturesMarkPrice.close_time).label("close_time"),
+            )
+            .filter(
+                FuturesMarkPrice.symbol.in_(normalized_symbols),
+                FuturesMarkPrice.timeframe == timeframe,
+                FuturesMarkPrice.is_final == true(),
+            )
+            .group_by(FuturesMarkPrice.symbol)
+            .subquery()
+        )
+        rows = (
+            db.query(FuturesMarkPrice)
+            .join(
+                latest_times,
+                and_(
+                    FuturesMarkPrice.symbol == latest_times.c.symbol,
+                    FuturesMarkPrice.close_time == latest_times.c.close_time,
+                ),
+            )
+            .filter(
+                FuturesMarkPrice.timeframe == timeframe,
+                FuturesMarkPrice.is_final == true(),
+            )
+            .order_by(FuturesMarkPrice.symbol.asc(), FuturesMarkPrice.id.desc())
+            .all()
+        )
+        latest_by_symbol = {}
+        for row in rows:
+            latest_by_symbol.setdefault(str(row.symbol).upper(), row)
+        return latest_by_symbol
 
     def save_funding(self, db, item):
         symbol = str(item["symbol"]).upper()

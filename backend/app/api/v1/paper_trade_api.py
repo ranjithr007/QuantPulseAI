@@ -183,17 +183,19 @@ def _account_risk_snapshot(db, trades):
     prices = {}
     price_evidence = {}
     mark_repo = DerivativeRepository()
+    open_symbols = {str(trade.symbol).upper() for trade in open_trades}
+    try:
+        marks_by_symbol = mark_repo.latest_mark_prices(
+            db,
+            open_symbols,
+            timeframe=PAPER_RISK_MARK_TIMEFRAME,
+        )
+    except SQLAlchemyError:
+        db.rollback()
+        marks_by_symbol = {}
     for trade in open_trades:
         symbol = str(trade.symbol).upper()
-        try:
-            mark = mark_repo.latest_mark_price(
-                db,
-                symbol,
-                timeframe=PAPER_RISK_MARK_TIMEFRAME,
-            )
-        except SQLAlchemyError:
-            db.rollback()
-            mark = None
+        mark = marks_by_symbol.get(symbol)
 
         mark_price = _finite_float(getattr(mark, "close_price", None))
         mark_timestamp = getattr(mark, "close_time", None)
