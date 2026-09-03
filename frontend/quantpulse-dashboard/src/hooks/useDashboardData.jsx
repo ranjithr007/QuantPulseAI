@@ -85,13 +85,15 @@ function preferCurrentComputedRisk(currentRisk, incomingRisk, view) {
 function mergeSelectedBundleData(current, view, bundle) {
   return {
     ...current,
-    signalsBySymbol: {
-      ...current.signalsBySymbol,
-      [view.symbol]: bundle?.signal || null,
-    },
+    signalsBySymbol: bundle?.signal
+      ? {
+          ...current.signalsBySymbol,
+          [view.symbol]: bundle.signal,
+        }
+      : current.signalsBySymbol,
     selected: {
       ...current.selected,
-      signal: bundle?.signal || null,
+      signal: bundle?.signal || current.selected.signal,
       diagnostics: bundle?.diagnostics || null,
       candles: bundle?.candles || null,
       orderflow: bundle?.orderflow || null,
@@ -583,7 +585,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
           requests.push(
             loadIntelligenceBundle({ view, signal: controller.signal })
               .then((selectedBundle) => {
-                if (cancelled || !selectedBundle?.signal) return;
+                if (cancelled || !selectedBundle) return;
                 setData((current) => mergeSelectedBundleData(current, view, selectedBundle));
                 hasLoadedRef.current = true;
                 setLoading(false);

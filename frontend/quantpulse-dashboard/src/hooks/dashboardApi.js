@@ -134,6 +134,7 @@ export async function loadIntelligenceBundle({ view, signal }) {
       timeframe: view.timeframe,
       mode: view.mode,
       stale_after_seconds: staleAfterSeconds(view.timeframe),
+      include_signal: false,
     },
     signal,
     20000

@@ -149,6 +149,8 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertNotIn('"pnl"', selected_bundle_pages)
         self.assertNotIn('include_all: activePage === "pnl" ? true : null', dashboard_api)
         self.assertIn("export async function loadPaperTrades", dashboard_api)
+        self.assertIn("include_signal: false", dashboard_api)
+        self.assertIn("bundle?.signal || current.selected.signal", dashboard_data)
         self.assertIn('status: "CLOSED"', pnl_section)
         self.assertIn("openPositions.map((trade)", pnl_section)
         self.assertIn("visibleTrades.map((trade)", pnl_section)

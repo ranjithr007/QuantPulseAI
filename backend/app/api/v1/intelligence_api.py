@@ -206,6 +206,7 @@ def get_intelligence_bundle(
     timeframe: str = Query(default="1h"),
     mode: str | None = Query(default=None),
     stale_after_seconds: int = Query(default=900, ge=1),
+    include_signal: bool = Query(default=True),
 ):
     db = SessionLocal()
 
@@ -228,16 +229,18 @@ def get_intelligence_bundle(
             and "stack" in multi_timeframe_context
             else None
         )
-        signal = _bundle_section(
-            db,
-            "signal",
-            build_signal_payload,
-            failures,
-            db,
-            symbol,
-            timeframe=timeframe,
-            stale_after_seconds=stale_after_seconds,
-        )
+        signal = None
+        if include_signal:
+            signal = _bundle_section(
+                db,
+                "signal",
+                build_signal_payload,
+                failures,
+                db,
+                symbol,
+                timeframe=timeframe,
+                stale_after_seconds=stale_after_seconds,
+            )
         diagnostics = _diagnostics_from_context(multi_timeframe_context, timeframe)
         if diagnostics is None:
             diagnostics = _bundle_section(

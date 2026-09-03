@@ -92,6 +92,34 @@ def test_selected_diagnostics_are_reused_from_multi_timeframe_context():
     assert intelligence_api._diagnostics_from_context(None, "1h") is None
 
 
+def test_intelligence_bundle_can_skip_signal_already_loaded_by_batch(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        def close(self):
+            calls.append("close")
+
+    def bundle_section(db, label, builder, failures, *args, **kwargs):
+        calls.append(label)
+        if label == "multiTimeframeContext":
+            return {"stack": ["1h", "2h", "4h", "1d"], "timeframes": []}
+        return {"source": label, "status": "OK"}
+
+    monkeypatch.setattr(intelligence_api, "SessionLocal", lambda: FakeDb())
+    monkeypatch.setattr(intelligence_api, "_bundle_section", bundle_section)
+
+    payload = intelligence_api.get_intelligence_bundle(
+        "ETHUSDT",
+        timeframe="1h",
+        mode="intraday",
+        include_signal=False,
+    )
+
+    assert payload["signal"] is None
+    assert "signal" not in calls
+    assert calls[-1] == "close"
+
+
 def test_intelligence_as_of_snapshot_endpoint_uses_point_in_time_tables(monkeypatch):
     calls = {}
 
