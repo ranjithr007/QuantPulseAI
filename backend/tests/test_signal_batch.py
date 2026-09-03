@@ -32,3 +32,31 @@ def test_signal_batch_symbol_limit_is_enforced():
         )
 
     assert exc_info.value.status_code == 400
+
+
+def test_signal_batch_summary_mode_uses_read_only_builder(monkeypatch):
+    summary_calls = []
+
+    def build_summary(db, symbol, timeframe, stale_after_seconds):
+        summary_calls.append((symbol, timeframe, stale_after_seconds))
+        return {"symbol": symbol, "signal": "WAIT"}
+
+    def fail_full_payload(*args, **kwargs):
+        raise AssertionError("summary batch must not build the write-heavy full payload")
+
+    monkeypatch.setattr(signals_api, "build_signal_summary_payload", build_summary)
+    monkeypatch.setattr(signals_api, "build_signal_payload", fail_full_payload)
+
+    payload = signals_api.build_signal_batch_payload(
+        object(),
+        ["BTCUSDT", "ETHUSDT"],
+        "1h",
+        7200,
+        summary_only=True,
+    )
+
+    assert summary_calls == [
+        ("BTCUSDT", "1h", 7200),
+        ("ETHUSDT", "1h", 7200),
+    ]
+    assert payload["count"] == 2

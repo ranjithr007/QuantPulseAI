@@ -1091,6 +1091,7 @@ def get_signal_batch(
     symbols: str | None = Query(default=None),
     timeframe: str = Query(default="5m", enum=["1m", "5m", "15m", "1h", "2h", "4h", "1d"]),
     stale_after_seconds: int = Query(default=900, ge=1),
+    summary_only: bool = Query(default=False),
 ):
     db = SessionLocal()
 
@@ -1107,6 +1108,7 @@ def get_signal_batch(
             requested_symbols,
             timeframe,
             stale_after_seconds,
+            summary_only=summary_only,
         )
 
     finally:
@@ -1508,10 +1510,18 @@ def build_signal_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
     }
 
 
-def build_signal_batch_payload(db, symbols, timeframe="5m", stale_after_seconds=900):
+def build_signal_batch_payload(
+    db,
+    symbols,
+    timeframe="5m",
+    stale_after_seconds=900,
+    *,
+    summary_only=False,
+):
     normalized_symbols = _normalize_signal_batch_symbols(symbols)
+    builder = build_signal_summary_payload if summary_only else build_signal_payload
     records = [
-        build_signal_payload(db, symbol, timeframe, stale_after_seconds)
+        builder(db, symbol, timeframe, stale_after_seconds)
         for symbol in normalized_symbols
     ]
 
@@ -1969,6 +1979,85 @@ def _persist_ready_watchlist_payload(
             "strategy_decision_snapshot_id",
             (strategy_snapshot or {}).get("id"),
         ),
+    }
+
+
+def build_signal_summary_payload(db, symbol, timeframe="5m", stale_after_seconds=900):
+    """Build the read-only fields needed by the cross-symbol live scanner.
+
+    Full signal payloads calculate probability, contradiction, persisted-signal
+    history, and a point-in-time snapshot. Those details belong to the selected
+    symbol bundle; repeating them for every scanner row makes each UI refresh
+    write-heavy and multiplies database round trips.
+    """
+    freshness_window = stale_after_seconds_for_timeframe(
+        timeframe,
+        fallback=stale_after_seconds,
+    )
+    candle = _latest_candle(db, symbol, timeframe)
+    if not candle:
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "source": "computed_current_summary",
+            "status": "NO_DATA",
+            "data_scope": "timeframe",
+            "signal": "NO_DATA",
+            "bias": "NO_DATA",
+            "confidence": 0,
+            "score": 0,
+            "current_price": None,
+            "trade_plan": None,
+            "freshness": freshness_status(None, freshness_window),
+            "reasons": ["No latest candle found for symbol/timeframe"],
+        }
+
+    data = get_ai_inputs(db, symbol, timeframe)
+    signal = generate_master_signal(
+        data["feature"], data["regime"], data["orderflow"], data["smc"]
+    )
+    current_price = float(candle.close_price)
+    atr = _latest_atr(data["feature"], current_price)
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "source": "computed_current_summary",
+        "status": "OK",
+        "data_scope": "timeframe",
+        "signal": signal["signal"],
+        "bias": signal["bias"],
+        "confidence": signal["confidence"],
+        "score": signal["score"],
+        "scoring_profile": signal.get("scoring_profile"),
+        "current_price": current_price,
+        "candle_time": candle.candle_time,
+        "freshness": freshness_status(
+            candle_freshness_timestamp(candle),
+            freshness_window,
+        ),
+        "trade_plan": build_trade_plan(
+            signal["signal"],
+            current_price,
+            atr,
+            confidence=signal["confidence"],
+            symbol=symbol,
+            timeframe=timeframe,
+        ),
+        "reasons": signal["reasons"],
+        "inputs": {
+            "feature": freshness_status(
+                getattr(data["feature"], "CreatedAt", None), freshness_window
+            ),
+            "regime": freshness_status(
+                getattr(data["regime"], "CreatedAt", None), freshness_window
+            ),
+            "orderflow": freshness_status(
+                getattr(data["orderflow"], "CreatedAt", None), freshness_window
+            ),
+            "smc": freshness_status(
+                getattr(data["smc"], "created_at", None), freshness_window
+            ),
+        },
     }
 
 

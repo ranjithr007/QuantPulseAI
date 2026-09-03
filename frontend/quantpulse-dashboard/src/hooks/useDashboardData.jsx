@@ -83,6 +83,14 @@ function preferCurrentComputedRisk(currentRisk, incomingRisk, view) {
 }
 
 function mergeSelectedBundleData(current, view, bundle) {
+  const currentSignal = matchesSelectedSignal(current.selected.signal, view)
+    ? current.selected.signal
+    : null;
+  const selectedSignal = bundle?.signal || (
+    bundle?.diagnostics
+      ? { ...bundle.diagnostics, ...(currentSignal || {}) }
+      : currentSignal
+  );
   return {
     ...current,
     signalsBySymbol: bundle?.signal
@@ -93,7 +101,7 @@ function mergeSelectedBundleData(current, view, bundle) {
       : current.signalsBySymbol,
     selected: {
       ...current.selected,
-      signal: bundle?.signal || current.selected.signal,
+      signal: selectedSignal,
       diagnostics: bundle?.diagnostics || null,
       candles: bundle?.candles || null,
       orderflow: bundle?.orderflow || null,
@@ -233,6 +241,10 @@ function scopePaperTrades(records) {
 
 function mergeSignalBatchData(current, signalBatch, symbols, view) {
   const records = signalBatch?.records_by_symbol || {};
+  const selectedRecord = records[view.symbol];
+  const previousSelected = matchesSelectedSignal(current.selected.signal, view)
+    ? current.selected.signal
+    : null;
   return {
     ...current,
     signalsBySymbol: Object.fromEntries(
@@ -246,7 +258,7 @@ function mergeSignalBatchData(current, signalBatch, symbols, view) {
     selected: {
       ...current.selected,
       signal: Object.prototype.hasOwnProperty.call(records, view.symbol)
-        ? records[view.symbol]
+        ? { ...(previousSelected || {}), ...selectedRecord }
         : current.selected.signal,
     },
     lastRefresh: new Date(),

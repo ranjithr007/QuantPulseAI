@@ -340,7 +340,7 @@ def _previous_candle(db, symbol, timeframe):
     if len(candles) < 2:
         return None
 
-    return candles[1]
+    return candles[-2]
 
 
 def _percent_change(previous, current):

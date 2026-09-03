@@ -90,7 +90,13 @@ def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=9
         open_interest_delta=open_interest_change_pct,
         long_short_ratio=None,
     )
-    whale = WhaleEngine().analyze(db, symbol)
+    whale_cache = _session_cache(db, "quantpulse_whale_analysis")
+    if whale_cache is not None and symbol in whale_cache:
+        whale = whale_cache[symbol]
+    else:
+        whale = WhaleEngine().analyze(db, symbol)
+        if whale_cache is not None:
+            whale_cache[symbol] = whale
     smart_money = SmartMoneyFusionEngine().analyze(smc, orderflow)
     heatmap = _latest_heatmap(db, symbol)
 
@@ -624,21 +630,39 @@ def _risk_level(status, conflict_score):
 
 
 def _latest_funding_record(db, symbol):
-    return (
+    cache = _session_cache(db, "quantpulse_latest_funding")
+    if cache is not None and symbol in cache:
+        return cache[symbol]
+    record = (
         db.query(FundingRate)
         .filter(FundingRate.symbol == symbol)
         .order_by(FundingRate.funding_time.desc(), FundingRate.id.desc())
         .first()
     )
+    if cache is not None:
+        cache[symbol] = record
+    return record
 
 
 def _latest_open_interest_record(db, symbol):
-    return (
+    records = _latest_open_interest_records(db, symbol)
+    return records[0] if records else None
+
+
+def _latest_open_interest_records(db, symbol):
+    cache = _session_cache(db, "quantpulse_latest_open_interest")
+    if cache is not None and symbol in cache:
+        return cache[symbol]
+    records = (
         db.query(OpenInterest)
         .filter(OpenInterest.symbol == symbol)
         .order_by(OpenInterest.timestamp.desc(), OpenInterest.id.desc())
-        .first()
+        .limit(2)
+        .all()
     )
+    if cache is not None:
+        cache[symbol] = records
+    return records
 
 
 def _latest_funding_rate(db, symbol):
@@ -647,13 +671,7 @@ def _latest_funding_rate(db, symbol):
 
 
 def _latest_open_interest_change(db, symbol):
-    records = (
-        db.query(OpenInterest)
-        .filter(OpenInterest.symbol == symbol)
-        .order_by(OpenInterest.timestamp.desc(), OpenInterest.id.desc())
-        .limit(2)
-        .all()
-    )
+    records = _latest_open_interest_records(db, symbol)
 
     if len(records) < 2:
         return None
@@ -668,12 +686,18 @@ def _latest_open_interest_change(db, symbol):
 
 
 def _latest_heatmap(db, symbol):
-    return (
+    cache = _session_cache(db, "quantpulse_latest_heatmap")
+    if cache is not None and symbol in cache:
+        return cache[symbol]
+    record = (
         db.query(LiquidationHeatmap)
         .filter(LiquidationHeatmap.symbol == symbol)
         .order_by(LiquidationHeatmap.created_at.desc(), LiquidationHeatmap.id.desc())
         .first()
     )
+    if cache is not None:
+        cache[symbol] = record
+    return record
 
 
 def _session_cache(db, key):
@@ -690,7 +714,7 @@ def _previous_candle(db, symbol, timeframe):
     if len(candles) < 2:
         return None
 
-    return candles[1]
+    return candles[-2]
 
 
 def _percent_change(previous, current):

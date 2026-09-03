@@ -150,6 +150,7 @@ export async function loadSignalBatch({ view, symbols, signal }) {
       timeframe: view.timeframe,
       stale_after_seconds: staleAfterSeconds(view.timeframe),
       symbols: symbols.join(","),
+      summary_only: true,
     },
     signal
   );

@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from datetime import timezone
 
+from sqlalchemy import func
+
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.repositories.point_in_time_snapshot_repository import save_decision_snapshot
 from app.utils.freshness import normalize_timestamp_to_utc
@@ -54,10 +56,42 @@ class MarketParticipationRepository:
         return self.serialize(row)
 
     def latest_for_symbols(self, db, symbols):
-        return {
-            symbol: self.latest(db, symbol)
-            for symbol in sorted({str(item).upper() for item in symbols or []})
-        }
+        normalized = sorted({str(item).upper() for item in symbols or []})
+        if not normalized:
+            return {}
+
+        self.ensure_table(db)
+        ranked = (
+            db.query(
+                DecisionSnapshot.id.label("decision_snapshot_id"),
+                func.row_number()
+                .over(
+                    partition_by=DecisionSnapshot.symbol,
+                    order_by=(
+                        DecisionSnapshot.effective_timestamp.desc(),
+                        DecisionSnapshot.id.desc(),
+                    ),
+                )
+                .label("row_number"),
+            )
+            .filter(
+                DecisionSnapshot.symbol.in_(normalized),
+                DecisionSnapshot.timeframe == MARKET_PARTICIPATION_TIMEFRAME,
+                DecisionSnapshot.decision_version
+                == MARKET_PARTICIPATION_DECISION_VERSION,
+            )
+            .subquery()
+        )
+        rows = (
+            db.query(DecisionSnapshot)
+            .join(
+                ranked,
+                DecisionSnapshot.id == ranked.c.decision_snapshot_id,
+            )
+            .filter(ranked.c.row_number == 1)
+            .all()
+        )
+        return {row.symbol: self.serialize(row) for row in rows}
 
     def history_through(self, db, symbol, as_of_timestamp=None, *, limit=5000):
         self.ensure_table(db)
