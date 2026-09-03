@@ -24,7 +24,9 @@ const PAGE_DATA_NEEDS = {
   "coin-details": { signals: true },
   "risk-controls": { paper: true, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },
-  pnl: { paper: true, signals: true },
+  // Executor candidates are not part of positions, wallet totals, charts, or
+  // paginated history, so they must not delay the authoritative PNL ledger.
+  pnl: { paper: true, paperCandidates: false, signals: true },
   backtest: { signals: true },
   rotation: { watchlist: true, signals: true },
   "rs-ranking": { watchlist: true, signals: true },
@@ -491,14 +493,16 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
         signal
       ),
     });
-    overviewRequests.push({
-      key: "paperTradeCandidates",
-      promise: loadPaperTradeCandidates({
-        symbol: paperSymbol,
-        staleAfterSeconds: staleAfterSeconds(view.timeframe),
-        signal,
-      }),
-    });
+    if (needs.paperCandidates !== false) {
+      overviewRequests.push({
+        key: "paperTradeCandidates",
+        promise: loadPaperTradeCandidates({
+          symbol: paperSymbol,
+          staleAfterSeconds: staleAfterSeconds(view.timeframe),
+          signal,
+        }),
+      });
+    }
   }
 
   if (needs.risk) {
