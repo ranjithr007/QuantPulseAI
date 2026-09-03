@@ -28,6 +28,7 @@ from app.backtesting.walk_forward_jobs import fail_walk_forward_job
 from app.backtesting.walk_forward_jobs import load_latest_walk_forward_job
 from app.backtesting.walk_forward_jobs import mark_walk_forward_job_running
 from app.backtesting.walk_forward_jobs import public_walk_forward_job
+from app.backtesting.walk_forward_jobs import summarize_completed_walk_forward_jobs
 from app.config import get_settings
 from app.database.sqlserver import SessionLocal
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
@@ -701,17 +702,53 @@ def phase2_validation_summary(
     signal: str | None = Query(default=None, pattern="^(LONG|SHORT)$"),
     limit: int = Query(default=20, ge=1, le=100),
 ):
-    records = summarize_phase2_validation_artifacts(
+    artifact_records = summarize_phase2_validation_artifacts(
         symbol=symbol,
         timeframe=timeframe,
         signal=signal,
         limit=limit,
     )
+    automatic_records = summarize_completed_walk_forward_jobs(
+        symbol=symbol,
+        timeframe=timeframe,
+        signal=signal,
+        limit=limit,
+    )
+    records = _merge_phase2_scope_summaries(
+        automatic_records,
+        artifact_records,
+        limit=limit,
+    )
     return {
-        "source": "phase2_validation_summary_v1",
+        "source": "phase2_validation_summary_v2_database",
         "count": len(records),
         "records": records,
     }
+
+
+def _merge_phase2_scope_summaries(*record_sets, limit):
+    latest_by_scope = {}
+    for records in record_sets:
+        for record in records or []:
+            scope = dict(record.get("scope") or {})
+            key = (
+                str(scope.get("symbol") or "").strip().upper(),
+                str(scope.get("timeframe") or "").strip().lower(),
+                str(scope.get("signal") or "").strip().upper(),
+            )
+            if not all(key):
+                continue
+            current = latest_by_scope.get(key)
+            if current is None or str(record.get("saved_at") or "") > str(
+                current.get("saved_at") or ""
+            ):
+                latest_by_scope[key] = record
+    records = sorted(
+        latest_by_scope.values(),
+        key=lambda item: item.get("saved_at") or "",
+        reverse=True,
+    )
+    return records[: int(limit)]
 
 
 @router.post("/{symbol}")

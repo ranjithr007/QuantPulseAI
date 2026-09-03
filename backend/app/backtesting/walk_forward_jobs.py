@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.database.models.walk_forward_jobs import WalkForwardJob
 from app.database.sqlserver import SessionLocal
+from app.governance.evidence_policy import govern_phase2_report
 from app.repositories._db_utils import commit_or_rollback
 
 
@@ -142,6 +143,119 @@ def load_latest_walk_forward_job(symbol, timeframe, signal):
         return None
     finally:
         db.close()
+
+
+def summarize_completed_walk_forward_jobs(
+    *,
+    symbol=None,
+    timeframe=None,
+    signal=None,
+    limit=20,
+):
+    """Summarize durable automatic results across governed scopes.
+
+    Automatic validation runs in a separate Railway worker, so filesystem
+    artifacts written by that process are not visible to the API service.
+    Completed job responses live in the shared database and are therefore the
+    authoritative source for the automatic cross-scope view.
+    """
+
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_timeframe = str(timeframe or "").strip().lower()
+    normalized_signal = str(signal or "").strip().upper()
+    record_limit = max(1, int(limit))
+    # Keep this endpoint light: response_json also contains the full replay,
+    # while the UI only needs the two newest reports per scope for drift.
+    scan_limit = max(50, min(200, record_limit * 5))
+
+    db = SessionLocal()
+    try:
+        query = db.query(WalkForwardJob).filter(
+            WalkForwardJob.status == "COMPLETED",
+            WalkForwardJob.response_json.isnot(None),
+        )
+        if normalized_symbol:
+            query = query.filter(
+                WalkForwardJob.parameters_json.contains(
+                    f'"symbol": {json.dumps(normalized_symbol)}'
+                )
+            )
+        if normalized_timeframe:
+            query = query.filter(
+                WalkForwardJob.parameters_json.contains(
+                    f'"timeframe": {json.dumps(normalized_timeframe)}'
+                )
+            )
+        if normalized_signal:
+            query = query.filter(
+                WalkForwardJob.parameters_json.contains(
+                    f'"signal": {json.dumps(normalized_signal)}'
+                )
+            )
+        rows = (
+            query.order_by(
+                WalkForwardJob.completed_at.desc(),
+                WalkForwardJob.created_at.desc(),
+                WalkForwardJob.job_id.desc(),
+            )
+            .limit(scan_limit)
+            .all()
+        )
+    finally:
+        db.close()
+
+    grouped = {}
+    for row in rows:
+        parameters = _load_json(row.parameters_json, {})
+        response = _load_json(row.response_json, {})
+        scope = {
+            "symbol": str(
+                response.get("symbol") or parameters.get("symbol") or ""
+            ).strip().upper(),
+            "timeframe": str(
+                response.get("timeframe") or parameters.get("timeframe") or ""
+            ).strip().lower(),
+            "signal": str(
+                response.get("signal") or parameters.get("signal") or ""
+            ).strip().upper(),
+        }
+        if normalized_symbol and scope["symbol"] != normalized_symbol:
+            continue
+        if normalized_timeframe and scope["timeframe"] != normalized_timeframe:
+            continue
+        if normalized_signal and scope["signal"] != normalized_signal:
+            continue
+        if not all(scope.values()):
+            continue
+        saved_at = _iso_utc(row.completed_at or row.created_at)
+        raw_report = response.get("report")
+        if not isinstance(raw_report, dict) or not raw_report:
+            continue
+        report = govern_phase2_report(
+            raw_report,
+            recorded_at=saved_at,
+        )
+        grouped.setdefault(
+            (scope["symbol"], scope["timeframe"], scope["signal"]),
+            [],
+        ).append(
+            {
+                "job_id": row.job_id,
+                "saved_at": saved_at,
+                "scope": scope,
+                "report": report,
+            }
+        )
+
+    records = []
+    for items in grouped.values():
+        latest = items[0]
+        previous = items[1] if len(items) > 1 else None
+        records.append(
+            _walk_forward_scope_summary_record(latest, previous, len(items))
+        )
+    records.sort(key=lambda item: item.get("saved_at") or "", reverse=True)
+    return records[:record_limit]
 
 
 def create_automatic_walk_forward_job(
@@ -287,6 +401,71 @@ def _record(record):
         "response": _load_json(record.response_json, None),
         "error": record.error_message,
     }
+
+
+def _walk_forward_scope_summary_record(latest, previous, sample_count):
+    latest_report = dict(latest.get("report") or {})
+    previous_report = dict((previous or {}).get("report") or {})
+    latest_metrics = dict(latest_report.get("derived_metrics") or {})
+    previous_metrics = dict(previous_report.get("derived_metrics") or {})
+    job_id = latest.get("job_id")
+    return {
+        "artifact_id": f"automatic_{job_id}",
+        "job_id": job_id,
+        "source": "automatic_walk_forward_database_v1",
+        "saved_at": latest.get("saved_at"),
+        "scope": dict(latest.get("scope") or {}),
+        "overall_status": latest_report.get("overall_status"),
+        "architecture_gate_status": dict(
+            latest_report.get("architecture_gate") or {}
+        ).get("status"),
+        "evidence_status": latest_report.get("evidence_status"),
+        "promotion_allowed": latest_report.get("promotion_allowed", False),
+        "promotion_status": latest_report.get("promotion_status", "BLOCKED_R0"),
+        "json_path": None,
+        "markdown_path": None,
+        "exists": True,
+        "sample_count": int(sample_count),
+        "previous_saved_at": previous.get("saved_at") if previous else None,
+        "status_change": _walk_forward_status_change(
+            latest_report.get("overall_status"),
+            previous_report.get("overall_status"),
+        ),
+        "drift": {
+            name: _walk_forward_delta(
+                latest_metrics.get(name),
+                previous_metrics.get(name),
+            )
+            for name in (
+                "out_of_sample_total_return_percent",
+                "out_of_sample_profit_factor",
+                "out_of_sample_win_rate",
+                "out_of_sample_max_drawdown_percent",
+                "out_of_sample_payoff_ratio",
+            )
+        },
+        "latest_metrics": latest_metrics,
+        "previous_metrics": previous_metrics if previous else None,
+    }
+
+
+def _walk_forward_delta(current, previous):
+    try:
+        if current is None or previous is None:
+            return None
+        return round(float(current) - float(previous), 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def _walk_forward_status_change(current, previous):
+    current_value = str(current or "")
+    previous_value = str(previous or "")
+    if not previous_value:
+        return "FIRST_SAMPLE"
+    if current_value == previous_value:
+        return "UNCHANGED"
+    return f"{previous_value}_TO_{current_value}"
 
 
 def _stale_job_reason(record, now):

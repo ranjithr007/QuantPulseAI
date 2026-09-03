@@ -205,6 +205,61 @@ def test_latest_automatic_scope_is_pending_before_first_worker_run(monkeypatch, 
     assert response.json()["response"] is None
 
 
+def test_completed_automatic_jobs_feed_cross_scope_summary(monkeypatch, tmp_path):
+    _client(monkeypatch, tmp_path)
+    first_at = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+
+    def response(status, total_return, profit_factor):
+        return {
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "signal": "LONG",
+            "result": {"engine_version": "walk_forward_v1"},
+            "report": {
+                "overall_status": status,
+                "architecture_gate": {"status": status},
+                "derived_metrics": {
+                    "out_of_sample_total_return_percent": total_return,
+                    "out_of_sample_profit_factor": profit_factor,
+                },
+            },
+        }
+
+    first, _ = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "BTCUSDT", "timeframe": "1h", "signal": "LONG"},
+        now=first_at,
+    )
+    walk_forward_jobs.complete_walk_forward_job(
+        first["job_id"], response("FAIL", -2.0, 0.8), now=first_at
+    )
+    second, _ = walk_forward_jobs.create_walk_forward_job(
+        {"symbol": "BTCUSDT", "timeframe": "1h", "signal": "LONG"},
+        now=first_at + timedelta(minutes=6),
+    )
+    walk_forward_jobs.complete_walk_forward_job(
+        second["job_id"],
+        response("PASS", 3.0, 1.2),
+        now=first_at + timedelta(minutes=6),
+    )
+
+    records = walk_forward_jobs.summarize_completed_walk_forward_jobs(
+        signal="LONG",
+        limit=10,
+    )
+
+    assert len(records) == 1
+    assert records[0]["source"] == "automatic_walk_forward_database_v1"
+    assert records[0]["scope"] == {
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "signal": "LONG",
+    }
+    assert records[0]["sample_count"] == 2
+    assert records[0]["status_change"] == "FAIL_TO_PASS"
+    assert records[0]["drift"]["out_of_sample_total_return_percent"] == 5.0
+    assert records[0]["drift"]["out_of_sample_profit_factor"] == 0.4
+
+
 def test_automatic_scheduler_queues_fresh_directional_scope_once(monkeypatch, tmp_path):
     engine = create_engine(
         f"sqlite:///{(tmp_path / 'automatic_walk_forward.sqlite').as_posix()}",

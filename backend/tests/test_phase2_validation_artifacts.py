@@ -315,9 +315,25 @@ def test_phase2_summary_route_returns_records(monkeypatch):
     monkeypatch.setattr(
         backtest_api,
         "summarize_phase2_validation_artifacts",
-        lambda **kwargs: [{"artifact_id": "dogeusdt_1h_long_20260708_110000", "sample_count": 2}],
+        lambda **kwargs: [
+            {
+                "artifact_id": "dogeusdt_1h_long_20260708_110000",
+                "saved_at": "2026-07-08T11:00:00+00:00",
+                "scope": {
+                    "symbol": "DOGEUSDT",
+                    "timeframe": "1h",
+                    "signal": "LONG",
+                },
+                "sample_count": 2,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        backtest_api,
+        "summarize_completed_walk_forward_jobs",
+        lambda **kwargs: [],
     )
 
     payload = backtest_api.phase2_validation_summary(signal="LONG", limit=10)
-    assert payload["source"] == "phase2_validation_summary_v1"
+    assert payload["source"] == "phase2_validation_summary_v2_database"
     assert payload["count"] == 1
