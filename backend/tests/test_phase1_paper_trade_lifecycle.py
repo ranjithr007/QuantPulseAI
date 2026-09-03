@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -814,6 +815,19 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
 
         self.assertEqual("QUEUE_PENDING", status)
         self.assertIn("live READY", next_action)
+
+    def test_lifecycle_queue_excludes_closed_and_invalidated_plan_history(self):
+        from app.api.v1.paper_trade_api import _phase2_open_trade_plans
+
+        plans = [
+            SimpleNamespace(id=1, status="OPEN"),
+            SimpleNamespace(id=2, status="CLOSED", result="INVALIDATED"),
+            SimpleNamespace(id=3, status="CLOSED", result="STALE_AFTER_CLOSE"),
+        ]
+
+        queued = _phase2_open_trade_plans(plans)
+
+        self.assertEqual([1], [item.id for item in queued])
 
 
 if __name__ == "__main__":

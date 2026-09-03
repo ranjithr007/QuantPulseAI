@@ -415,6 +415,7 @@ def get_phase2_lifecycle_funnel(
             trade_query = trade_query.filter(PaperTrade.symbol == normalized_symbol)
 
         plans = _official_timeframe_records(plan_query.all())
+        open_plans = _phase2_open_trade_plans(plans)
         paper_trades = _official_timeframe_records(trade_query.all())
         _, candidates = build_paper_trade_candidates(
             db,
@@ -437,7 +438,7 @@ def get_phase2_lifecycle_funnel(
         closed_trades = [item for item in paper_trades if item.status == "CLOSED"]
         status, next_action = _phase2_lifecycle_state(
             opportunity,
-            plans,
+            open_plans,
             approved_candidates,
             eligible_candidates,
             open_trades,
@@ -457,7 +458,7 @@ def get_phase2_lifecycle_funnel(
                     "label": "Current READY",
                     "count": opportunity.get("actionable_ready_count", 0),
                 },
-                {"key": "queued", "label": "Queued plans", "count": len(plans)},
+                {"key": "queued", "label": "Queued plans", "count": len(open_plans)},
                 {"key": "risk_approved", "label": "Risk approved", "count": len(approved_candidates)},
                 {"key": "executor_ready", "label": "Executor ready", "count": len(eligible_candidates)},
                 {"key": "open", "label": "Open trades", "count": len(open_trades)},
@@ -465,7 +466,8 @@ def get_phase2_lifecycle_funnel(
             ],
             "current": {
                 "actionable_ready": opportunity.get("actionable_ready_count", 0),
-                "open_plans": sum(1 for item in plans if item.status == "OPEN"),
+                "open_plans": len(open_plans),
+                "plans_created_24h": len(plans),
                 "candidate_count": len(candidates),
                 "eligible_candidates": len(eligible_candidates),
                 "open_trades": len(open_trades),
@@ -1996,6 +1998,11 @@ def _phase2_lifecycle_state(
         "WAITING_FOR_READY",
         "Continue scheduled 1h/2h/4h/1d evaluation until a setup is READY.",
     )
+
+
+def _phase2_open_trade_plans(plans):
+    """Return the current queue, excluding closed or invalidated history."""
+    return [item for item in plans or [] if item.status == "OPEN"]
 
 
 def _build_phase2_rolling_window(db, symbol, days):
