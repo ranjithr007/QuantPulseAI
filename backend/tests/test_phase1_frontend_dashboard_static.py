@@ -328,6 +328,9 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         dashboard_data = (
             FRONTEND_ROOT / "src" / "hooks" / "useDashboardData.jsx"
         ).read_text(encoding="utf-8")
+        dashboard_transforms = (
+            FRONTEND_ROOT / "src" / "hooks" / "dashboardTransforms.js"
+        ).read_text(encoding="utf-8")
         notifications = (
             FRONTEND_ROOT / "src" / "components" / "NotificationCenter.jsx"
         ).read_text(encoding="utf-8")
@@ -342,8 +345,13 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('"/backtest/walk-forward/latest"', dashboard_api)
         self.assertNotIn('"/backtest/walk-forward/jobs",\n    {\n      symbol', dashboard_api)
         self.assertIn("pageNeedsSignalBatch(activePage)", dashboard_data)
-        self.assertIn('strategies: { signals: false }', dashboard_api)
-        self.assertIn('pnl: { paper: true, paperCandidates: false, signals: false }', dashboard_api)
+        self.assertIn('strategies: { watchlist: true, signals: false }', dashboard_api)
+        self.assertIn(
+            'pnl: { watchlist: true, paper: true, paperCandidates: false, signals: false }',
+            dashboard_api,
+        )
+        self.assertIn("buildWatchlistSignal", dashboard_data)
+        self.assertIn("persisted_core_signal_snapshot", dashboard_transforms)
         self.assertIn('"/notifications/unread-count"', dashboard_api)
         self.assertIn("if (!open) return undefined", notifications)
         self.assertIn("Automatic worker", backtest)

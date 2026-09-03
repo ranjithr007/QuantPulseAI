@@ -4,7 +4,6 @@ export function buildSignalRow(symbol, signal, watchlist) {
   const side = signalType(signal);
   const actionable = side !== "WAIT";
   const tradePlan = side === "WAIT" ? {} : signal?.trade_plan || {};
-  const watchRow = (watchlist?.records || []).find((item) => item.symbol === symbol);
   const invalidation = signalInvalidationReason(signal);
   const directional = directionalSplit(signal, signalDirectionHint(signal));
   const probability = signal?.probability || {};
@@ -367,6 +366,39 @@ export function safeNumber(value, fallback = 0) {
 
 export function dateValue(value) {
   return timestampMillis(value);
+}
+
+export function buildWatchlistSignal(watchRow) {
+  if (!watchRow || typeof watchRow !== "object") return null;
+
+  const status = String(watchRow.status || "WAIT").toUpperCase();
+  const side = String(watchRow.side || "").toUpperCase();
+  const signal = status === "READY" && ["LONG", "SHORT"].includes(side)
+    ? side
+    : "WAIT";
+  const tradePlan = status === "READY"
+    ? {
+        entry: watchRow.entry ?? null,
+        stop_loss: watchRow.stop_loss ?? null,
+        target1: watchRow.target1 ?? null,
+        target2: watchRow.target2 ?? null,
+        risk_reward: watchRow.risk_reward ?? null,
+      }
+    : null;
+
+  return {
+    symbol: watchRow.symbol,
+    timeframe: watchRow.entry_timeframe || null,
+    source: "persisted_core_signal_snapshot",
+    status: status === "READY" ? "OK" : status,
+    signal,
+    bias: watchRow.entry_bias || watchRow.overall_bias || "WAIT",
+    confidence: safeNumber(watchRow.confidence, 0),
+    score: safeNumber(watchRow.entry_score, 0),
+    message: watchRow.reason || watchRow.eligibility_reason || "Scheduled signal snapshot",
+    reasons: [watchRow.reason || watchRow.eligibility_reason].filter(Boolean),
+    trade_plan: tradePlan,
+  };
 }
 
 function buildConfidenceBreakdown(signal, diagnostics, aiScores, selectedOrderflow, selectedSmc) {

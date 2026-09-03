@@ -18,15 +18,15 @@ const PAGE_DATA_NEEDS = {
   dashboard: { watchlist: true, paper: true, paperCandidates: false, risk: true, signals: true },
   "market-scan": { watchlist: true, paper: true, risk: true, signals: true },
   signals: { watchlist: true, signals: true },
-  "market-trend": { signals: false },
+  "market-trend": { watchlist: true, signals: false },
   "market-move": { signals: true },
-  strategies: { signals: false },
+  strategies: { watchlist: true, signals: false },
   "coin-details": { signals: true },
   "risk-controls": { paper: true, paperCandidates: false, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },
   // Executor candidates are not part of positions, wallet totals, charts, or
   // paginated history, so they must not delay the authoritative PNL ledger.
-  pnl: { paper: true, paperCandidates: false, signals: false },
+  pnl: { watchlist: true, paper: true, paperCandidates: false, signals: false },
   backtest: { signals: true },
   rotation: { watchlist: true, signals: true },
   "rs-ranking": { watchlist: true, signals: true },

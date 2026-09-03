@@ -16,6 +16,7 @@ import {
   buildGroupPnL,
   buildSelectedDetail,
   buildSignalRow,
+  buildWatchlistSignal,
   calculateMaxDrawdown,
   dateValue,
   estimatePnlPercent,
@@ -696,12 +697,25 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const signalsBySymbol = useMemo(
     () =>
       Object.fromEntries(
-        symbols.map((symbol) => [
-          symbol,
-          withLiveMarketPrice(data.signalsBySymbol?.[symbol] || null, liveMarket[symbol]),
-        ])
+        symbols.map((symbol) => {
+          const current = data.signalsBySymbol?.[symbol] || null;
+          const hasDecision = Boolean(
+            current?.signal || current?.bias || current?.confidence !== undefined
+          );
+          const watchRow = (data.watchlist?.records || []).find(
+            (item) => String(item?.symbol || "").toUpperCase() === symbol
+          );
+          const fallback = hasDecision ? null : buildWatchlistSignal(watchRow);
+          return [
+            symbol,
+            withLiveMarketPrice(
+              fallback ? { ...fallback, ...(current || {}) } : current,
+              liveMarket[symbol]
+            ),
+          ];
+        })
       ),
-    [symbols, data.signalsBySymbol, liveMarket]
+    [symbols, data.signalsBySymbol, data.watchlist, liveMarket]
   );
   const selectedSourceSignal = matchesSelectedSignal(data.selected.signal, view)
     ? data.selected.signal
