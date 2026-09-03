@@ -2,6 +2,7 @@ from datetime import datetime
 from unittest.mock import Mock, patch
 
 from app.api.v1.paper_trade_api import record_phase2_evidence_checkpoint
+from app.api.v1.paper_trade_api import _build_phase2_checkpoint_measurement
 from app.jobs.deterministic_pipeline_job import (
     ALWAYS_RUN_SAFETY_STAGES,
     NON_BLOCKING_STRATEGY_STAGES,
@@ -73,6 +74,36 @@ def test_checkpoint_writer_persists_new_daily_evidence():
     assert event["blocked"] is False
     assert event["details"] == checkpoint
     assert event["observed_at"] == NOW
+
+
+def test_checkpoint_measurement_avoids_per_trade_context_queries():
+    db = Mock()
+    repo = Mock()
+    trades = [Mock(), Mock()]
+    repo.all_trades.return_value = trades
+    report = {"status": "PENDING", "overall": {"closed_trades": 2}}
+
+    with patch(
+        "app.api.v1.paper_trade_api.PaperTradeRepository",
+        return_value=repo,
+    ), patch(
+        "app.api.v1.paper_trade_api._official_timeframe_records",
+        return_value=trades,
+    ), patch(
+        "app.api.v1.paper_trade_api.build_measurement_report",
+        return_value=report,
+    ) as build, patch(
+        "app.api.v1.paper_trade_api.attach_scenario_context",
+    ) as attach_scenarios, patch(
+        "app.api.v1.paper_trade_api.attach_regime_outcome_context",
+    ) as attach_regimes:
+        result = _build_phase2_checkpoint_measurement(db)
+
+    assert result == report
+    repo.all_trades.assert_called_once_with(db)
+    build.assert_called_once()
+    attach_scenarios.assert_not_called()
+    attach_regimes.assert_not_called()
 
 
 def test_worker_records_daily_checkpoint_with_explicit_utc_date():

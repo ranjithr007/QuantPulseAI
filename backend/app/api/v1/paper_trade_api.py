@@ -2405,10 +2405,7 @@ def _build_phase2_evidence_checkpoint(db, checkpoint_date):
     )
     recovery_outcomes = Counter(item["status"] for item in recovery_records)
 
-    trades = _official_timeframe_records(PaperTradeRepository().all_trades(db))
-    attach_scenario_context(db, trades)
-    attach_regime_outcome_context(db, trades)
-    measurement = build_measurement_report(trades, gates=MeasurementGates())
+    measurement = _build_phase2_checkpoint_measurement(db)
     overall = measurement.get("overall") or {}
     coverage = opportunity.get("coverage") or {}
 
@@ -2459,6 +2456,17 @@ def _build_phase2_evidence_checkpoint(db, checkpoint_date):
             "evaluation": measurement.get("evaluation") or {},
         },
     }
+
+
+def _build_phase2_checkpoint_measurement(db):
+    """Build only the aggregate metrics stored by the daily checkpoint.
+
+    Scenario and realized-regime enrichment are intentionally omitted here:
+    the checkpoint does not persist those cohorts, and resolving a regime per
+    closed trade creates an expensive N+1 query on the worker's shared DB.
+    """
+    trades = _official_timeframe_records(PaperTradeRepository().all_trades(db))
+    return build_measurement_report(trades, gates=MeasurementGates())
 
 
 def _paper_trade_payload(paper_trade, fill_profile=None):
