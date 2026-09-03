@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
+  loadNotificationUnreadCount,
   loadNotifications,
   markAllNotificationsRead,
   markNotificationRead,
@@ -18,17 +19,18 @@ import {
 import { formatTimeInIst } from "../utils/formatters";
 
 
-const POLL_INTERVAL_MS = 20000;
+const POLL_INTERVAL_MS = 30000;
 
 
 export default function NotificationCenter({ getPageHref, view }) {
   const [open, setOpen] = useState(false);
   const [records, setRecords] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const refresh = useCallback(async (signal) => {
+  const refreshRecords = useCallback(async (signal) => {
+    setLoading(true);
     try {
       const payload = await loadNotifications({ limit: 50, signal });
       setRecords(Array.isArray(payload?.records) ? payload.records : []);
@@ -40,6 +42,17 @@ export default function NotificationCenter({ getPageHref, view }) {
       }
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const refreshUnreadCount = useCallback(async (signal) => {
+    try {
+      const payload = await loadNotificationUnreadCount({ signal });
+      setUnreadCount(Number(payload?.unreadCount || 0));
+    } catch (requestError) {
+      if (requestError?.name !== "AbortError") {
+        setError("Notifications are temporarily unavailable.");
+      }
     }
   }, []);
 
@@ -58,7 +71,7 @@ export default function NotificationCenter({ getPageHref, view }) {
       if (stopped || inFlight || document.visibilityState === "hidden") return;
       inFlight = true;
       activeController = new AbortController();
-      await refresh(activeController.signal);
+      await refreshUnreadCount(activeController.signal);
       inFlight = false;
       schedule();
     };
@@ -83,7 +96,14 @@ export default function NotificationCenter({ getPageHref, view }) {
       activeController?.abort();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [refresh]);
+  }, [refreshUnreadCount]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const controller = new AbortController();
+    refreshRecords(controller.signal);
+    return () => controller.abort();
+  }, [open, refreshRecords]);
 
   const markRead = useCallback(async (notification) => {
     if (!notification || notification.isRead) return;
@@ -96,9 +116,9 @@ export default function NotificationCenter({ getPageHref, view }) {
     try {
       await markNotificationRead(notification.id);
     } catch {
-      refresh();
+      refreshRecords();
     }
-  }, [refresh]);
+  }, [refreshRecords]);
 
   const markAllRead = useCallback(async () => {
     if (!unreadCount) return;
@@ -108,9 +128,9 @@ export default function NotificationCenter({ getPageHref, view }) {
     try {
       await markAllNotificationsRead();
     } catch {
-      refresh();
+      refreshRecords();
     }
-  }, [refresh, unreadCount]);
+  }, [refreshRecords, unreadCount]);
 
   return (
     <div className="relative shrink-0">

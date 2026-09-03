@@ -110,7 +110,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
       } finally {
         inFlight = false;
         if (!cancelled && document.visibilityState !== "hidden") {
-          timer = window.setTimeout(refreshMeasurement, 15_000);
+          timer = window.setTimeout(refreshMeasurement, 60_000);
         }
       }
     }
@@ -144,7 +144,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
     let timer = null;
     let inFlight = false;
 
-    async function refreshOpportunities() {
+    async function refreshOpportunities(includeDetails = false) {
       if (!symbol) {
         setOpportunities(null);
         setLifecycleFunnel(null);
@@ -171,7 +171,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
             request: loadPaperTradeOpportunities({ sinceHours: 24, signal: controller.signal }),
             apply: setOpportunities,
           },
-          {
+          ...(includeDetails ? [{
             label: "Lifecycle funnel",
             request: loadPaperTradeLifecycleFunnel({ sinceHours: 24, signal: controller.signal }),
             apply: setLifecycleFunnel,
@@ -190,7 +190,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
             label: "Daily checkpoints",
             request: loadPhase2EvidenceCheckpoints({ limit: 30, signal: controller.signal }),
             apply: setDailyCheckpoints,
-          },
+          }] : []),
         ];
         const results = await Promise.allSettled(
           requests.map((item) =>
@@ -238,7 +238,10 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
         inFlight = false;
         if (!cancelled) setOpportunityLoading(false);
         if (!cancelled && document.visibilityState !== "hidden") {
-          timer = window.setTimeout(refreshOpportunities, 60_000);
+          timer = window.setTimeout(
+            () => refreshOpportunities(true),
+            includeDetails ? 5 * 60_000 : 15_000
+          );
         }
       }
     }
@@ -252,10 +255,10 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
       }
       if (timer) window.clearTimeout(timer);
       timer = null;
-      refreshOpportunities();
+      refreshOpportunities(false);
     }
 
-    refreshOpportunities();
+    refreshOpportunities(false);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {

@@ -11,7 +11,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import { loadStrategySummary } from "../hooks/dashboardApi";
+import { loadStrategyLedger, loadStrategySummary } from "../hooks/dashboardApi";
 import { formatPercent, formatSigned, formatTimeInIst } from "../utils/formatters";
 
 const STRATEGY_GRID_PAGE_SIZE = 5;
@@ -19,7 +19,9 @@ const STRATEGY_GRID_PAGE_SIZE = 5;
 export default function StrategiesPage() {
   const [payload, setPayload] = useState({ records: [] });
   const [loading, setLoading] = useState(true);
+  const [ledgerLoading, setLedgerLoading] = useState(true);
   const [error, setError] = useState("");
+  const [ledgerError, setLedgerError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const records = payload?.records || [];
   const initialLoading = loading && !records.length;
@@ -28,19 +30,41 @@ export default function StrategiesPage() {
     const controller = new AbortController();
     let active = true;
     setLoading(true);
+    setLedgerLoading(true);
     setError("");
-    loadStrategySummary({ signal: controller.signal })
-      .then((response) => {
-        if (active) setPayload(response);
-      })
-      .catch((requestError) => {
+    setLedgerError("");
+
+    async function loadPage() {
+      try {
+        const response = await loadStrategySummary({
+          includeLedger: false,
+          signal: controller.signal,
+        });
+        if (!active) return;
+        setPayload((current) => preserveLoadedLedger(response, current));
+        setLoading(false);
+
+        try {
+          const ledger = await loadStrategyLedger({ signal: controller.signal });
+          if (active) setPayload((current) => mergeStrategyLedger(current, ledger));
+        } catch (requestError) {
+          if (active && requestError?.name !== "AbortError") {
+            setLedgerError(requestError?.message || "Strategy Paper history is unavailable");
+          }
+        } finally {
+          if (active) setLedgerLoading(false);
+        }
+      } catch (requestError) {
         if (active && requestError?.name !== "AbortError") {
           setError(requestError?.message || "Strategy performance is unavailable");
         }
-      })
-      .finally(() => {
+        if (active) setLedgerLoading(false);
+      } finally {
         if (active) setLoading(false);
-      });
+      }
+    }
+
+    loadPage();
     return () => {
       active = false;
       controller.abort();
@@ -74,6 +98,11 @@ export default function StrategiesPage() {
             <span>{error}{records.length ? " Showing the last successful strategy snapshot." : ""}</span>
             <button type="button" onClick={() => setRefreshKey((value) => value + 1)} className="self-start rounded-md border border-rose-300/30 px-2.5 py-1 text-xs font-semibold hover:bg-rose-400/10 sm:self-auto">Retry</button>
           </div>
+          ) : null}
+        {ledgerError ? (
+          <div role="status" className="mt-3 rounded-lg border border-amber-400/20 bg-amber-500/10 p-3 text-sm text-amber-800">
+            Current strategy decisions are available, but the Strategy Paper wallet and history could not refresh: {ledgerError}
+          </div>
         ) : null}
         <ComparisonBanner comparison={payload?.comparison} />
         <div className="mt-4 space-y-4">
@@ -82,7 +111,13 @@ export default function StrategiesPage() {
               Loading governed paper strategies…
             </div>
           ) : null}
-          {records.map((strategy) => <StrategyPanel key={`${strategy.id}:${strategy.version}`} strategy={strategy} />)}
+          {records.map((strategy) => (
+            <StrategyPanel
+              key={`${strategy.id}:${strategy.version}`}
+              strategy={strategy}
+              ledgerLoading={ledgerLoading && strategy.ledger_loaded === false}
+            />
+          ))}
           {!loading && !error && !records.length ? (
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-8 text-center text-sm text-slate-400">No governed paper strategies are registered.</div>
           ) : null}
@@ -90,6 +125,45 @@ export default function StrategiesPage() {
       </div>
     </section>
   );
+}
+
+function strategyKey(strategy) {
+  return `${strategy?.id || ""}:${strategy?.version || ""}`;
+}
+
+function preserveLoadedLedger(response, current) {
+  const previousByKey = new Map(
+    (current?.records || [])
+      .filter((strategy) => strategy.ledger_loaded)
+      .map((strategy) => [strategyKey(strategy), strategy])
+  );
+  return {
+    ...response,
+    records: (response?.records || []).map((strategy) => {
+      const previous = previousByKey.get(strategyKey(strategy));
+      if (!previous) return strategy;
+      return {
+        ...strategy,
+        ledger_loaded: true,
+        strategy_paper_lifetime_performance: previous.strategy_paper_lifetime_performance,
+        strategy_paper_wallet: previous.strategy_paper_wallet,
+        strategy_paper_history: previous.strategy_paper_history,
+      };
+    }),
+  };
+}
+
+function mergeStrategyLedger(current, ledger) {
+  const ledgerByKey = new Map(
+    (ledger?.records || []).map((strategy) => [strategyKey(strategy), strategy])
+  );
+  return {
+    ...current,
+    records: (current?.records || []).map((strategy) => ({
+      ...strategy,
+      ...(ledgerByKey.get(strategyKey(strategy)) || {}),
+    })),
+  };
 }
 
 function ComparisonBanner({ comparison }) {
@@ -114,7 +188,7 @@ function ComparisonBanner({ comparison }) {
   );
 }
 
-function StrategyPanel({ strategy }) {
+function StrategyPanel({ strategy, ledgerLoading }) {
   const performance = strategy.strategy_paper_performance || strategy.performance || {};
   const officialPerformance = strategy.official_performance || {};
   const wallet = strategy.strategy_paper_wallet || {};
@@ -169,9 +243,9 @@ function StrategyPanel({ strategy }) {
         </div>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <ValueCard label="Strategy capital" value={`₹${number(wallet.initial_capital_inr || 200000, 2)}`} />
-          <ValueCard label="Strategy wallet balance" value={`₹${number(wallet.wallet_balance_inr || 200000, 2)}`} tone={(wallet.realized_pnl_inr || 0) >= 0 ? "emerald" : "rose"} />
-          <ValueCard label="Open Strategy Paper positions" value={wallet.open_position_count || 0} tone="cyan" />
+          <ValueCard label="Strategy capital" value={ledgerLoading ? "Loading…" : `₹${number(wallet.initial_capital_inr || 200000, 2)}`} />
+          <ValueCard label="Strategy wallet balance" value={ledgerLoading ? "Loading…" : `₹${number(wallet.wallet_balance_inr || 200000, 2)}`} tone={(wallet.realized_pnl_inr || 0) >= 0 ? "emerald" : "rose"} />
+          <ValueCard label="Open Strategy Paper positions" value={ledgerLoading ? "Loading…" : wallet.open_position_count || 0} tone="cyan" />
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
@@ -182,13 +256,13 @@ function StrategyPanel({ strategy }) {
         </div>
 
         <CandidateTable candidates={strategy.candidates || []} />
-        <StrategyPaperHistory trades={strategy.strategy_paper_history || []} />
+        <StrategyPaperHistory trades={strategy.strategy_paper_history || []} loading={ledgerLoading} />
       </div>
     </article>
   );
 }
 
-function StrategyPaperHistory({ trades }) {
+function StrategyPaperHistory({ trades, loading = false }) {
   const pagination = usePaginatedRows(trades);
   return (
     <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
@@ -216,7 +290,8 @@ function StrategyPaperHistory({ trades }) {
                 <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(trade.opened_at)}</span></td>
               </tr>
             ))}
-            {!trades.length ? <tr><td colSpan="10" className="px-4 py-8 text-center text-slate-500">No Strategy Paper trades recorded yet.</td></tr> : null}
+            {loading ? <tr><td colSpan="10" className="px-4 py-8 text-center text-slate-500">Loading recent Strategy Paper trades…</td></tr> : null}
+            {!loading && !trades.length ? <tr><td colSpan="10" className="px-4 py-8 text-center text-slate-500">No Strategy Paper trades recorded yet.</td></tr> : null}
           </tbody>
         </table>
       </div>

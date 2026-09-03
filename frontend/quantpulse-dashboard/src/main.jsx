@@ -65,22 +65,22 @@ const PAGES = [
   "strategies",
 ];
 
-const ROUTE_PRELOADERS = [
-  importDashboardHomePage,
-  importMarketScanPage,
-  importSignalsPage,
-  importMarketTrendPage,
-  importMarketMovePage,
-  importCoinDetailsPage,
-  importRiskControlsPage,
-  importAutoTradingPage,
-  importPnlPage,
-  importBacktestPage,
-  importRotationPage,
-  importRsRankingPage,
-  importStageAnalysisPage,
-  importStrategiesPage,
-];
+const ROUTE_PRELOADERS = {
+  dashboard: importDashboardHomePage,
+  "market-scan": importMarketScanPage,
+  signals: importSignalsPage,
+  "market-trend": importMarketTrendPage,
+  "market-move": importMarketMovePage,
+  "coin-details": importCoinDetailsPage,
+  "risk-controls": importRiskControlsPage,
+  "auto-trading": importAutoTradingPage,
+  pnl: importPnlPage,
+  backtest: importBacktestPage,
+  rotation: importRotationPage,
+  "rs-ranking": importRsRankingPage,
+  "stage-analysis": importStageAnalysisPage,
+  strategies: importStrategiesPage,
+};
 
 function normalizeView(view) {
   return {
@@ -226,22 +226,10 @@ function DashboardApp({ username, onLogout }) {
     }
   }, [routeView, view.symbol, view.timeframe, view.mode]);
 
-  useEffect(() => {
-    const warmRoutes = () => {
-      ROUTE_PRELOADERS.forEach((loadPage) => {
-        loadPage().catch(() => {
-          // Keep route loading resilient even if a prefetch fails.
-        });
-      });
-    };
-
-    if (typeof window.requestIdleCallback === "function") {
-      const id = window.requestIdleCallback(warmRoutes, { timeout: 1500 });
-      return () => window.cancelIdleCallback?.(id);
-    }
-
-    const id = window.setTimeout(warmRoutes, 250);
-    return () => window.clearTimeout(id);
+  const preloadPage = useCallback((page) => {
+    ROUTE_PRELOADERS[page]?.().catch(() => {
+      // Normal lazy route loading remains available when prefetch fails.
+    });
   }, []);
 
   useEffect(() => {
@@ -356,6 +344,7 @@ function DashboardApp({ username, onLogout }) {
       activePage={activePage}
       onPageChange={handlePageChange}
       getPageHref={getPageHref}
+      onPreloadPage={preloadPage}
       view={view}
       filters={filters}
       setView={setView}
@@ -407,6 +396,7 @@ function DashboardLayout({
   activePage,
   onPageChange,
   getPageHref,
+  onPreloadPage,
   view,
   filters,
   setView,
@@ -455,6 +445,7 @@ function DashboardLayout({
         activePage={activePage}
         onPageChange={onPageChange}
         getPageHref={getPageHref}
+        onPreloadPage={onPreloadPage}
         view={view}
         lastRefresh={lastRefresh}
         loading={loading}

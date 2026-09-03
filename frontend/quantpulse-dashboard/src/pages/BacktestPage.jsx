@@ -56,8 +56,7 @@ export default function BacktestPage({
   const [phase2ScopeStatusFilter, setPhase2ScopeStatusFilter] = useState("ALL");
   const [phase2ScopeSort, setPhase2ScopeSort] = useState("LATEST");
   const [phase2ReviewMode, setPhase2ReviewMode] = useState("ALL");
-  const [phase2Enabled, setPhase2Enabled] = useState(false);
-  const [phase2RunToken, setPhase2RunToken] = useState(0);
+  const phase2Enabled = true;
   const [selectedArtifact, setSelectedArtifact] = useState(null);
   const [selectedArtifactError, setSelectedArtifactError] = useState("");
   const [selectedArtifactLoading, setSelectedArtifactLoading] = useState(false);
@@ -294,7 +293,7 @@ export default function BacktestPage({
       cancelled = true;
       controller.abort();
     };
-  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled, phase2RunToken]);
+  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled]);
 
   async function handleExportPhase2Report() {
     if (!view?.symbol || !signalSide || !phase2ReportSummary?.result) {
@@ -382,10 +381,8 @@ export default function BacktestPage({
               <div className="text-sm font-medium text-white">Filtered strategy replay</div>
               <div className="text-xs text-slate-500">
                 {!signalSide
-                  ? "Choose a BUY or SELL signal on the dashboard to run the engine summary."
-                  : !phase2Enabled
-                    ? "Loaded after manual Phase 2 validation so heavy replay jobs do not compete."
-                    : `${view.symbol} ${signalSide} candle-regime filter on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`}
+                  ? "Waiting for an automatic BUY or SELL validation scope."
+                  : `${view.symbol} ${signalSide} candle-regime filter on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -543,23 +540,7 @@ export default function BacktestPage({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setPhase2Enabled(true);
-                  setPhase2RunToken((current) => current + 1);
-                }}
-                disabled={!signalSide || walkForwardLoading || phase2ReportLoading}
-                className="inline-flex items-center rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {walkForwardLoading
-                  ? "Running Phase 2"
-                  : walkForwardError || phase2ReportError
-                    ? "Retry Phase 2"
-                    : walkForwardResult
-                      ? "Refresh Phase 2"
-                      : "Load Phase 2"}
-              </button>
+              <Pill tone="violet">Automatic worker</Pill>
               <Pill tone={signalSide ? "violet" : "slate"}>{signalSide || "WAIT"}</Pill>
               <Pill tone={walkForwardLoading ? "amber" : walkForwardResult?.robustness?.profitable_fold_percent >= 50 ? "emerald" : "rose"}>
                 {walkForwardLoading ? "Running" : walkForwardResult?.fold_count ? `${walkForwardResult.fold_count} folds` : "Idle"}
@@ -568,9 +549,9 @@ export default function BacktestPage({
           </div>
 
           {walkForwardError ? <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{walkForwardError}</div> : null}
-          {!phase2Enabled ? (
+          {!walkForwardResult && !walkForwardError && signalSide ? (
             <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2 text-sm text-slate-400">
-              Phase 2 validation is manual now so heavy walk-forward jobs do not slow live pages. Click <span className="font-medium text-slate-200">Load Phase 2</span> only when you want proof-of-edge analysis.
+              The background worker automatically queues fresh directional scopes. This page reads the latest stored result without starting replay work.
             </div>
           ) : null}
 

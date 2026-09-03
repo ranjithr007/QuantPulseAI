@@ -320,6 +320,35 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("Current 24h coverage is complete", validation_badge)
         self.assertIn("CURRENTLY COMPLETE", validation_badge)
 
+    def test_heavy_page_work_is_progressive_and_worker_managed(self):
+        main = (FRONTEND_ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
+        dashboard_api = (
+            FRONTEND_ROOT / "src" / "hooks" / "dashboardApi.js"
+        ).read_text(encoding="utf-8")
+        dashboard_data = (
+            FRONTEND_ROOT / "src" / "hooks" / "useDashboardData.jsx"
+        ).read_text(encoding="utf-8")
+        notifications = (
+            FRONTEND_ROOT / "src" / "components" / "NotificationCenter.jsx"
+        ).read_text(encoding="utf-8")
+        backtest = (
+            FRONTEND_ROOT / "src" / "pages" / "BacktestPage.jsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("ROUTE_PRELOADERS.forEach", main)
+        self.assertIn("onMouseEnter={() => onPreload?.(item.id)}", (
+            FRONTEND_ROOT / "src" / "components" / "DashboardHeader.jsx"
+        ).read_text(encoding="utf-8"))
+        self.assertIn('"/backtest/walk-forward/latest"', dashboard_api)
+        self.assertNotIn('"/backtest/walk-forward/jobs",\n    {\n      symbol', dashboard_api)
+        self.assertIn("pageNeedsSignalBatch(activePage)", dashboard_data)
+        self.assertIn('strategies: { signals: false }', dashboard_api)
+        self.assertIn('pnl: { paper: true, paperCandidates: false, signals: false }', dashboard_api)
+        self.assertIn('"/notifications/unread-count"', dashboard_api)
+        self.assertIn("if (!open) return undefined", notifications)
+        self.assertIn("Automatic worker", backtest)
+        self.assertNotIn("Load Phase 2", backtest)
+
 
 if __name__ == "__main__":
     unittest.main()

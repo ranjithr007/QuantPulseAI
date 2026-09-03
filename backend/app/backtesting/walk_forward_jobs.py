@@ -103,6 +103,94 @@ def load_walk_forward_job(job_id):
         db.close()
 
 
+def load_latest_walk_forward_job(symbol, timeframe, signal):
+    """Return the newest durable validation for one governed scope."""
+
+    normalized_scope = (
+        str(symbol or "").strip().upper(),
+        str(timeframe or "").strip().lower(),
+        str(signal or "").strip().upper(),
+    )
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(WalkForwardJob)
+            .filter(
+                WalkForwardJob.parameters_json.contains(
+                    f'"symbol": {json.dumps(normalized_scope[0])}'
+                ),
+                WalkForwardJob.parameters_json.contains(
+                    f'"timeframe": {json.dumps(normalized_scope[1])}'
+                ),
+                WalkForwardJob.parameters_json.contains(
+                    f'"signal": {json.dumps(normalized_scope[2])}'
+                ),
+            )
+            .order_by(WalkForwardJob.created_at.desc(), WalkForwardJob.job_id.desc())
+            .limit(20)
+            .all()
+        )
+        for row in rows:
+            parameters = _load_json(row.parameters_json, {})
+            scope = (
+                str(parameters.get("symbol") or "").strip().upper(),
+                str(parameters.get("timeframe") or "").strip().lower(),
+                str(parameters.get("signal") or "").strip().upper(),
+            )
+            if scope == normalized_scope:
+                return _record(row)
+        return None
+    finally:
+        db.close()
+
+
+def create_automatic_walk_forward_job(
+    parameters,
+    *,
+    refresh_after_seconds,
+    now=None,
+):
+    """Queue a scope only when its last automatic validation is due.
+
+    A queued/running job is always reused. Completed jobs are reused for the
+    configured cadence, preventing the ten-second worker poll from creating a
+    replay backlog.
+    """
+
+    checked_at = _utc_now(now)
+    canonical = _json(parameters)
+    db = SessionLocal()
+    try:
+        latest = (
+            db.query(WalkForwardJob)
+            .filter(WalkForwardJob.parameters_json == canonical)
+            .order_by(WalkForwardJob.created_at.desc(), WalkForwardJob.job_id.desc())
+            .first()
+        )
+        if latest is not None:
+            stale_reason = _stale_job_reason(latest, checked_at)
+            if stale_reason is not None:
+                latest.status = "FAILED"
+                latest.completed_at = _db_timestamp(checked_at)
+                latest.response_json = None
+                latest.error_message = stale_reason
+                commit_or_rollback(db)
+            elif str(latest.status or "").upper() in {"QUEUED", "RUNNING"}:
+                return _record(latest), False
+            elif str(latest.status or "").upper() == "COMPLETED":
+                anchor = latest.completed_at or latest.created_at
+                age_seconds = max(
+                    0.0,
+                    (checked_at - _utc_now(anchor)).total_seconds(),
+                )
+                if age_seconds < max(1, int(refresh_after_seconds)):
+                    return _record(latest), False
+    finally:
+        db.close()
+
+    return create_walk_forward_job(parameters, now=checked_at)
+
+
 def claim_next_walk_forward_job(*, now=None):
     """Atomically reserve the oldest queued replay for one worker process."""
 

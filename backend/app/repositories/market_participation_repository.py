@@ -5,6 +5,7 @@ from datetime import timezone
 from sqlalchemy import func
 
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
+from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.repositories.point_in_time_snapshot_repository import save_decision_snapshot
 from app.utils.freshness import normalize_timestamp_to_utc
 
@@ -17,6 +18,8 @@ MARKET_PARTICIPATION_TIMEFRAME = "stack"
 class MarketParticipationRepository:
     @staticmethod
     def ensure_table(db):
+        if not USING_SQLITE_FALLBACK and db.get_bind().dialect.name != "sqlite":
+            return
         DecisionSnapshot.__table__.create(bind=db.get_bind(), checkfirst=True)
 
     def save(self, db, payload, *, data_generation_id=None):

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 
 from app.database.sqlserver import Base
 
@@ -58,3 +58,13 @@ class DecisionSnapshot(Base):
     data_generation_id = Column(String(100), index=True, nullable=True)
     snapshot_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+Index(
+    "ix_decision_snapshots_participation_latest",
+    DecisionSnapshot.decision_version,
+    DecisionSnapshot.timeframe,
+    DecisionSnapshot.symbol,
+    DecisionSnapshot.effective_timestamp,
+    DecisionSnapshot.id,
+)

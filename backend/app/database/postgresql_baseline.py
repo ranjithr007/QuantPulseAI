@@ -11,7 +11,7 @@ from app.database import models as _models  # noqa: F401
 
 
 POSTGRESQL_BASELINE_FINGERPRINT = (
-    "10d004c00b35c76c767b6a185a03c28da3242dd564c18937c4b94c1fc3a4ae3f"
+    "5e41a87d3ff5dda26f0236fe5cdcc8955d317145a85c4aac309d3acbb66a1ca6"
 )
 POSTGRESQL_POST_BASELINE_TABLES = frozenset(
     {

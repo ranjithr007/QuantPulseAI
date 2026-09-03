@@ -60,3 +60,29 @@ def test_signal_batch_summary_mode_uses_read_only_builder(monkeypatch):
         ("ETHUSDT", "1h", 7200),
     ]
     assert payload["count"] == 2
+
+
+def test_signal_batch_isolates_one_failed_symbol(monkeypatch):
+    def build_summary(_db, symbol, timeframe, _stale_after_seconds):
+        if symbol == "ETHUSDT":
+            raise RuntimeError("broken synthetic input")
+        return {"symbol": symbol, "timeframe": timeframe, "signal": "BUY"}
+
+    monkeypatch.setattr(signals_api, "prime_latest_candle_cache", lambda *_args: None)
+    monkeypatch.setattr(signals_api, "prime_ai_inputs_cache", lambda *_args: None)
+    monkeypatch.setattr(signals_api, "build_signal_summary_payload", build_summary)
+
+    payload = signals_api.build_signal_batch_payload(
+        object(),
+        ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+        "1h",
+        3900,
+        summary_only=True,
+    )
+
+    assert payload["status"] == "PARTIAL"
+    assert payload["failed_symbols"] == ["ETHUSDT"]
+    assert payload["count"] == 3
+    assert payload["records_by_symbol"]["BTCUSDT"]["signal"] == "BUY"
+    assert payload["records_by_symbol"]["ETHUSDT"]["status"] == "UNAVAILABLE"
+    assert payload["records_by_symbol"]["SOLUSDT"]["signal"] == "BUY"

@@ -25,6 +25,7 @@ from app.backtesting.walk_forward_jobs import complete_walk_forward_job
 from app.backtesting.walk_forward_jobs import create_walk_forward_job
 from app.backtesting.walk_forward_jobs import expire_stale_walk_forward_job
 from app.backtesting.walk_forward_jobs import fail_walk_forward_job
+from app.backtesting.walk_forward_jobs import load_latest_walk_forward_job
 from app.backtesting.walk_forward_jobs import mark_walk_forward_job_running
 from app.backtesting.walk_forward_jobs import public_walk_forward_job
 from app.config import get_settings
@@ -447,6 +448,38 @@ def submit_walk_forward_validation_job(
             parameters,
         )
     return public_walk_forward_job(record)
+
+
+@router.get("/walk-forward/latest")
+def get_latest_walk_forward_validation(
+    symbol: str,
+    signal: str = Query(default="LONG", pattern="^(LONG|SHORT)$"),
+    timeframe: str = Query(default="1h", pattern="^(1h|2h|4h|1d)$"),
+):
+    """Read the latest worker-managed validation without starting web work."""
+
+    record = load_latest_walk_forward_job(symbol, timeframe, signal)
+    if record is None:
+        return {
+            "source": "automatic_walk_forward_latest_v1",
+            "symbol": str(symbol).upper(),
+            "signal": signal,
+            "timeframe": timeframe,
+            "status": "PENDING",
+            "automatic": True,
+            "job": None,
+            "response": None,
+        }
+    return {
+        "source": "automatic_walk_forward_latest_v1",
+        "symbol": str(symbol).upper(),
+        "signal": signal,
+        "timeframe": timeframe,
+        "status": record.get("status"),
+        "automatic": True,
+        "job": public_walk_forward_job(record),
+        "response": record.get("response"),
+    }
 
 
 @router.get("/walk-forward/jobs/{job_id}")

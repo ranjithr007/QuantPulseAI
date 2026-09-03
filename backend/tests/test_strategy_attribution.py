@@ -628,6 +628,27 @@ def test_strategy_summary_aggregates_lifetime_book_but_bounds_history(monkeypatc
         "strategy_paper_history"
     ][-1]["id"]
 
+    summary_without_ledger = strategy_api.get_strategy_summary(
+        strategy_id=CORE_FUSION_STRATEGY_ID,
+        since_days=30,
+        candidate_limit=24,
+        include_ledger=False,
+    )
+    summary_record = summary_without_ledger["records"][0]
+    assert summary_without_ledger["ledger_included"] is False
+    assert summary_record["ledger_loaded"] is False
+    assert summary_record["strategy_paper_history"] == []
+
+    ledger = strategy_api.get_strategy_ledger(
+        strategy_id=CORE_FUSION_STRATEGY_ID,
+        history_limit=20,
+    )
+    ledger_record = ledger["records"][0]
+    assert ledger_record["ledger_loaded"] is True
+    assert ledger_record["strategy_paper_lifetime_performance"]["total_trades"] == 25
+    assert ledger_record["strategy_paper_wallet"]["wallet_balance_inr"] == 204_500.0
+    assert len(ledger_record["strategy_paper_history"]) == 20
+
 
 def test_forward_readiness_requires_performance_not_only_sample_size():
     readiness = strategy_api._forward_test_readiness(

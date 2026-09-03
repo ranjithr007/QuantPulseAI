@@ -1525,18 +1525,43 @@ def build_signal_batch_payload(
     if summary_only:
         prime_latest_candle_cache(db, normalized_symbols, timeframe)
         prime_ai_inputs_cache(db, normalized_symbols, timeframe)
-    records = [
-        builder(db, symbol, timeframe, stale_after_seconds)
-        for symbol in normalized_symbols
-    ]
+    records = []
+    failed_symbols = []
+    for symbol in normalized_symbols:
+        try:
+            records.append(builder(db, symbol, timeframe, stale_after_seconds))
+        except Exception:
+            # A temporary failure for one coin must not blank the complete
+            # cross-symbol scanner. Detailed diagnostics remain available from
+            # the selected-symbol endpoint.
+            safe_rollback(db)
+            failed_symbols.append(symbol)
+            records.append(
+                {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "source": "computed_current_summary",
+                    "status": "UNAVAILABLE",
+                    "data_scope": "timeframe",
+                    "signal": "NO_DATA",
+                    "bias": "NO_DATA",
+                    "confidence": 0,
+                    "score": 0,
+                    "current_price": None,
+                    "trade_plan": None,
+                    "freshness": freshness_status(None, stale_after_seconds),
+                    "reasons": ["Signal inputs are temporarily unavailable for this coin"],
+                }
+            )
 
     return {
         "source": "computed_current_batch",
-        "status": "OK",
+        "status": "PARTIAL" if failed_symbols else "OK",
         "data_scope": "timeframe",
         "timeframe": timeframe,
         "count": len(records),
         "records": records,
+        "failed_symbols": failed_symbols,
         "records_by_symbol": {
             record["symbol"]: record
             for record in records

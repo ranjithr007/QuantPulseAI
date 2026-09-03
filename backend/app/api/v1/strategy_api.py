@@ -25,6 +25,7 @@ def get_strategy_summary(
     strategy_id: str | None = Query(default=None),
     since_days: int = Query(default=30, ge=1, le=3650),
     candidate_limit: int = Query(default=24, ge=1, le=200),
+    include_ledger: bool = True,
 ):
     normalized = str(strategy_id or "").upper() or None
     if normalized and normalized not in STRATEGY_REGISTRY:
@@ -43,7 +44,12 @@ def get_strategy_summary(
             if normalized
             else list(STRATEGY_REGISTRY.values())
         )
-        strategy_data = _load_strategy_data(db, definitions, cutoff)
+        strategy_data = _load_strategy_data(
+            db,
+            definitions,
+            cutoff,
+            include_ledger=include_ledger,
+        )
         records = [
             _strategy_record_from_data(
                 definition,
@@ -59,9 +65,52 @@ def get_strategy_summary(
             "execution_scope": "PAPER_ONLY",
             "since_days": since_days,
             "one_active_trade_per_symbol": True,
+            "ledger_included": include_ledger,
             "strategy_count": len(records),
             "comparison": _shadow_comparison(records),
             "records": records,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/ledger")
+def get_strategy_ledger(
+    strategy_id: str | None = Query(default=None),
+    history_limit: int = Query(default=20, ge=1, le=100),
+):
+    """Return lifetime Strategy Paper wallet and history without blocking summary."""
+
+    normalized = str(strategy_id or "").upper() or None
+    if normalized and normalized not in STRATEGY_REGISTRY:
+        return {
+            "source": "strategy_ledger_v1",
+            "status": "NOT_FOUND",
+            "strategy_id": normalized,
+            "records": [],
+        }
+
+    definitions = (
+        [strategy_definition(normalized)]
+        if normalized
+        else list(STRATEGY_REGISTRY.values())
+    )
+    db = SessionLocal()
+    try:
+        strategy_data = _load_strategy_ledger_data(
+            db,
+            definitions,
+            history_limit=history_limit,
+        )
+        return {
+            "source": "strategy_ledger_v1",
+            "status": "READY",
+            "execution_scope": "PAPER_ONLY",
+            "strategy_count": len(definitions),
+            "records": [
+                _strategy_ledger_record_from_data(definition, strategy_data)
+                for definition in definitions
+            ],
         }
     finally:
         db.close()
@@ -97,10 +146,13 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
     shadow_performance = strategy_data["strategy_paper_performance"].get(
         key, _empty_strategy_performance()
     )
-    strategy_book_performance = strategy_data[
-        "strategy_paper_lifetime_performance"
-    ].get(key, _empty_strategy_performance())
-    strategy_book_history = strategy_data["strategy_paper_history"].get(key, [])
+    ledger_loaded = bool(strategy_data.get("ledger_loaded"))
+    strategy_book_performance = strategy_data.get(
+        "strategy_paper_lifetime_performance", {}
+    ).get(key, _empty_strategy_performance())
+    strategy_book_history = strategy_data.get("strategy_paper_history", {}).get(
+        key, []
+    )
     return {
         **definition,
         "coverage": {
@@ -136,13 +188,14 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
             _strategy_paper_trade_payload(item)
             for item in strategy_book_history
         ],
+        "ledger_loaded": ledger_loaded,
         "official_performance": official_performance,
         "forward_test_readiness": _forward_test_readiness(shadow_performance),
         "candidates": candidates,
     }
 
 
-def _load_strategy_data(db, definitions, cutoff):
+def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
     """Load aggregate coverage plus only the rows needed by visible candidates."""
 
     strategy_ids = [definition["id"] for definition in definitions]
@@ -162,6 +215,7 @@ def _load_strategy_data(db, definitions, cutoff):
             "strategy_paper_performance": {},
             "strategy_paper_lifetime_performance": {},
             "strategy_paper_history": {},
+            "ledger_loaded": include_ledger,
         }
 
     snapshot_count_rows = (
@@ -276,17 +330,19 @@ def _load_strategy_data(db, definitions, cutoff):
         strategy_ids,
         cutoff=cutoff,
     )
-    strategy_paper_lifetime_performance = _load_strategy_performance(
-        db,
-        StrategyShadowTrade,
-        strategy_ids,
-    )
-    strategy_paper_history = _load_recent_strategy_rows(
-        db,
-        StrategyShadowTrade,
-        strategy_ids,
-        per_strategy_limit=20,
-    )
+    if include_ledger:
+        ledger_data = _load_strategy_ledger_data(
+            db,
+            definitions,
+            history_limit=20,
+        )
+        strategy_paper_lifetime_performance = ledger_data[
+            "strategy_paper_lifetime_performance"
+        ]
+        strategy_paper_history = ledger_data["strategy_paper_history"]
+    else:
+        strategy_paper_lifetime_performance = {}
+        strategy_paper_history = {}
 
     return {
         "snapshots": _group_strategy_rows(snapshots),
@@ -315,6 +371,55 @@ def _load_strategy_data(db, definitions, cutoff):
             strategy_paper_lifetime_performance
         ),
         "strategy_paper_history": strategy_paper_history,
+        "ledger_loaded": include_ledger,
+    }
+
+
+def _load_strategy_ledger_data(db, definitions, *, history_limit):
+    strategy_ids = [definition["id"] for definition in definitions]
+    if not strategy_ids:
+        return {
+            "strategy_paper_lifetime_performance": {},
+            "strategy_paper_history": {},
+        }
+    return {
+        "strategy_paper_lifetime_performance": _load_strategy_performance(
+            db,
+            StrategyShadowTrade,
+            strategy_ids,
+        ),
+        "strategy_paper_history": _load_recent_strategy_rows(
+            db,
+            StrategyShadowTrade,
+            strategy_ids,
+            per_strategy_limit=history_limit,
+        ),
+    }
+
+
+def _strategy_ledger_record_from_data(definition, strategy_data):
+    key = (definition["id"], definition["version"])
+    performance = strategy_data["strategy_paper_lifetime_performance"].get(
+        key, _empty_strategy_performance()
+    )
+    history = strategy_data["strategy_paper_history"].get(key, [])
+    return {
+        "id": definition["id"],
+        "version": definition["version"],
+        "ledger_loaded": True,
+        "strategy_paper_lifetime_performance": performance,
+        "strategy_paper_wallet": {
+            "initial_capital_inr": PAPER_CAPITAL_INR,
+            "realized_pnl_inr": performance["net_pnl_inr"],
+            "wallet_balance_inr": round(
+                PAPER_CAPITAL_INR + performance["net_pnl_inr"],
+                2,
+            ),
+            "open_position_count": performance["open_trades"],
+        },
+        "strategy_paper_history": [
+            _strategy_paper_trade_payload(item) for item in history
+        ],
     }
 
 

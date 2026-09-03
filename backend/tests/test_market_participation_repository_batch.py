@@ -45,6 +45,22 @@ def test_latest_for_symbols_returns_one_latest_row_per_symbol():
         engine.dispose()
 
 
+def test_market_participation_latest_lookup_has_composite_index():
+    index = next(
+        item
+        for item in DecisionSnapshot.__table__.indexes
+        if item.name == "ix_decision_snapshots_participation_latest"
+    )
+
+    assert [column.name for column in index.columns] == [
+        "decision_version",
+        "timeframe",
+        "symbol",
+        "effective_timestamp",
+        "id",
+    ]
+
+
 def _snapshot(symbol, timestamp, confidence, *, decision_version=None):
     return DecisionSnapshot(
         symbol=symbol,

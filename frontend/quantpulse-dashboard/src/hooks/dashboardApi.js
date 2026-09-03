@@ -15,23 +15,27 @@ const STALE_AFTER_BY_TIMEFRAME = {
   "1d": (24 * 60 + 25) * 60,
 };
 const PAGE_DATA_NEEDS = {
-  dashboard: { watchlist: true, paper: true, risk: true, signals: true },
+  dashboard: { watchlist: true, paper: true, paperCandidates: false, risk: true, signals: true },
   "market-scan": { watchlist: true, paper: true, risk: true, signals: true },
-  signals: { watchlist: true, paper: true, signals: true },
-  "market-trend": { signals: true },
+  signals: { watchlist: true, signals: true },
+  "market-trend": { signals: false },
   "market-move": { signals: true },
-  strategies: { signals: true },
+  strategies: { signals: false },
   "coin-details": { signals: true },
-  "risk-controls": { paper: true, risk: true, signals: true },
+  "risk-controls": { paper: true, paperCandidates: false, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },
   // Executor candidates are not part of positions, wallet totals, charts, or
   // paginated history, so they must not delay the authoritative PNL ledger.
-  pnl: { paper: true, paperCandidates: false, signals: true },
+  pnl: { paper: true, paperCandidates: false, signals: false },
   backtest: { signals: true },
   rotation: { watchlist: true, signals: true },
   "rs-ranking": { watchlist: true, signals: true },
   "stage-analysis": { watchlist: true, signals: true },
 };
+
+export function pageNeedsSignalBatch(activePage) {
+  return (PAGE_DATA_NEEDS[activePage] || PAGE_DATA_NEEDS.dashboard).signals !== false;
+}
 const SYMBOL_SCOPED_PAPER_PAGES = new Set([
   "risk-controls",
   "auto-trading",
@@ -72,18 +76,32 @@ export async function loadMarketParticipationTrends({ signal } = {}) {
   return response || { source: "market_participation_trends", count: 0, records: [] };
 }
 
-export async function loadStrategySummary({ strategyId, sinceDays = 30, signal } = {}) {
+export async function loadStrategySummary({ strategyId, sinceDays = 30, includeLedger = true, signal } = {}) {
   const response = await requestJson(
     "/strategies/summary",
     {
       strategy_id: strategyId,
       since_days: sinceDays,
       candidate_limit: 24,
+      include_ledger: includeLedger,
     },
     signal,
     45000
   );
   return response || { source: "strategy_performance_v1", status: "UNAVAILABLE", records: [] };
+}
+
+export async function loadStrategyLedger({ strategyId, historyLimit = 20, signal } = {}) {
+  const response = await requestJson(
+    "/strategies/ledger",
+    {
+      strategy_id: strategyId,
+      history_limit: historyLimit,
+    },
+    signal,
+    45000
+  );
+  return response || { source: "strategy_ledger_v1", status: "UNAVAILABLE", records: [] };
 }
 
 export async function loadNotifications({ unreadOnly = false, limit = 50, signal } = {}) {
@@ -93,6 +111,10 @@ export async function loadNotifications({ unreadOnly = false, limit = 50, signal
     signal,
     15000
   );
+}
+
+export async function loadNotificationUnreadCount({ signal } = {}) {
+  return requestJson("/notifications/unread-count", {}, signal, 10000);
 }
 
 export async function markNotificationRead(notificationId, { signal } = {}) {
@@ -200,24 +222,27 @@ export async function loadBacktestSummary({ symbol, signalSide, timeframe = "1h"
 }
 
 export async function loadWalkForwardSummary({ symbol, signalSide, timeframe = "1h", signal }) {
-  const job = await requestJson(
-    "/backtest/walk-forward/jobs",
+  const latest = await requestJson(
+    "/backtest/walk-forward/latest",
     {
       symbol,
       signal: signalSide,
       timeframe,
-      min_train_trades: 1,
     },
     signal,
-    20000,
-    "POST"
+    20000
   );
-
-  if (!job?.job_id) {
-    throw new Error("Walk-forward job submission did not return a job id");
-  }
-
-  return pollWalkForwardJob(job.job_id, signal);
+  return latest?.response || {
+    source: latest?.source || "automatic_walk_forward_latest_v1",
+    symbol,
+    signal: signalSide,
+    timeframe,
+    result: null,
+    report: null,
+    automatic: true,
+    job_status: latest?.status || "PENDING",
+    job: latest?.job || null,
+  };
 }
 
 export async function loadPaperTradeMeasurement({ symbol, signal } = {}) {

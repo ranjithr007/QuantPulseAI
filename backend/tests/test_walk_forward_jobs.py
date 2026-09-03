@@ -9,7 +9,11 @@ from fastapi.testclient import TestClient
 from app.api.v1 import backtest_api
 from app.backtesting import walk_forward_jobs
 from app.database.models.walk_forward_jobs import WalkForwardJob
+from app.database.models.master_signals import MasterSignal
+from app.database.models.point_in_time_snapshots import DecisionSnapshot
+from app.database.models.symbols import Symbol
 from app.database.sqlserver import Base
+from app.jobs import walk_forward_queue_job
 from app.jobs.walk_forward_queue_job import run_walk_forward_queue_job
 
 
@@ -171,11 +175,197 @@ def test_production_api_queues_replay_for_worker_instead_of_running_it(
     assert completed["response"]["result"]["fold_count"] == 4
     assert len(calls) == 1
 
+    latest = client.get(
+        "/backtest/walk-forward/latest",
+        params={"symbol": "SOLUSDT", "signal": "LONG", "timeframe": "1h"},
+    )
+    assert latest.status_code == 200
+    assert latest.json()["status"] == "COMPLETED"
+    assert latest.json()["automatic"] is True
+    assert latest.json()["response"]["result"]["fold_count"] == 4
+
 
 def test_unknown_walk_forward_job_is_404(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     response = client.get("/backtest/walk-forward/jobs/not-a-valid-id")
     assert response.status_code == 404
+
+
+def test_latest_automatic_scope_is_pending_before_first_worker_run(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.get(
+        "/backtest/walk-forward/latest",
+        params={"symbol": "DOGEUSDT", "signal": "SHORT", "timeframe": "4h"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "PENDING"
+    assert response.json()["automatic"] is True
+    assert response.json()["response"] is None
+
+
+def test_automatic_scheduler_queues_fresh_directional_scope_once(monkeypatch, tmp_path):
+    engine = create_engine(
+        f"sqlite:///{(tmp_path / 'automatic_walk_forward.sqlite').as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Symbol.__table__,
+            MasterSignal.__table__,
+            DecisionSnapshot.__table__,
+            WalkForwardJob.__table__,
+        ],
+    )
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(walk_forward_jobs, "SessionLocal", factory)
+    monkeypatch.setattr(walk_forward_queue_job, "SessionLocal", factory)
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        db.add(Symbol(symbol="BNBUSDT", is_active=True))
+        db.add(
+            MasterSignal(
+                symbol="BNBUSDT",
+                timeframe="1h",
+                signal="BUY",
+                confidence=53,
+                created_at=now.replace(tzinfo=None),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    first = walk_forward_queue_job._enqueue_next_automatic_walk_forward_job(now=now)
+    duplicate = walk_forward_queue_job._enqueue_next_automatic_walk_forward_job(
+        now=now + timedelta(minutes=1)
+    )
+
+    assert first["status"] == "QUEUED"
+    assert first["parameters"]["symbol"] == "BNBUSDT"
+    assert first["parameters"]["timeframe"] == "1h"
+    assert first["parameters"]["signal"] == "LONG"
+    assert duplicate is None
+    engine.dispose()
+
+
+def test_automatic_scheduler_prefers_current_governed_snapshot(monkeypatch, tmp_path):
+    engine = create_engine(
+        f"sqlite:///{(tmp_path / 'automatic_snapshot.sqlite').as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Symbol.__table__,
+            MasterSignal.__table__,
+            DecisionSnapshot.__table__,
+            WalkForwardJob.__table__,
+        ],
+    )
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(walk_forward_jobs, "SessionLocal", factory)
+    monkeypatch.setattr(walk_forward_queue_job, "SessionLocal", factory)
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        db.add(Symbol(symbol="ETHUSDT", is_active=True))
+        db.add(
+            MasterSignal(
+                symbol="ETHUSDT",
+                timeframe="1h",
+                signal="BUY",
+                confidence=80,
+                created_at=now.replace(tzinfo=None),
+            )
+        )
+        db.add(
+            DecisionSnapshot(
+                symbol="ETHUSDT",
+                timeframe="2h",
+                source_timestamp=now.replace(tzinfo=None),
+                effective_timestamp=now.replace(tzinfo=None),
+                feature_version="test",
+                decision_version=walk_forward_queue_job.CORE_SIGNAL_DECISION_VERSION,
+                strategy_id=walk_forward_queue_job.CORE_SIGNAL_STRATEGY_ID,
+                strategy_version="test",
+                quality_state="OK",
+                decision="ELIGIBLE",
+                confidence=55,
+                snapshot_json='{"context":{"side":"SHORT"}}',
+                created_at=now.replace(tzinfo=None),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    queued = walk_forward_queue_job._enqueue_next_automatic_walk_forward_job(now=now)
+
+    assert queued["parameters"]["symbol"] == "ETHUSDT"
+    assert queued["parameters"]["timeframe"] == "2h"
+    assert queued["parameters"]["signal"] == "SHORT"
+    engine.dispose()
+
+
+def test_blocked_governed_snapshot_suppresses_legacy_signal(monkeypatch, tmp_path):
+    engine = create_engine(
+        f"sqlite:///{(tmp_path / 'blocked_snapshot.sqlite').as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Symbol.__table__,
+            MasterSignal.__table__,
+            DecisionSnapshot.__table__,
+            WalkForwardJob.__table__,
+        ],
+    )
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(walk_forward_jobs, "SessionLocal", factory)
+    monkeypatch.setattr(walk_forward_queue_job, "SessionLocal", factory)
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        db.add(Symbol(symbol="SOLUSDT", is_active=True))
+        db.add(
+            MasterSignal(
+                symbol="SOLUSDT",
+                timeframe="1h",
+                signal="BUY",
+                confidence=80,
+                created_at=now.replace(tzinfo=None),
+            )
+        )
+        db.add(
+            DecisionSnapshot(
+                symbol="SOLUSDT",
+                timeframe="1h",
+                source_timestamp=now.replace(tzinfo=None),
+                effective_timestamp=now.replace(tzinfo=None),
+                feature_version="test",
+                decision_version=walk_forward_queue_job.CORE_SIGNAL_DECISION_VERSION,
+                strategy_id=walk_forward_queue_job.CORE_SIGNAL_STRATEGY_ID,
+                strategy_version="test",
+                quality_state="OK",
+                decision="BLOCKED",
+                confidence=80,
+                snapshot_json='{"context":{"side":"LONG"}}',
+                created_at=now.replace(tzinfo=None),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    queued = walk_forward_queue_job._enqueue_next_automatic_walk_forward_job(now=now)
+
+    assert queued is None
+    engine.dispose()
 
 
 def test_abandoned_queued_job_expires_with_retryable_error(monkeypatch, tmp_path):

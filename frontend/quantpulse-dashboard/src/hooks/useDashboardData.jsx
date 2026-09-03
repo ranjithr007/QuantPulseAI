@@ -6,6 +6,7 @@ import {
   loadLiveMarketSnapshot,
   loadLiveMarketStatus,
   loadSignalBatch,
+  pageNeedsSignalBatch,
   startLiveMarketListener,
 } from "./dashboardApi";
 import { deriveRowEligibilityState } from "../utils/eligibility";
@@ -610,20 +611,22 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
           );
         }
 
-        requests.push(
-          loadSignalBatch({ view, symbols, signal: controller.signal })
-            .then((signalBatch) => {
-              if (cancelled || !signalBatch) return;
-              setData((current) => mergeSignalBatchData(current, signalBatch, symbols, view));
-              hasLoadedRef.current = true;
-              setLoading(false);
-            })
-            .catch((exception) => {
-              requestErrors.push(
-                `Signals: ${requestErrorMessage(exception, "request failed")}`
-              );
-            })
-        );
+        if (pageNeedsSignalBatch(activePage)) {
+          requests.push(
+            loadSignalBatch({ view, symbols, signal: controller.signal })
+              .then((signalBatch) => {
+                if (cancelled || !signalBatch) return;
+                setData((current) => mergeSignalBatchData(current, signalBatch, symbols, view));
+                hasLoadedRef.current = true;
+                setLoading(false);
+              })
+              .catch((exception) => {
+                requestErrors.push(
+                  `Signals: ${requestErrorMessage(exception, "request failed")}`
+                );
+              })
+          );
+        }
 
         requests.push(
           loadDashboardBatches({ activePage, view, filters, auto, symbols, signal: controller.signal })
@@ -876,7 +879,10 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const openPositions = useMemo(() => {
     return openTrades
       .map((trade) => {
-        const current = safeNumber(signalsBySymbol[trade.symbol]?.current_price, trade.entry_price);
+        const current = safeNumber(
+          signalsBySymbol[trade.symbol]?.current_price,
+          safeNumber(trade.current_price ?? trade.mark_price, trade.entry_price)
+        );
         const pnl = estimatePnlPercent(trade.side, trade.entry_price, current);
         return {
           ...trade,

@@ -45,6 +45,7 @@ const PAGE_ITEMS = [
 export default function DashboardHeader({
   activePage,
   getPageHref,
+  onPreloadPage,
   view,
   lastRefresh,
   loading,
@@ -77,7 +78,7 @@ export default function DashboardHeader({
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
           {PAGE_ITEMS.map((item) => (
-            <ShellLink key={item.id} item={item} href={getPageHref(item.id)} active={activePage === item.id} />
+            <ShellLink key={item.id} item={item} href={getPageHref(item.id)} active={activePage === item.id} onPreload={onPreloadPage} />
           ))}
         </nav>
 
@@ -170,7 +171,7 @@ export default function DashboardHeader({
         </div>
       </header>
 
-      <MobileNav activePage={activePage} getPageHref={getPageHref} />
+      <MobileNav activePage={activePage} getPageHref={getPageHref} onPreloadPage={onPreloadPage} />
     </>
   );
 }
@@ -185,12 +186,14 @@ function signalPriority(type) {
   return 2;
 }
 
-function ShellLink({ item, href, active }) {
+function ShellLink({ item, href, active, onPreload }) {
   const Icon = item.icon;
 
   return (
     <NavLink
       to={href}
+      onMouseEnter={() => onPreload?.(item.id)}
+      onFocus={() => onPreload?.(item.id)}
       className={clsx(
         "flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition",
         active ? "bg-cyan-400/15 text-[#dff9ff] shadow-sm" : "text-[#b7c3d4] hover:bg-white/5 hover:text-[#f8fafc]"
@@ -331,7 +334,7 @@ function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
   );
 }
 
-function MobileNav({ activePage, getPageHref }) {
+function MobileNav({ activePage, getPageHref, onPreloadPage }) {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-slate-950/95 px-3 py-2 backdrop-blur-xl lg:hidden">
       <div className="flex gap-1 overflow-x-auto scrollbar-none">
@@ -343,6 +346,8 @@ function MobileNav({ activePage, getPageHref }) {
             <NavLink
               key={item.id}
               to={getPageHref(item.id)}
+              onTouchStart={() => onPreloadPage?.(item.id)}
+              onFocus={() => onPreloadPage?.(item.id)}
               className={clsx(
                 "flex min-w-14 shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-1.5 text-[11px] font-medium transition",
                 active ? "bg-cyan-500/15 text-cyan-100" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
