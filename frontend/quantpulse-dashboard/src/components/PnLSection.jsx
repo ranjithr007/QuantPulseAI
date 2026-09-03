@@ -92,6 +92,7 @@ export default function PnLSection({
     openTrades: openPositions,
   });
   const executionPending = eligibilityState.label === "Ready to execute";
+  const eligibilityBlocked = !["Eligible", "Ready to execute"].includes(eligibilityState.label);
   const entryTriggerWaiting = executionState === "WAIT";
   const executor = executorState(selectedPaperTradeCandidate);
 
@@ -131,12 +132,22 @@ export default function PnLSection({
                   ? "is blocked by the paper-trade executor"
                   : executionPending
                   ? "is eligible and waiting for futures paper-trade execution"
+                  : eligibilityBlocked
+                    ? "is not eligible for a new paper trade"
                   : entryTriggerWaiting
                     ? "is waiting for timing confirmation"
-                    : "is execution-ready"}
+                    : executionState
+                      ? "is execution-ready"
+                      : "is eligible under the current paper-trade rules"}
               </div>
-              <Pill tone={executor.tone === "rose" ? "rose" : executionPending ? "amber" : entryTriggerWaiting ? "amber" : "emerald"}>
-                {executor.label === "Executor blocked" ? executor.label : executionPending ? "READY" : executionState || autoDecision?.stackState || "UNKNOWN"}
+              <Pill tone={executor.tone === "rose" || eligibilityBlocked ? "rose" : executionPending || entryTriggerWaiting ? "amber" : "emerald"}>
+                {executor.label === "Executor blocked"
+                  ? executor.label
+                  : executionPending
+                    ? "READY"
+                    : eligibilityBlocked
+                      ? "BLOCKED"
+                      : executionState || autoDecision?.stackState || "ELIGIBLE"}
               </Pill>
             </div>
             <div className="mt-1.5 text-xs leading-5 opacity-90">
@@ -144,7 +155,9 @@ export default function PnLSection({
                 ? executor.note
                 : executionPending
                   ? "The risk gate passed, but no futures paper trade has been opened yet."
-                  : executionReason}
+                  : eligibilityBlocked
+                    ? eligibilityState.note
+                    : executionReason}
             </div>
             {candidateExecutorBlockers(selectedPaperTradeCandidate).length ? (
               <div className="mt-2 flex flex-wrap gap-2">

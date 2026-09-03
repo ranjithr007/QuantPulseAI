@@ -141,8 +141,12 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         scoped_pages = dashboard_api.split(
             "const SYMBOL_SCOPED_PAPER_PAGES = new Set([", 1
         )[1].split("]);", 1)[0]
+        selected_bundle_pages = dashboard_data.split(
+            "function pageNeedsSelectedBundle(activePage)", 1
+        )[1].split("]).has(activePage);", 1)[0]
 
         self.assertNotIn('"pnl"', scoped_pages)
+        self.assertNotIn('"pnl"', selected_bundle_pages)
         self.assertNotIn('include_all: activePage === "pnl" ? true : null', dashboard_api)
         self.assertIn("export async function loadPaperTrades", dashboard_api)
         self.assertIn('status: "CLOSED"', pnl_section)
@@ -174,6 +178,8 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("paperTradeBundle.symbol_filter ?? null", dashboard_data)
         self.assertIn("ledgerScope.symbol_filter !== null", pnl_section)
         self.assertIn("Loading the account-wide paper ledger", pnl_section)
+        self.assertIn("eligibilityBlocked", pnl_section)
+        self.assertIn("is not eligible for a new paper trade", pnl_section)
 
         formatters = (
             FRONTEND_ROOT / "src" / "utils" / "formatters.js"

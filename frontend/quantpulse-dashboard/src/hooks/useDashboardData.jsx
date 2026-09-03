@@ -932,7 +932,6 @@ function pageNeedsSelectedBundle(activePage) {
     "trading-details",
     "risk-controls",
     "auto-trading",
-    "pnl",
     "backtest",
   ]).has(activePage);
 }
