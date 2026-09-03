@@ -228,6 +228,90 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
 
         self.assertEqual("HOLD", result["action"])
 
+    def test_long_stop_moves_one_for_one_with_favorable_price(self):
+        trade = self._staged_trade(
+            side="LONG",
+            entry_price=100.0,
+            initial_stop_loss=99.25,
+            stop_loss=99.25,
+            target1=110.0,
+            target2=120.0,
+        )
+        candle = SimpleNamespace(
+            high_price=102.0,
+            low_price=99.5,
+            close_price=102.0,
+            candle_time=datetime(2026, 8, 10, 1, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual("MOVE_STOP", result["action"])
+        self.assertEqual("FAVORABLE_PRICE_TRAIL", result["reason"])
+        self.assertEqual(2.0, result["favorable_move_points"])
+        self.assertEqual(101.25, result["new_stop_loss"])
+
+    def test_long_stop_does_not_move_back_when_price_retraces(self):
+        trade = self._staged_trade(
+            side="LONG",
+            entry_price=100.0,
+            initial_stop_loss=99.25,
+            stop_loss=101.25,
+            target1=110.0,
+            target2=120.0,
+        )
+        candle = SimpleNamespace(
+            high_price=101.5,
+            low_price=101.3,
+            close_price=101.4,
+            candle_time=datetime(2026, 8, 10, 1, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual("HOLD", result["action"])
+
+    def test_short_stop_moves_one_for_one_with_favorable_price(self):
+        trade = self._staged_trade(
+            entry_price=100.0,
+            initial_stop_loss=100.75,
+            stop_loss=100.75,
+            target1=90.0,
+            target2=80.0,
+        )
+        candle = SimpleNamespace(
+            high_price=100.5,
+            low_price=98.0,
+            close_price=98.0,
+            candle_time=datetime(2026, 8, 10, 1, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual("MOVE_STOP", result["action"])
+        self.assertEqual("FAVORABLE_PRICE_TRAIL", result["reason"])
+        self.assertEqual(2.0, result["favorable_move_points"])
+        self.assertEqual(98.75, result["new_stop_loss"])
+
+    def test_short_stop_does_not_move_back_when_price_retraces(self):
+        trade = self._staged_trade(
+            entry_price=100.0,
+            initial_stop_loss=100.75,
+            stop_loss=98.75,
+            target1=90.0,
+            target2=80.0,
+        )
+        candle = SimpleNamespace(
+            high_price=98.6,
+            low_price=98.4,
+            close_price=98.5,
+            candle_time=datetime(2026, 8, 10, 1, 0),
+        )
+
+        result = evaluate_paper_trade_exit(trade, candle)
+
+        self.assertEqual("HOLD", result["action"])
+
     def test_monitor_persists_target1_stop_at_t2_progress_milestone(self):
         trade = self._staged_trade(
             stop_loss=99.25,

@@ -889,6 +889,11 @@ def run_filtered_replay(
                         "target2_trail_activation_time": paper_exit[
                             "target2_trail_activation_time"
                         ],
+                        "favorable_price_trailing": True,
+                        "final_trailing_stop": round(
+                            paper_exit["exit_stop"],
+                            8,
+                        ),
                         "max_hold_hours": PAPER_MAX_HOLD_HOURS,
                     }
                     if paper_exit is not None
@@ -1063,6 +1068,9 @@ def run_filtered_replay(
                     "target2_trail_trigger_fraction": (
                         PAPER_TARGET2_TRAIL_TRIGGER_FRACTION
                     ),
+                    "favorable_price_trailing": "ONE_FOR_ONE_FROM_INITIAL_STOP",
+                    "trailing_price_source": "CANDLE_CLOSE",
+                    "trailing_activation": "NEXT_CANDLE",
                     "max_hold_hours": PAPER_MAX_HOLD_HOURS,
                 }
                 if config.exit_distance_model == "PAPER_POLICY"
@@ -1111,10 +1119,11 @@ def _paper_policy_exit_path(
 ):
     """Replay the production staged paper exit policy without look-ahead.
 
-    T1 closes 75%, then the remaining 25% is protected.  Stop changes caused
-    by a candle apply from the following candle so one OHLC bar cannot invent
-    a favorable intrabar ordering.  T2 closes the remainder, and positions
-    that survive for 48 hours are closed at that candle's close.
+    T1 closes 75%, then the remaining 25% is protected.  The initial stop also
+    trails one-for-one with favorable close-price movement and never loosens.
+    Stop changes caused by a candle apply from the following candle so one OHLC
+    bar cannot invent a favorable intrabar ordering.  T2 closes the remainder,
+    and positions that survive for 48 hours are closed at that candle's close.
     """
 
     direction = 1 if side == "LONG" else -1
@@ -1203,9 +1212,31 @@ def _paper_policy_exit_path(
                 else favorable_price <= target2_trail_trigger
             )
             if trail_reached:
-                active_stop = target1
+                active_stop = (
+                    max(active_stop, target1)
+                    if side == "LONG"
+                    else min(active_stop, target1)
+                )
                 target2_trail_activated = True
                 target2_trail_activation_time = _time_value(candle)
+
+        close_price = _price(candle, "close_price", "open_price")
+        if close_price is not None:
+            favorable_move = (
+                max(0.0, close_price - entry)
+                if side == "LONG"
+                else max(0.0, entry - close_price)
+            )
+            trailing_stop = (
+                stop + favorable_move
+                if side == "LONG"
+                else stop - favorable_move
+            )
+            active_stop = (
+                max(active_stop, trailing_stop)
+                if side == "LONG"
+                else min(active_stop, trailing_stop)
+            )
 
         duration_minutes = (
             (exit_index - entry_index + 1) * config.timeframe_minutes

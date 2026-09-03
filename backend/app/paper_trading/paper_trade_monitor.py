@@ -148,6 +148,35 @@ def _evaluate_staged_exit(trade, candle, high, low):
                 "low_price": low,
             }
 
+    trailing_stop = _favorable_price_trailing_stop(trade, candle)
+    if trailing_stop is not None:
+        current_stop = float(trade.stop_loss)
+        improves_protection = (
+            trailing_stop > current_stop
+            if str(trade.side).upper() == "LONG"
+            else trailing_stop < current_stop
+        )
+        if improves_protection:
+            return {
+                "paper_trade_id": trade.id,
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "action": "MOVE_STOP",
+                "result": "OPEN",
+                "new_stop_loss": trailing_stop,
+                "reason": "FAVORABLE_PRICE_TRAIL",
+                "favorable_move_points": round(
+                    abs(
+                        float(getattr(candle, "close_price"))
+                        - float(trade.entry_price)
+                    ),
+                    _price_precision(trade.entry_price),
+                ),
+                "candle_time": candle.candle_time,
+                "high_price": high,
+                "low_price": low,
+            }
+
     if _maximum_hold_reached(trade, candle):
         return _time_exit_decision(trade, candle)
 
@@ -178,6 +207,36 @@ def _stop_trigger_price(trade, candle, high, low):
 def _target1_fraction(trade):
     persisted = getattr(trade, "target1_fraction", None)
     return float(PAPER_TARGET1_FRACTION if persisted is None else persisted)
+
+
+def _favorable_price_trailing_stop(trade, candle):
+    """Move the original stop one-for-one with favorable observed price movement."""
+    initial_stop = getattr(trade, "initial_stop_loss", None)
+    close_price = getattr(candle, "close_price", None)
+    if initial_stop is None or close_price is None:
+        return None
+
+    entry = float(trade.entry_price)
+    close = float(close_price)
+    initial = float(initial_stop)
+    precision = _price_precision(entry)
+    if str(trade.side).upper() == "LONG":
+        favorable_move = max(0.0, close - entry)
+        return round(initial + favorable_move, precision)
+
+    favorable_move = max(0.0, entry - close)
+    return round(initial - favorable_move, precision)
+
+
+def _price_precision(price):
+    price = abs(float(price))
+    if price < 1:
+        return 6
+    if price < 10:
+        return 5
+    if price < 100:
+        return 4
+    return 2
 
 
 def _maximum_hold_reached(trade, candle):

@@ -143,21 +143,20 @@ class PaperTradeRepository:
             if target1_complete and existing_remaining is not None
             else (1.0 - desired_fraction if target1_complete else 1.0)
         )
+        protection_stop = levels["stop_loss"]
         if target1_complete:
-            midpoint_stop = target1_protection_stop(
+            protection_stop = target1_protection_stop(
                 trade.side,
                 trade.entry_price,
                 levels["target1"],
                 _price_precision(trade.entry_price),
             )
-            current_stop = float(getattr(trade, "stop_loss", midpoint_stop))
-            desired_stop = (
-                max(midpoint_stop, current_stop)
-                if str(trade.side).upper() == "LONG"
-                else min(midpoint_stop, current_stop)
-            )
-        else:
-            desired_stop = levels["stop_loss"]
+        current_stop = float(getattr(trade, "stop_loss", protection_stop))
+        desired_stop = (
+            max(protection_stop, current_stop)
+            if str(trade.side).upper() == "LONG"
+            else min(protection_stop, current_stop)
+        )
         values = {
             "exit_policy": PAPER_STAGED_EXIT_POLICY,
             "initial_stop_loss": levels["stop_loss"],

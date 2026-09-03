@@ -301,6 +301,85 @@ def test_paper_policy_target2_progress_trails_remaining_stop_to_t1():
     assert result["exit_stop"] == pytest.approx(101.5)
 
 
+def test_paper_policy_long_stop_trails_favorable_closes_without_lookahead():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=100.5, low_price=99.5, close_price=100.4),
+        _candle(open_price=100.4, high_price=101.0, low_price=100.2, close_price=100.9),
+        _candle(open_price=100.8, high_price=100.8, low_price=100.1, close_price=100.3),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "LONG",
+        100,
+        99.25,
+        101.5,
+        config,
+    )
+
+    assert result["exit_reason"] == "STOP"
+    assert result["exit_index"] == 2
+    assert result["exit_stop"] == pytest.approx(100.15)
+
+
+def test_paper_policy_short_stop_trails_favorable_closes_without_lookahead():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=100.5, low_price=99.5, close_price=99.6),
+        _candle(open_price=99.6, high_price=99.8, low_price=99.0, close_price=99.1),
+        _candle(open_price=99.2, high_price=99.9, low_price=99.2, close_price=99.7),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "SHORT",
+        100,
+        100.75,
+        98.5,
+        config,
+    )
+
+    assert result["exit_reason"] == "STOP"
+    assert result["exit_index"] == 2
+    assert result["exit_stop"] == pytest.approx(99.85)
+
+
+def test_paper_policy_trailing_stop_never_loosens_on_retracement():
+    config = FilteredReplayConfig(
+        exit_distance_model="PAPER_POLICY",
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    candles = [
+        _candle(open_price=100, high_price=100.9, low_price=99.5, close_price=100.8),
+        _candle(open_price=100.5, high_price=100.6, low_price=100.1, close_price=100.4),
+    ]
+
+    result = _paper_policy_exit_path(
+        candles,
+        0,
+        "LONG",
+        100,
+        99.25,
+        101.5,
+        config,
+    )
+
+    assert result["exit_reason"] == "END_OF_DATA"
+    assert result["exit_stop"] == pytest.approx(100.05)
+
+
 def test_paper_policy_closes_at_48_hour_maximum_holding_time():
     config = FilteredReplayConfig(
         exit_distance_model="PAPER_POLICY",

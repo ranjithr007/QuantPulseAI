@@ -219,6 +219,31 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             self.assertEqual(0.5, trade.remaining_position_fraction)
             self.assertEqual(100.75, trade.stop_loss)
 
+    def test_policy_refresh_preserves_a_pre_target1_trailing_stop(self):
+        with self.Session() as db:
+            trade = PaperTrade(
+                symbol="ETHUSDT",
+                side="LONG",
+                entry_price=100.0,
+                stop_loss=101.25,
+                initial_stop_loss=99.25,
+                target1=101.5,
+                target2=102.3,
+                confidence=50.0,
+                entry_timeframe="1h",
+                exit_policy="PAPER_STAGED_EXIT_V2",
+                target1_fraction=0.75,
+                remaining_position_fraction=1.0,
+                status="OPEN",
+                opened_at=datetime.utcnow() - timedelta(hours=1),
+            )
+            db.add(trade)
+            db.commit()
+
+            PaperTradeRepository().ensure_staged_exit_policy(db, trade)
+
+            self.assertEqual(101.25, trade.stop_loss)
+
     def test_candidate_to_fill_to_close_to_pnl(self):
         now = datetime.utcnow().replace(microsecond=0)
         governed = build_trade_plan("LONG", 100.0, 1.0, confidence=80)
