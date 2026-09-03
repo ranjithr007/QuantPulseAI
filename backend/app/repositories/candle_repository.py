@@ -9,6 +9,7 @@ from app.utils.freshness import normalize_timestamp_to_utc
 
 
 FUTURE_CANDLE_TOLERANCE_SECONDS = 60
+MIN_CANONICAL_CANDLE_CANDIDATES = 32
 
 
 def _normalized_candle_time(candle):
@@ -87,12 +88,18 @@ def get_final_candle_series(db, symbol, timeframe, limit=200):
     boundary and when ``is_final`` is true.
     """
 
-    candidate_limit = max(limit * 4, 500)
+    candidate_limit = max(limit * 4, MIN_CANONICAL_CANDLE_CANDIDATES)
     cache = _session_cache(db, "quantpulse_final_candle_series")
     cache_key = (symbol, timeframe, candidate_limit)
 
-    if cache is not None and cache_key in cache:
-        return cache[cache_key][-limit:]
+    cached_series = _cached_candle_series(
+        cache,
+        symbol,
+        timeframe,
+        candidate_limit,
+    )
+    if cached_series is not None:
+        return cached_series[-limit:]
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -229,3 +236,26 @@ def _session_cache(db, key):
         return None
 
     return info.setdefault(key, {})
+
+
+def _cached_candle_series(cache, symbol, timeframe, candidate_limit):
+    if cache is None:
+        return None
+
+    exact = cache.get((symbol, timeframe, candidate_limit))
+    if exact is not None:
+        return exact
+
+    reusable = [
+        (cached_limit, records)
+        for (cached_symbol, cached_timeframe, cached_limit), records in cache.items()
+        if (
+            cached_symbol == symbol
+            and cached_timeframe == timeframe
+            and cached_limit >= candidate_limit
+        )
+    ]
+    if not reusable:
+        return None
+
+    return min(reusable, key=lambda item: item[0])[1]

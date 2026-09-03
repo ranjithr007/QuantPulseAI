@@ -212,6 +212,22 @@ def get_intelligence_bundle(
     try:
         failures = []
 
+        multi_timeframe_context = _bundle_section(
+            db,
+            "multiTimeframeContext",
+            build_multi_timeframe_context,
+            failures,
+            db,
+            symbol,
+            mode=mode,
+            stale_after_seconds=stale_after_seconds,
+        )
+        multi_timeframe_context = (
+            multi_timeframe_context
+            if isinstance(multi_timeframe_context, dict)
+            and "stack" in multi_timeframe_context
+            else None
+        )
         signal = _bundle_section(
             db,
             "signal",
@@ -222,16 +238,18 @@ def get_intelligence_bundle(
             timeframe=timeframe,
             stale_after_seconds=stale_after_seconds,
         )
-        diagnostics = _bundle_section(
-            db,
-            "diagnostics",
-            build_signal_diagnostics_payload,
-            failures,
-            db,
-            symbol,
-            timeframe,
-            stale_after_seconds,
-        )
+        diagnostics = _diagnostics_from_context(multi_timeframe_context, timeframe)
+        if diagnostics is None:
+            diagnostics = _bundle_section(
+                db,
+                "diagnostics",
+                build_signal_diagnostics_payload,
+                failures,
+                db,
+                symbol,
+                timeframe,
+                stale_after_seconds,
+            )
         candles = _bundle_section(
             db,
             "candles",
@@ -289,22 +307,6 @@ def get_intelligence_bundle(
             db,
             symbol,
             stale_after_seconds,
-        )
-        multi_timeframe_context = _bundle_section(
-            db,
-            "multiTimeframeContext",
-            build_multi_timeframe_context,
-            failures,
-            db,
-            symbol,
-            mode=mode,
-            stale_after_seconds=stale_after_seconds,
-        )
-        multi_timeframe_context = (
-            multi_timeframe_context
-            if isinstance(multi_timeframe_context, dict)
-            and "stack" in multi_timeframe_context
-            else None
         )
         multi_timeframe = _bundle_section(
             db,
@@ -405,3 +407,16 @@ def get_intelligence_bundle(
         }
     finally:
         db.close()
+
+
+def _diagnostics_from_context(context, timeframe):
+    if not isinstance(context, dict):
+        return None
+
+    normalized_timeframe = str(timeframe or "").strip().lower()
+    for record in context.get("timeframes") or []:
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("timeframe") or "").strip().lower() == normalized_timeframe:
+            return record
+    return None

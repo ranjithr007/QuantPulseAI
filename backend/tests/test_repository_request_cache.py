@@ -58,6 +58,7 @@ def test_latest_candles_are_loaded_once_per_session():
     class FakeQuery:
         def __init__(self):
             self.all_calls = 0
+            self.limits = []
 
         def filter(self, *args):
             return self
@@ -66,6 +67,7 @@ def test_latest_candles_are_loaded_once_per_session():
             return self
 
         def limit(self, value):
+            self.limits.append(value)
             return self
 
         def all(self):
@@ -88,3 +90,41 @@ def test_latest_candles_are_loaded_once_per_session():
     assert first == [candle]
     assert second == [candle]
     assert db.query_result.all_calls == 2
+    assert db.query_result.limits == [320, 320]
+
+
+def test_latest_candle_uses_a_small_bounded_candidate_window():
+    candle = SimpleNamespace(
+        id=1,
+        candle_time=datetime.now(timezone.utc),
+    )
+
+    class FakeQuery:
+        def __init__(self):
+            self.limits = []
+
+        def filter(self, *args):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def limit(self, value):
+            self.limits.append(value)
+            return self
+
+        def all(self):
+            return [candle]
+
+    class CandleSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.query_result = FakeQuery()
+
+        def query(self, model):
+            return self.query_result
+
+    db = CandleSession()
+
+    assert candle_repository.get_latest_candle(db, "ETHUSDT", "1h") == candle
+    assert db.query_result.limits == [32, 32]

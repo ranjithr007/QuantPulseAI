@@ -78,6 +78,20 @@ def test_intelligence_bundle_uses_session_aware_payload_builders():
     assert source.count("context=multi_timeframe_context") == 3
 
 
+def test_selected_diagnostics_are_reused_from_multi_timeframe_context():
+    selected = {"symbol": "ETHUSDT", "timeframe": "1h", "status": "OK"}
+    context = {
+        "timeframes": [
+            selected,
+            {"symbol": "ETHUSDT", "timeframe": "2h", "status": "OK"},
+        ]
+    }
+
+    assert intelligence_api._diagnostics_from_context(context, "1H") is selected
+    assert intelligence_api._diagnostics_from_context(context, "4h") is None
+    assert intelligence_api._diagnostics_from_context(None, "1h") is None
+
+
 def test_intelligence_as_of_snapshot_endpoint_uses_point_in_time_tables(monkeypatch):
     calls = {}
 
