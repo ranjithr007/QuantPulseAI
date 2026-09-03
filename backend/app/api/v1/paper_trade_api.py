@@ -428,11 +428,8 @@ def get_phase2_lifecycle_funnel(
             if (item.get("risk_decision") or {}).get("decision") == "APPROVE"
         ]
         eligible_candidates = [item for item in candidates if item.get("eligible")]
-        candidate_blocks = Counter(
-            reason
-            for item in candidates
-            for reason in item.get("blocked_reasons") or []
-        )
+        executor_ready_candidates = _phase2_executor_ready_candidates(candidates)
+        candidate_blocks = _phase2_executor_blockers(candidates)
 
         open_trades = [item for item in paper_trades if item.status == "OPEN"]
         closed_trades = [item for item in paper_trades if item.status == "CLOSED"]
@@ -440,7 +437,7 @@ def get_phase2_lifecycle_funnel(
             opportunity,
             open_plans,
             approved_candidates,
-            eligible_candidates,
+            executor_ready_candidates,
             open_trades,
         )
         return {
@@ -460,7 +457,11 @@ def get_phase2_lifecycle_funnel(
                 },
                 {"key": "queued", "label": "Queued plans", "count": len(open_plans)},
                 {"key": "risk_approved", "label": "Risk approved", "count": len(approved_candidates)},
-                {"key": "executor_ready", "label": "Executor ready", "count": len(eligible_candidates)},
+                {
+                    "key": "executor_ready",
+                    "label": "Executor ready",
+                    "count": len(executor_ready_candidates),
+                },
                 {"key": "open", "label": "Open trades", "count": len(open_trades)},
                 {"key": "closed", "label": "Closed trades", "count": len(closed_trades)},
             ],
@@ -470,6 +471,7 @@ def get_phase2_lifecycle_funnel(
                 "plans_created_24h": len(plans),
                 "candidate_count": len(candidates),
                 "eligible_candidates": len(eligible_candidates),
+                "executor_ready_candidates": len(executor_ready_candidates),
                 "open_trades": len(open_trades),
             },
             "blockers": {
@@ -2003,6 +2005,31 @@ def _phase2_lifecycle_state(
 def _phase2_open_trade_plans(plans):
     """Return the current queue, excluding closed or invalidated history."""
     return [item for item in plans or [] if item.status == "OPEN"]
+
+
+def _phase2_executor_ready_candidates(candidates):
+    """Use the executor's post-gate, post-arbitration selection as readiness."""
+    return [
+        item
+        for item in candidates or []
+        if (item.get("arbitration") or {}).get(
+            "selected_for_official_execution"
+        )
+        is True
+    ]
+
+
+def _phase2_executor_blockers(candidates):
+    """Count the complete blockers used by official paper execution."""
+    return Counter(
+        reason
+        for item in candidates or []
+        for reason in (
+            (item.get("arbitration") or {}).get("executor_blockers")
+            or item.get("blocked_reasons")
+            or []
+        )
+    )
 
 
 def _build_phase2_rolling_window(db, symbol, days):

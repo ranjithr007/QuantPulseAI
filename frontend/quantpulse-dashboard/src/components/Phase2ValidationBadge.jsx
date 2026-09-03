@@ -530,6 +530,10 @@ function RollingMetric({ label, value }) {
 function LifecycleFunnel({ funnel }) {
   if (!funnel || funnel.status === "UNAVAILABLE") return null;
 
+  const executorBlockers = Object.entries(funnel.blockers?.executor || {})
+    .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
+    .slice(0, 4);
+
   return (
     <div className="mt-2 rounded-md border border-cyan-400/15 bg-cyan-500/5 px-2 py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -547,6 +551,20 @@ function LifecycleFunnel({ funnel }) {
           </div>
         ))}
       </div>
+      {executorBlockers.length ? (
+        <div className="mt-2 rounded border border-amber-400/15 bg-amber-500/5 px-2 py-1.5">
+          <div className="text-[10px] uppercase tracking-[0.12em] text-amber-300/70">
+            Why approved plans are not executor ready
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {executorBlockers.map(([reason, count]) => (
+              <Pill key={reason} tone="amber">
+                {humanizeIssue(reason)} · {count}
+              </Pill>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -11,6 +11,8 @@ from app.api.v1.paper_trade_api import build_paper_trade_bundle
 from app.api.v1.paper_trade_api import execute_paper_trade_candidates_for_symbol
 from app.api.v1.paper_trade_api import _official_timeframe_records
 from app.api.v1.paper_trade_api import _paper_trade_payload
+from app.api.v1.paper_trade_api import _phase2_executor_blockers
+from app.api.v1.paper_trade_api import _phase2_executor_ready_candidates
 from app.api.v1.paper_trade_api import _phase2_lifecycle_state
 from app.database.models.funding_rates import FundingRate
 from app.database.models.market_candles import MarketCandle
@@ -828,6 +830,67 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         queued = _phase2_open_trade_plans(plans)
 
         self.assertEqual([1], [item.id for item in queued])
+
+    def test_lifecycle_executor_ready_uses_official_arbitration_winner(self):
+        candidates = [
+            {
+                "eligible": True,
+                "arbitration": {
+                    "selected_for_official_execution": True,
+                    "executor_blockers": [],
+                },
+            },
+            {
+                "eligible": True,
+                "arbitration": {
+                    "selected_for_official_execution": False,
+                    "executor_blockers": [],
+                },
+            },
+            {
+                "eligible": True,
+                "arbitration": {
+                    "selected_for_official_execution": False,
+                    "executor_blockers": [
+                        "Strategy is not enabled for official paper execution"
+                    ],
+                },
+            },
+        ]
+
+        ready = _phase2_executor_ready_candidates(candidates)
+
+        self.assertEqual([candidates[0]], ready)
+
+    def test_lifecycle_executor_blockers_include_automation_and_strategy_gates(self):
+        candidates = [
+            {
+                "blocked_reasons": ["Legacy incomplete blocker"],
+                "arbitration": {
+                    "executor_blockers": [
+                        "Active trade already exists for this coin",
+                        "Strategy is not enabled for official paper execution",
+                    ]
+                },
+            },
+            {
+                "blocked_reasons": ["Active trade already exists for this coin"],
+                "arbitration": {
+                    "executor_blockers": [
+                        "Active trade already exists for this coin"
+                    ]
+                },
+            },
+        ]
+
+        blockers = _phase2_executor_blockers(candidates)
+
+        self.assertEqual(2, blockers["Active trade already exists for this coin"])
+        self.assertEqual(
+            1,
+            blockers["Strategy is not enabled for official paper execution"],
+        )
+        self.assertNotIn("Legacy incomplete blocker", blockers)
 
 
 if __name__ == "__main__":
