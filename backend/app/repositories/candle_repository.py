@@ -2,7 +2,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
-from sqlalchemy import true
+from sqlalchemy import func, true
 
 from app.database.models.market_candles import MarketCandle
 from app.utils.freshness import normalize_timestamp_to_utc
@@ -158,6 +158,85 @@ def get_latest_candle(db, symbol, timeframe):
     candles = get_latest_candles(db, symbol, timeframe, limit=1)
 
     return candles[-1] if candles else None
+
+
+def prime_latest_candle_cache(db, symbols, timeframe):
+    """Load the latest canonical candle candidates for many symbols in two queries."""
+    cache = _session_cache(db, "quantpulse_final_candle_series")
+    normalized = sorted({str(symbol).strip().upper() for symbol in symbols or [] if symbol})
+    if cache is None or not normalized:
+        return
+
+    candidate_limit = MIN_CANONICAL_CANDLE_CANDIDATES
+    missing = [
+        symbol
+        for symbol in normalized
+        if _cached_candle_series(cache, symbol, timeframe, candidate_limit) is None
+    ]
+    if not missing:
+        return
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    common_filters = (
+        MarketCandle.symbol.in_(missing),
+        MarketCandle.timeframe == timeframe,
+        MarketCandle.is_final == true(),
+        MarketCandle.close_time <= now,
+    )
+    ranked_by_time = (
+        db.query(
+            MarketCandle.id.label("market_candle_id"),
+            func.row_number()
+            .over(
+                partition_by=MarketCandle.symbol,
+                order_by=MarketCandle.candle_time.desc(),
+            )
+            .label("row_number"),
+        )
+        .filter(*common_filters)
+        .subquery()
+    )
+    ranked_by_insert = (
+        db.query(
+            MarketCandle.id.label("market_candle_id"),
+            func.row_number()
+            .over(
+                partition_by=MarketCandle.symbol,
+                order_by=MarketCandle.id.desc(),
+            )
+            .label("row_number"),
+        )
+        .filter(*common_filters)
+        .subquery()
+    )
+
+    candidates = {}
+    for ranked in (ranked_by_time, ranked_by_insert):
+        rows = (
+            db.query(MarketCandle)
+            .join(ranked, MarketCandle.id == ranked.c.market_candle_id)
+            .filter(ranked.c.row_number <= candidate_limit)
+            .all()
+        )
+        for candle in rows:
+            candidates[getattr(candle, "id", id(candle))] = candle
+
+    cutoff = datetime.now(timezone.utc) + timedelta(
+        seconds=FUTURE_CANDLE_TOLERANCE_SECONDS
+    )
+    by_symbol = {symbol: [] for symbol in missing}
+    for candle in candidates.values():
+        if (
+            _is_final_and_closed(candle, cutoff)
+            and _normalized_candle_time(candle) <= cutoff
+        ):
+            by_symbol.setdefault(candle.symbol, []).append(candle)
+
+    for symbol in missing:
+        cache[(symbol, timeframe, candidate_limit)] = _deduplicate_and_order(
+            by_symbol.get(symbol, []),
+            candidate_limit,
+        )
 
 
 def get_final_candles_after(db, symbol, timeframe, after_timestamp, limit=1000):

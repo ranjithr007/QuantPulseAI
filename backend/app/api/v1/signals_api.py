@@ -37,8 +37,10 @@ from app.repositories.ai_signal_repository import AISignalRepository
 from app.repositories.candle_repository import get_candles_as_of
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.candle_repository import get_latest_candles
+from app.repositories.candle_repository import prime_latest_candle_cache
 from app.repositories.data_quality_event_repository import DataQualityEventRepository
 from app.repositories.intelligence_repository import get_ai_inputs
+from app.repositories.intelligence_repository import prime_ai_inputs_cache
 from app.repositories.master_signal_repository import MasterSignalRepository
 from app.repositories.market_participation_repository import MarketParticipationRepository
 from app.repositories.paper_trade_repository import PaperTradeRepository
@@ -1520,6 +1522,9 @@ def build_signal_batch_payload(
 ):
     normalized_symbols = _normalize_signal_batch_symbols(symbols)
     builder = build_signal_summary_payload if summary_only else build_signal_payload
+    if summary_only:
+        prime_latest_candle_cache(db, normalized_symbols, timeframe)
+        prime_ai_inputs_cache(db, normalized_symbols, timeframe)
     records = [
         builder(db, symbol, timeframe, stale_after_seconds)
         for symbol in normalized_symbols
