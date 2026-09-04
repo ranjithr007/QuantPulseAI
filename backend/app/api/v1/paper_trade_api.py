@@ -119,6 +119,7 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
         window_start=datetime.utcnow() - timedelta(hours=24),
     )
     account_risk = _account_risk_snapshot(db, account_trades)
+    open_trades = _attach_open_trade_price_evidence(open_trades, account_risk)
     paper_wallet = _paper_wallet_snapshot(
         db,
         account_trades,
@@ -1284,6 +1285,25 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         "execution_risk": execution_risk,
         "paper_sizing": paper_sizing,
     }, None
+
+
+def _attach_open_trade_price_evidence(open_trades, account_risk):
+    """Use the same futures mark evidence for PnL display and risk evaluation."""
+
+    current_prices = (account_risk or {}).get("current_prices") or {}
+    price_evidence = (account_risk or {}).get("price_evidence") or {}
+    records = []
+    for trade in open_trades or []:
+        symbol = str(trade.get("symbol") or "").upper()
+        evidence = price_evidence.get(symbol) or {}
+        records.append(
+            {
+                **trade,
+                "current_price": current_prices.get(symbol),
+                "current_price_evidence": evidence,
+            }
+        )
+    return records
 
 
 def _automation_execution_blockers(auto, candidate):

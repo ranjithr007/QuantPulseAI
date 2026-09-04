@@ -643,8 +643,10 @@ function OpenPositionsTable({ openPositions }) {
                   <div>{exitDeadlineLabel(trade)}</div>
                   <div className="mt-0.5 text-[10px] text-slate-500">{exitTimeRemainingLabel(trade)}</div>
                 </td>
-                <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.current_price)}</td>
-                <td className={clsx("px-3 py-2.5 font-medium", trade.unrealized_pnl_percent >= 0 ? "text-emerald-300" : "text-rose-300")}>
+                <td className={clsx("px-3 py-2.5", stopBoundaryCrossed(trade) ? "font-semibold text-rose-600" : "text-slate-300")}>
+                  {formatPrice(trade.current_price)}
+                </td>
+                <td className={clsx("px-3 py-2.5 font-medium", pnlValueTone(trade.unrealized_pnl_percent))}>
                   {formatSigned(trade.unrealized_pnl_percent)}
                 </td>
               </tr>
@@ -684,6 +686,9 @@ function remainingPositionLabel(trade) {
 }
 
 function exitState(trade) {
+  if (stopBoundaryCrossed(trade)) {
+    return { label: "Exit processing", tone: "rose" };
+  }
   if (isStagedExitPolicy(trade)) {
     if (trade.target1_hit_at) {
       return { label: "Awaiting T2", tone: "cyan" };
@@ -694,8 +699,21 @@ function exitState(trade) {
 }
 
 function exitPolicyLabel(trade) {
+  if (stopBoundaryCrossed(trade)) return "Stop crossed; automatic exit pending";
   if (isStagedExitPolicy(trade)) return "T1 closes 75% / protected stop / T2 closes 25%";
   return "Original trade policy";
+}
+
+function stopBoundaryCrossed(trade) {
+  const current = Number(trade?.current_price);
+  const stop = Number(trade?.stop_loss);
+  if (!Number.isFinite(current) || current <= 0 || !Number.isFinite(stop) || stop <= 0) return false;
+  return String(trade?.side || "").toUpperCase() === "SHORT" ? current >= stop : current <= stop;
+}
+
+function pnlValueTone(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "text-slate-400";
+  return Number(value) >= 0 ? "text-emerald-300" : "text-rose-300";
 }
 
 function isStagedExitPolicy(trade) {

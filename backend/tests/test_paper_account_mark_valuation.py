@@ -85,3 +85,46 @@ def test_stale_five_minute_mark_fails_closed_without_entry_fallback(monkeypatch)
     assert snapshot["current_prices"] == {}
     assert snapshot["price_evidence"]["BTCUSDT"]["status"] == "STALE"
     assert snapshot["contributions"] == []
+
+
+def test_open_trade_payload_uses_account_risk_mark_and_evidence():
+    records = paper_trade_api._attach_open_trade_price_evidence(
+        [{"id": 1, "symbol": "btcusdt", "entry_price": 100.0}],
+        {
+            "current_prices": {"BTCUSDT": 99.0},
+            "price_evidence": {
+                "BTCUSDT": {
+                    "status": "FRESH",
+                    "timeframe": "5m",
+                    "source": "BINANCE_MARK_PRICE_KLINES",
+                }
+            },
+        },
+    )
+
+    assert records == [
+        {
+            "id": 1,
+            "symbol": "btcusdt",
+            "entry_price": 100.0,
+            "current_price": 99.0,
+            "current_price_evidence": {
+                "status": "FRESH",
+                "timeframe": "5m",
+                "source": "BINANCE_MARK_PRICE_KLINES",
+            },
+        }
+    ]
+
+
+def test_open_trade_payload_does_not_invent_a_price_when_mark_is_stale():
+    records = paper_trade_api._attach_open_trade_price_evidence(
+        [{"id": 1, "symbol": "BTCUSDT", "entry_price": 100.0}],
+        {
+            "current_prices": {},
+            "price_evidence": {"BTCUSDT": {"status": "STALE", "price": 99.0}},
+        },
+    )
+
+    assert records[0]["current_price"] is None
+    assert records[0]["current_price_evidence"]["status"] == "STALE"

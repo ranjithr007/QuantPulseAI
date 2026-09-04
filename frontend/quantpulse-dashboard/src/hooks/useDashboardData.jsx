@@ -893,11 +893,13 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const openPositions = useMemo(() => {
     return openTrades
       .map((trade) => {
-        const current = safeNumber(
-          signalsBySymbol[trade.symbol]?.current_price,
-          safeNumber(trade.current_price ?? trade.mark_price, trade.entry_price)
+        const current = authoritativeOpenTradePrice(
+          trade,
+          signalsBySymbol[trade.symbol]?.current_price
         );
-        const pnl = estimatePnlPercent(trade.side, trade.entry_price, current);
+        const pnl = current === null
+          ? null
+          : estimatePnlPercent(trade.side, trade.entry_price, current);
         return {
           ...trade,
           current_price: current,
@@ -968,6 +970,21 @@ function pageNeedsSelectedBundle(activePage) {
     "auto-trading",
     "backtest",
   ]).has(activePage);
+}
+
+function authoritativeOpenTradePrice(trade, signalPrice) {
+  const evidence = trade?.current_price_evidence;
+  if (evidence && typeof evidence === "object" && Object.keys(evidence).length) {
+    if (String(evidence.status || "").toUpperCase() !== "FRESH") return null;
+    const authoritative = Number(trade?.current_price);
+    return Number.isFinite(authoritative) && authoritative > 0 ? authoritative : null;
+  }
+
+  for (const value of [trade?.current_price, trade?.mark_price, signalPrice, trade?.entry_price]) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return null;
 }
 
 function matchesSelectedSignal(signal, view) {
