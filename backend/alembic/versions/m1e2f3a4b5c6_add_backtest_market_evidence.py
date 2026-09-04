@@ -168,6 +168,10 @@ def _add_event_identity_columns(bind, tables):
                 "whale_trades",
                 ["venue", "symbol", "exchange_trade_id"],
                 unique=True,
+                # SQL Server considers NULL values equal for unique indexes.
+                # Legacy rows intentionally have no exchange ID, so constrain
+                # only the durable identities populated by the collector.
+                mssql_where=sa.text("exchange_trade_id IS NOT NULL"),
             )
 
     if "liquidations" in tables:
@@ -203,6 +207,7 @@ def _add_event_identity_columns(bind, tables):
                 "liquidations",
                 ["venue", "symbol", "exchange_event_id"],
                 unique=True,
+                mssql_where=sa.text("exchange_event_id IS NOT NULL"),
             )
 
 

@@ -163,10 +163,12 @@ def test_whale_and_liquidation_exchange_events_are_deduplicated():
     )
     event = _parse_liquidation_message(message)
     liquidation_repository = LiquidationRepository()
-    first = liquidation_repository.save(db, event)
-    second = liquidation_repository.save(db, event)
+    first, first_created = liquidation_repository.save_if_new(db, event)
+    second, second_created = liquidation_repository.save_if_new(db, event)
 
     assert event["exchange_event_id"]
+    assert first_created is True
+    assert second_created is False
     assert first.id == second.id
     assert db.query(Liquidation).count() == 1
 

@@ -20,12 +20,14 @@ def save_event(event):
 
         # print("LIQ:", event)
 
-        LiquidationRepository().save(db, event)
+        _, created = LiquidationRepository().save_if_new(db, event)
+        return created
 
     except Exception as ex:
         safe_rollback(db)
         if not is_transient_network_error(ex):
             print("Liquidation save error:", summarize_network_error(ex))
+        return False
 
     finally:
 
@@ -71,15 +73,17 @@ async def run_liquidation_job_async(
         try:
             db = SessionLocal()
             try:
-                LiquidationRepository().save(db, event)
+                _, created = LiquidationRepository().save_if_new(db, event)
             except Exception as ex:
                 safe_rollback(db)
                 if not is_transient_network_error(ex):
                     print("Liquidation save error:", summarize_network_error(ex))
+                created = False
             finally:
                 db.close()
 
-            saved_count += 1
+            if created:
+                saved_count += 1
             last_event = event
 
         except Exception as error:
