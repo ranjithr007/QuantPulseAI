@@ -77,6 +77,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260831_strategy_summary_indexes.py",
         "pg_20260902_pnl_query_indexes.py",
         "pg_20260903_participation_latest_index.py",
+        "pg_20260904_strategy_learning.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -167,3 +168,9 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     assert 'revision = "pg_20260903_participation_idx"' in participation_index
     assert "ix_decision_snapshots_participation_latest" in participation_index
     assert "postgresql_concurrently=True" in participation_index
+
+    strategy_learning = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260904_strategy_learning.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260903_participation_idx"' in strategy_learning
+    assert 'revision = "pg_20260904_strategy_learning"' in strategy_learning
+    assert "fix_strategy_trade_result_labels.py" in strategy_learning
+    assert "add_strategy_learning.py" in strategy_learning

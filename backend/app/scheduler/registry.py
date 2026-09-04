@@ -11,6 +11,7 @@ DEFAULT_JOB_IDS = [
     "heatmap",
     "orderbook",
     "walk_forward_queue",
+    "strategy_learning",
     "pipeline_retention",
 ]
 
@@ -194,6 +195,16 @@ JOB_DEFINITIONS = {
         function="run_walk_forward_queue_job",
         trigger="interval",
         seconds=10,
+        max_instances=1,
+        coalesce=True,
+    ),
+    "strategy_learning": SchedulerJobDefinition(
+        id="strategy_learning",
+        name="Paper strategy learning evaluator",
+        module="app.jobs.strategy_learning_job",
+        function="run_strategy_learning_job",
+        trigger="interval",
+        minutes=5,
         max_instances=1,
         coalesce=True,
     ),

@@ -14,6 +14,9 @@ from app.database.sqlserver import Base
 from app.jobs.paper_trade_monitor_job import _run_strategy_shadow_monitor
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
+from app.repositories.strategy_shadow_trade_repository import (
+    StrategyShadowTradeRepository,
+)
 from app.strategies.registry import STRATEGY_REGISTRY
 
 
@@ -196,6 +199,34 @@ def test_shadow_monitor_applies_target1_then_target2_and_records_net_result():
         assert trade.remaining_position_fraction == 0.25
         assert trade.pnl_percent > 0
         assert trade.realized_pnl_inr > 0
+    finally:
+        db.close()
+
+
+def test_profitable_protected_stop_is_classified_as_win():
+    db = _session()
+    definition = next(iter(STRATEGY_REGISTRY.values()))
+    candidate = _candidate(definition, 11)
+    try:
+        trade = StrategyShadowTradeRepository().save_candidate(db, candidate)
+        StrategyShadowTradeRepository().apply_target1(
+            db,
+            trade,
+            trade.target1,
+            candle_time=trade.opened_at + timedelta(minutes=5),
+        )
+        protected_exit = trade.entry_price * 1.005
+        closed = StrategyShadowTradeRepository().close_trade(
+            db,
+            trade,
+            protected_exit,
+            "LOSS",
+            fill_profile={"trigger_type": "STOP"},
+        )
+
+        assert closed.exit_reason == "STOP"
+        assert closed.pnl_percent > 0
+        assert closed.result == "WIN"
     finally:
         db.close()
 

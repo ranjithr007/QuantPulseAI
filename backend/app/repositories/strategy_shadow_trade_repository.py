@@ -282,9 +282,11 @@ class StrategyShadowTradeRepository:
             float(trade.position_notional_inr or 0) * trade.pnl_percent / 100,
             2,
         )
-        trade.result = str(result).upper()
-        if trade.result == "TIME_EXIT":
-            trade.result = "WIN" if trade.pnl_percent > 0 else "LOSS"
+        # The trigger describes *how* the trade closed; WIN/LOSS describes the
+        # final cost-adjusted outcome.  A protected trailing stop after T1 can
+        # be profitable, so copying the monitor's STOP result corrupts strategy
+        # statistics and any learning process built on top of them.
+        trade.result = "WIN" if trade.pnl_percent > 0 else "LOSS"
         trade.closed_at = closed_at
         commit_or_rollback(db)
         db.refresh(trade)

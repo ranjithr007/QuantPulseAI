@@ -23,6 +23,7 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
                 "heatmap",
                 "orderbook",
                 "walk_forward_queue",
+                "strategy_learning",
                 "pipeline_retention",
             ],
         )

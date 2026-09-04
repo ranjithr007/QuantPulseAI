@@ -78,6 +78,8 @@ from app.strategies.candidate_builders import build_orderflow_smc_payload
 from app.strategies.candidate_builders import build_range_reversion_payload
 from app.strategies.candidate_builders import build_regime_trend_payload
 from app.strategies.candidate_builders import build_trend_pullback_payload
+from app.strategies.learning import active_candidate_definitions
+from app.strategies.learning import apply_learning_parameters
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
@@ -2204,7 +2206,7 @@ def _persist_strategy_candidates(db, payload, market_participation):
         market_participation=market_participation,
         effective_timestamp=evaluation_timestamp,
     )
-    return [
+    base_records = [
         {
             "definition": strategy_definition(CORE_SIGNAL_STRATEGY_ID),
             "payload": payload,
@@ -2246,6 +2248,82 @@ def _persist_strategy_candidates(db, payload, market_participation):
             "snapshot": range_reversion_snapshot,
         },
     ]
+    payloads_by_strategy = {
+        CORE_SIGNAL_STRATEGY_ID: (payload, core_snapshot),
+        MARKET_MOVE_STRATEGY_ID: (market_move_payload, market_move_snapshot),
+        REGIME_TREND_STRATEGY_ID: (regime_trend_payload, regime_trend_snapshot),
+        ORDERFLOW_SMC_STRATEGY_ID: (orderflow_smc_payload, orderflow_smc_snapshot),
+        LIQUIDATION_CARRY_STRATEGY_ID: (
+            liquidation_carry_payload,
+            liquidation_carry_snapshot,
+        ),
+        CORE_FUSION_STRATEGY_ID: (payload, fusion_snapshot),
+        TREND_PULLBACK_STRATEGY_ID: (trend_pullback_payload, trend_pullback_snapshot),
+        RANGE_REVERSION_STRATEGY_ID: (
+            range_reversion_payload,
+            range_reversion_snapshot,
+        ),
+    }
+    candidate_records = []
+    for definition in active_candidate_definitions(db):
+        base_payload, base_snapshot = payloads_by_strategy[definition["id"]]
+        candidate_payload = apply_learning_parameters(base_payload, definition)
+        candidate_snapshot = _persist_learning_candidate_snapshot(
+            db,
+            candidate_payload,
+            definition,
+            base_snapshot,
+            market_participation=market_participation,
+            effective_timestamp=evaluation_timestamp,
+        )
+        candidate_records.append(
+            {
+                "definition": definition,
+                "payload": candidate_payload,
+                "snapshot": candidate_snapshot,
+            }
+        )
+    return base_records + candidate_records
+
+
+def _persist_learning_candidate_snapshot(
+    db,
+    payload,
+    definition,
+    base_snapshot,
+    *,
+    market_participation=None,
+    effective_timestamp=None,
+):
+    """Persist a challenger that can only tighten its immutable base decision."""
+
+    trigger = payload.get("trigger") or {}
+    validation = payload.get("trade_plan_validation") or {}
+    blocked_reasons = []
+    base_decision = (
+        base_snapshot.get("decision")
+        if isinstance(base_snapshot, dict)
+        else getattr(base_snapshot, "decision", None)
+    )
+    if base_snapshot is None or str(base_decision).upper() != "ELIGIBLE":
+        blocked_reasons.append("Base strategy decision is not eligible")
+    if trigger.get("status") != "READY":
+        blocked_reasons.append(
+            trigger.get("reason") or "Automatic candidate signal is not READY"
+        )
+    if not payload.get("trade_plan"):
+        blocked_reasons.append("Automatic candidate did not produce a trade plan")
+    elif not validation.get("is_valid"):
+        blocked_reasons.extend(validation.get("errors") or ["Trade plan is invalid"])
+    return _persist_governed_strategy_snapshot(
+        db,
+        payload,
+        definition,
+        list(dict.fromkeys(blocked_reasons)),
+        market_participation=market_participation,
+        effective_timestamp=effective_timestamp,
+        data_generation_id=payload.get("data_generation_id"),
+    )
 
 
 def _persist_derived_strategy_snapshot(

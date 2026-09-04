@@ -194,6 +194,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
   const wallet = strategy.strategy_paper_wallet || {};
   const coverage = strategy.coverage || {};
   const readiness = strategy.forward_test_readiness || {};
+  const learning = strategy.learning_evaluation || {};
   return (
     <article className="overflow-hidden rounded-xl border border-white/10 bg-slate-900/70">
       <div className="border-b border-white/10 bg-gradient-to-r from-cyan-500/10 via-transparent to-transparent p-4">
@@ -232,7 +233,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
           <Metric label="Drawdown" value={formatPercent(performance.max_drawdown_percent || 0, 2)} icon={TrendingDown} tone="rose" />
         </div>
 
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ValueCard label="Strategy Paper net P&L" value={`₹${number(performance.net_pnl_inr, 2)}`} tone={performance.net_pnl_inr >= 0 ? "emerald" : "rose"} />
           <ValueCard label="Strategy Paper return" value={formatSigned(performance.account_return_percent || 0, 2) + "%"} tone={performance.account_return_percent >= 0 ? "emerald" : "rose"} />
           <ValueCard label="Gross trade P&L" value={formatSigned(performance.gross_trade_pnl_percent || 0, 2) + "%"} />
@@ -240,6 +241,9 @@ function StrategyPanel({ strategy, ledgerLoading }) {
           <ValueCard label="Funding cost" value={formatPercent(performance.funding_cost_percent || 0, 3)} tone="amber" />
           <ValueCard label="Profit factor" value={performance.profit_factor == null ? "—" : number(performance.profit_factor, 2)} />
           <ValueCard label="Consolidated winner trades" value={officialPerformance.total_trades || 0} tone="cyan" />
+          <ValueCard label="Target successes" value={`${performance.target_successes || 0} · ${formatPercent(performance.target_success_rate || 0, 1)}`} tone="emerald" />
+          <ValueCard label="Initial stop failures" value={`${performance.initial_stop_failures || 0} · ${formatPercent(performance.initial_stop_failure_rate || 0, 1)}`} tone="rose" />
+          <ValueCard label="Protected stop exits" value={performance.protected_stop_exits || 0} tone="cyan" />
         </div>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
@@ -249,16 +253,59 @@ function StrategyPanel({ strategy, ledgerLoading }) {
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
-          Promotion requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades, win rate ≥ {readiness.minimum_win_rate || 55}%, profit factor ≥ {number(readiness.minimum_profit_factor || 1.3, 2)}, and positive cost-adjusted expectancy. {readiness.remaining_trades || 0} trades remain for the sample gate. This never enables live orders automatically.
+          Promotion requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades, win rate ≥ {readiness.minimum_win_rate || 55}%, profit factor ≥ {number(readiness.minimum_profit_factor || 1.3, 2)}, positive cost-adjusted expectancy, target successes greater than initial stop failures, and drawdown ≤ {formatPercent(readiness.maximum_drawdown_percent || 10, 0)}. {readiness.remaining_trades || 0} trades remain for the sample gate. This never enables live orders automatically.
         </div>
         <div className="mt-1 text-xs text-slate-500">
           Eligible scans are evaluations, not separate positions. Repeated unchanged signals reuse the matching open plan or position; only one official paper winner may be active per coin.
         </div>
 
+        {learning.status ? <StrategyLearningStatus learning={learning} /> : null}
+
         <CandidateTable candidates={strategy.candidates || []} />
         <StrategyPaperHistory trades={strategy.strategy_paper_history || []} loading={ledgerLoading} />
       </div>
     </article>
+  );
+}
+
+function StrategyLearningStatus({ learning }) {
+  const metrics = learning.metrics || {};
+  const recommendations = learning.recommended_changes || {};
+  const gates = metrics.gates || {};
+  const gateEntries = Object.entries(gates);
+  return (
+    <div className="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Automatic paper learning</div>
+          <div className="mt-1 text-sm font-semibold text-white">
+            30-trade window at milestone {learning.milestone} · {learning.status.replaceAll("_", " ")}
+          </div>
+        </div>
+        <StatusBadge label="LIVE DISABLED" tone="slate" />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <ValueCard label="Targets / initial stops" value={`${metrics.target_successes || 0} / ${metrics.initial_stop_failures || 0}`} tone={(metrics.target_successes || 0) > (metrics.initial_stop_failures || 0) ? "emerald" : "rose"} />
+        <ValueCard label="Window win rate" value={formatPercent(metrics.win_rate || 0, 1)} />
+        <ValueCard label="Window expectancy" value={`₹${number(metrics.expectancy_inr || 0, 2)}`} tone={(metrics.expectancy_inr || 0) > 0 ? "emerald" : "rose"} />
+        <ValueCard label="Candidate version" value={learning.candidate_version || "No change required"} tone="cyan" />
+      </div>
+      {gateEntries.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {gateEntries.map(([name, passed]) => (
+            <StatusBadge key={name} label={`${name.replaceAll("_", " ")}: ${passed ? "PASS" : "FAIL"}`} tone={passed ? "emerald" : "rose"} />
+          ))}
+        </div>
+      ) : null}
+      {Object.keys(recommendations).length ? (
+        <div className="mt-3 text-xs text-slate-500">
+          Candidate filters: confidence ≥ {recommendations.minimum_confidence || 40}%
+          {(recommendations.allowed_timeframes || []).length ? ` · timeframes ${(recommendations.allowed_timeframes || []).join(", ")}` : ""}
+          {(recommendations.allowed_regimes || []).length ? ` · regimes ${(recommendations.allowed_regimes || []).join(", ")}` : ""}
+          {(recommendations.blocked_symbols || []).length ? ` · quarantined ${(recommendations.blocked_symbols || []).join(", ")}` : ""}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

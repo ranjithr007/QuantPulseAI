@@ -15,6 +15,8 @@ from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
 from app.strategies.registry import STRATEGY_REGISTRY
 from app.strategies.registry import strategy_definition
+from app.strategies.learning import latest_evaluations
+from app.strategies.learning import strategy_definitions
 
 
 router = APIRouter(prefix="/strategies", tags=["Strategies"])
@@ -39,11 +41,7 @@ def get_strategy_summary(
     db = SessionLocal()
     try:
         cutoff = datetime.utcnow() - timedelta(days=since_days)
-        definitions = (
-            [strategy_definition(normalized)]
-            if normalized
-            else list(STRATEGY_REGISTRY.values())
-        )
+        definitions = strategy_definitions(db, normalized)
         strategy_data = _load_strategy_data(
             db,
             definitions,
@@ -90,13 +88,9 @@ def get_strategy_ledger(
             "records": [],
         }
 
-    definitions = (
-        [strategy_definition(normalized)]
-        if normalized
-        else list(STRATEGY_REGISTRY.values())
-    )
     db = SessionLocal()
     try:
+        definitions = strategy_definitions(db, normalized)
         strategy_data = _load_strategy_ledger_data(
             db,
             definitions,
@@ -191,6 +185,9 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
         "ledger_loaded": ledger_loaded,
         "official_performance": official_performance,
         "forward_test_readiness": _forward_test_readiness(shadow_performance),
+        "learning_evaluation": strategy_data.get("learning_evaluations", {}).get(
+            key
+        ),
         "candidates": candidates,
     }
 
@@ -344,7 +341,7 @@ def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
         strategy_paper_lifetime_performance = {}
         strategy_paper_history = {}
 
-    return {
+    loaded = {
         "snapshots": _group_strategy_rows(snapshots),
         "plans": _group_strategy_rows(plans),
         "snapshot_counts": {
@@ -373,6 +370,8 @@ def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
         "strategy_paper_history": strategy_paper_history,
         "ledger_loaded": include_ledger,
     }
+    loaded["learning_evaluations"] = latest_evaluations(db, definitions)
+    return loaded
 
 
 def _load_strategy_ledger_data(db, definitions, *, history_limit):
@@ -436,18 +435,39 @@ def _load_strategy_performance(
     closed = func.upper(model.status) == "CLOSED"
     opened = func.upper(model.status) == "OPEN"
     realized = func.coalesce(model.realized_pnl_inr, 0.0)
+    exit_reason = func.upper(func.coalesce(model.exit_reason, ""))
+    target1_reached = model.target1_hit_at.is_not(None)
+    initial_stop = and_(
+        exit_reason.in_(("STOP", "STOP_LOSS")),
+        model.target1_hit_at.is_(None),
+    )
+    protected_stop = and_(
+        exit_reason.in_(("STOP", "STOP_LOSS")),
+        target1_reached,
+    )
     query = db.query(
         model.strategy_id,
         model.strategy_version,
         func.count(model.id).label("total_trades"),
         func.sum(case((opened, 1), else_=0)).label("open_trades"),
         func.sum(case((closed, 1), else_=0)).label("closed_trades"),
+        func.sum(case((and_(closed, realized > 0), 1), else_=0)).label("wins"),
+        func.sum(case((and_(closed, realized <= 0), 1), else_=0)).label("losses"),
         func.sum(
-            case((and_(closed, func.upper(model.result) == "WIN"), 1), else_=0)
-        ).label("wins"),
+            case((and_(closed, target1_reached), 1), else_=0)
+        ).label("target1_hits"),
         func.sum(
-            case((and_(closed, func.upper(model.result) == "LOSS"), 1), else_=0)
-        ).label("losses"),
+            case((and_(closed, exit_reason == "TARGET2"), 1), else_=0)
+        ).label("target2_hits"),
+        func.sum(
+            case((and_(closed, initial_stop), 1), else_=0)
+        ).label("initial_stop_failures"),
+        func.sum(
+            case((and_(closed, protected_stop), 1), else_=0)
+        ).label("protected_stop_exits"),
+        func.sum(
+            case((and_(closed, exit_reason == "TIME_EXIT"), 1), else_=0)
+        ).label("time_exits"),
         func.sum(case((func.upper(model.side) == "LONG", 1), else_=0)).label(
             "long_trades"
         ),
@@ -600,6 +620,8 @@ def _performance_from_aggregate(row, max_drawdown_percent):
     total = int(row.total_trades or 0)
     closed = int(row.closed_trades or 0)
     wins = int(row.wins or 0)
+    target1_hits = int(row.target1_hits or 0)
+    initial_stop_failures = int(row.initial_stop_failures or 0)
     net_pnl_inr = round(float(row.net_pnl_inr or 0.0), 2)
     gains = float(row.gross_gains or 0.0)
     losses = abs(float(row.gross_losses or 0.0))
@@ -614,6 +636,16 @@ def _performance_from_aggregate(row, max_drawdown_percent):
         "closed_trades": closed,
         "wins": wins,
         "losses": int(row.losses or 0),
+        "target1_hits": target1_hits,
+        "target2_hits": int(row.target2_hits or 0),
+        "target_successes": target1_hits,
+        "initial_stop_failures": initial_stop_failures,
+        "protected_stop_exits": int(row.protected_stop_exits or 0),
+        "time_exits": int(row.time_exits or 0),
+        "target_success_rate": round(target1_hits / closed * 100, 2) if closed else 0.0,
+        "initial_stop_failure_rate": round(
+            initial_stop_failures / closed * 100, 2
+        ) if closed else 0.0,
         "long_trades": int(row.long_trades or 0),
         "short_trades": int(row.short_trades or 0),
         "win_rate": round(wins / closed * 100, 2) if closed else 0.0,
@@ -773,8 +805,24 @@ def _strategy_signal_key(symbol, side, timeframe):
 def _strategy_performance(trades):
     open_trades = [item for item in trades if item.status == "OPEN"]
     closed = [item for item in trades if item.status == "CLOSED"]
-    wins = [item for item in closed if item.result == "WIN"]
-    losses = [item for item in closed if item.result == "LOSS"]
+    wins = [item for item in closed if float(item.realized_pnl_inr or 0) > 0]
+    losses = [item for item in closed if float(item.realized_pnl_inr or 0) <= 0]
+    target1_hits = [item for item in closed if item.target1_hit_at is not None]
+    target2_hits = [
+        item for item in closed if str(item.exit_reason or "").upper() == "TARGET2"
+    ]
+    initial_stop_failures = [
+        item
+        for item in closed
+        if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
+        and item.target1_hit_at is None
+    ]
+    protected_stop_exits = [
+        item
+        for item in closed
+        if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
+        and item.target1_hit_at is not None
+    ]
     net_pnl_inr = round(
         sum(float(item.realized_pnl_inr or 0) for item in closed),
         2,
@@ -801,6 +849,20 @@ def _strategy_performance(trades):
         "closed_trades": len(closed),
         "wins": len(wins),
         "losses": len(losses),
+        "target1_hits": len(target1_hits),
+        "target2_hits": len(target2_hits),
+        "target_successes": len(target1_hits),
+        "initial_stop_failures": len(initial_stop_failures),
+        "protected_stop_exits": len(protected_stop_exits),
+        "time_exits": sum(
+            1 for item in closed if str(item.exit_reason or "").upper() == "TIME_EXIT"
+        ),
+        "target_success_rate": round(len(target1_hits) / len(closed) * 100, 2)
+        if closed
+        else 0.0,
+        "initial_stop_failure_rate": round(
+            len(initial_stop_failures) / len(closed) * 100, 2
+        ) if closed else 0.0,
         "long_trades": sum(1 for item in trades if item.side == "LONG"),
         "short_trades": sum(1 for item in trades if item.side == "SHORT"),
         "win_rate": round(len(wins) / len(closed) * 100, 2) if closed else 0.0,
@@ -836,6 +898,12 @@ def _strategy_paper_trade_payload(trade):
         "funding_cost_percent": trade.funding_cost_percent,
         "opened_at": trade.opened_at,
         "closed_at": trade.closed_at,
+        "target1_hit_at": trade.target1_hit_at,
+        "target_success": trade.target1_hit_at is not None,
+        "initial_stop_failure": bool(
+            str(trade.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
+            and trade.target1_hit_at is None
+        ),
     }
 
 
@@ -852,6 +920,7 @@ def _forward_test_readiness(
     minimum_closed_trades=30,
     minimum_win_rate=55.0,
     minimum_profit_factor=1.30,
+    maximum_drawdown_percent=10.0,
 ):
     closed = int(performance.get("closed_trades") or 0)
     win_rate = float(performance.get("win_rate") or 0)
@@ -860,12 +929,17 @@ def _forward_test_readiness(
         float(profit_factor) if profit_factor is not None else 0.0
     )
     expectancy_inr = float(performance.get("expectancy_inr") or 0)
+    target_successes = int(performance.get("target_successes") or 0)
+    initial_stop_failures = int(performance.get("initial_stop_failures") or 0)
+    max_drawdown = float(performance.get("max_drawdown_percent") or 0)
     sample_passed = closed >= minimum_closed_trades
     gates = {
         "sample_size": sample_passed,
         "win_rate": win_rate >= minimum_win_rate,
         "profit_factor": normalized_profit_factor >= minimum_profit_factor,
         "cost_adjusted_expectancy": expectancy_inr > 0,
+        "targets_exceed_initial_stops": target_successes > initial_stop_failures,
+        "maximum_drawdown": max_drawdown <= maximum_drawdown_percent,
     }
     promotion_candidate = sample_passed and all(gates.values())
     if not sample_passed:
@@ -881,6 +955,10 @@ def _forward_test_readiness(
         "remaining_trades": max(0, minimum_closed_trades - closed),
         "minimum_win_rate": minimum_win_rate,
         "minimum_profit_factor": minimum_profit_factor,
+        "maximum_drawdown_percent": maximum_drawdown_percent,
+        "target_successes": target_successes,
+        "initial_stop_failures": initial_stop_failures,
+        "requires_targets_exceed_initial_stops": True,
         "requires_positive_cost_adjusted_expectancy": True,
         "gates": gates,
         "promotion_candidate": promotion_candidate,

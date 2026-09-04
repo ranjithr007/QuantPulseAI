@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from app.api.v1.paper_trade_api import _required_current_signal_keys
 from app.api.v1.signals_api import _persist_ready_watchlist_payload
 from app.api.v1.signals_api import _persist_strategy_candidates
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
+from app.database.models.strategy_learning import StrategyVersionConfig
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import Base
 from app.repositories.trade_plan_repository import TradePlanRepository
@@ -264,6 +266,110 @@ def test_individual_and_combined_strategies_create_separate_candidate_plans():
             STRATEGY_REGISTRY
         )
         assert db.query(DecisionSnapshot).count() == len(STRATEGY_REGISTRY)
+    finally:
+        db.close()
+
+
+def test_automatic_candidate_runs_alongside_base_and_only_tightens_it():
+    db = _session()
+    now = datetime.now(timezone.utc)
+    try:
+        db.add(
+            StrategyVersionConfig(
+                strategy_id=CORE_SIGNAL_STRATEGY_ID,
+                version="core_signal_v1_candidate_test",
+                base_version="core_signal_v1",
+                decision_version="core_signal_strategy_v1_candidate_test",
+                status="COLLECTING",
+                parameters_json=json.dumps(
+                    {
+                        "minimum_confidence": 40,
+                        "blocked_symbols": ["BNBUSDT"],
+                        "require_fresh_inputs": True,
+                        "paper_only": True,
+                    }
+                ),
+                paper_execution_enabled=True,
+                official_paper_enabled=False,
+                live_execution_enabled=False,
+            )
+        )
+        db.commit()
+
+        records = _persist_strategy_candidates(
+            db,
+            _core_payload(now, ready=True),
+            _market_move(now, carry_ready=True),
+        )
+        candidate = next(
+            item
+            for item in records
+            if item["definition"]["version"] == "core_signal_v1_candidate_test"
+        )
+
+        assert len(records) == len(STRATEGY_REGISTRY) + 1
+        assert candidate["definition"]["official_execution_enabled"] is False
+        assert candidate["snapshot"]["decision"] == "BLOCKED"
+        assert candidate["payload"]["trigger"]["status"] == "WAIT"
+        assert "quarantined" in candidate["payload"]["trigger"]["reason"]
+    finally:
+        db.close()
+
+
+def test_collecting_candidate_cannot_enter_consolidated_paper_book():
+    db = _session()
+    try:
+        db.add(
+            StrategyVersionConfig(
+                strategy_id=CORE_SIGNAL_STRATEGY_ID,
+                version="core_signal_auto_test",
+                base_version="core_signal_v1",
+                decision_version="core_signal_decision_auto_test",
+                status="COLLECTING",
+                parameters_json="{}",
+                paper_execution_enabled=True,
+                official_paper_enabled=False,
+                live_execution_enabled=False,
+            )
+        )
+        db.commit()
+        candidate = {
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "eligible": True,
+            "blocked_reasons": [],
+            "risk_decision": {"confidence": 65},
+            "paper_sizing": {"leverage": 2, "position_notional_inr": 100_000},
+            "trade_plan": {
+                "id": 1,
+                "strategy_id": CORE_SIGNAL_STRATEGY_ID,
+                "strategy_version": "core_signal_auto_test",
+                "confidence": 65,
+                "risk_reward": 2.1,
+                "entry_timeframe": "1h",
+                "created_at": datetime.now(timezone.utc),
+            },
+        }
+        automation = {
+            "enabled": True,
+            "locked": False,
+            "emergencyStop": False,
+            "allowedSymbols": ["BTCUSDT"],
+            "minConfidence": 40,
+            "direction": "BOTH",
+            "executionMode": "PAPER",
+            "liveExecutionEnabled": False,
+            "maxLeverage": 5,
+            "maxPositionSize": 200_000,
+        }
+
+        result = _annotate_candidate_arbitration([candidate], automation, db)[0]
+
+        assert result["arbitration"]["status"] == "BLOCKED"
+        assert result["arbitration"]["selected_for_official_execution"] is False
+        assert result["arbitration"]["executor_blockers"] == [
+            "Strategy is not enabled for official paper execution"
+        ]
     finally:
         db.close()
 

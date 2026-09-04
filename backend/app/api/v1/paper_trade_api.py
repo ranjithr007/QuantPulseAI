@@ -56,6 +56,8 @@ from app.repositories.strategy_shadow_trade_repository import (
     StrategyShadowTradeRepository,
 )
 from app.strategies.registry import strategy_definition
+from app.strategies.learning import resolve_strategy_definition
+from app.strategies.learning import candidate_rearm_blocker
 from app.trading.market_participation_guard import market_participation_blockers
 from app.utils.freshness import freshness_status
 from app.utils.freshness import normalize_timestamp_to_utc
@@ -832,8 +834,11 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
 
         eligible_by_symbol = defaultdict(list)
         for candidate in records:
-            plan_definition = strategy_definition(
-                (candidate.get("trade_plan") or {}).get("strategy_id")
+            candidate_plan = candidate.get("trade_plan") or {}
+            plan_definition = resolve_strategy_definition(
+                db,
+                candidate_plan.get("strategy_id"),
+                candidate_plan.get("strategy_version"),
             ) or {}
             if (
                 candidate["eligible"]
@@ -924,7 +929,10 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 db.rollback()
                 continue
 
-            winner = max(candidates, key=_paper_trade_candidate_rank)
+            winner = max(
+                candidates,
+                key=lambda item: _paper_trade_candidate_rank(item, db),
+            )
             skipped.extend(
                 {
                     "symbol": candidate["symbol"],
@@ -1385,7 +1393,7 @@ def _append_automation_numeric_limit_blocker(
 QP_TI_001_TIMEFRAME_PRIORITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
 
 
-def _paper_trade_candidate_rank(candidate):
+def _paper_trade_candidate_rank(candidate, db=None):
     """Deterministically rank eligible candidates for one symbol.
 
     Validated risk confidence is authoritative, followed by plan confidence,
@@ -1394,7 +1402,11 @@ def _paper_trade_candidate_rank(candidate):
     """
     risk = candidate.get("risk_decision") or {}
     plan = candidate.get("trade_plan") or {}
-    definition = strategy_definition(plan.get("strategy_id")) or {}
+    definition = resolve_strategy_definition(
+        db,
+        plan.get("strategy_id"),
+        plan.get("strategy_version"),
+    ) or {}
     created_at = plan.get("created_at")
     created_rank = created_at.timestamp() if hasattr(created_at, "timestamp") else 0.0
     return (
@@ -1408,7 +1420,7 @@ def _paper_trade_candidate_rank(candidate):
     )
 
 
-def _annotate_candidate_arbitration(records, auto):
+def _annotate_candidate_arbitration(records, auto, db=None):
     """Expose the same per-symbol winner that official execution will use.
 
     Several strategies may independently produce valid plans for one coin, but
@@ -1421,7 +1433,11 @@ def _annotate_candidate_arbitration(records, auto):
     executor_blockers_by_id = {}
     for candidate in records:
         plan = candidate.get("trade_plan") or {}
-        definition = strategy_definition(plan.get("strategy_id")) or {}
+        definition = resolve_strategy_definition(
+            db,
+            plan.get("strategy_id"),
+            plan.get("strategy_version"),
+        ) or {}
         blockers = []
         if candidate.get("eligible") is not True:
             blockers.extend(candidate.get("blocked_reasons") or [])
@@ -1435,7 +1451,11 @@ def _annotate_candidate_arbitration(records, auto):
             )
 
     ranked_by_symbol = {
-        symbol: sorted(candidates, key=_paper_trade_candidate_rank, reverse=True)
+        symbol: sorted(
+            candidates,
+            key=lambda item: _paper_trade_candidate_rank(item, db),
+            reverse=True,
+        )
         for symbol, candidates in competitors_by_symbol.items()
     }
     annotated = []
@@ -1613,6 +1633,23 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                     "strategy_id": strategy_id,
                     "action": "skipped_shadow_same_side_stop_cooldown",
                     "blocked_reasons": [PAPER_STOP_REENTRY_COOLDOWN_REASON],
+                }
+            )
+            continue
+        definition = resolve_strategy_definition(db, strategy_id, strategy_version)
+        rearm_blocker = candidate_rearm_blocker(
+            db,
+            definition or {},
+            strategy_history,
+            candidate,
+        )
+        if rearm_blocker:
+            skipped.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "strategy_id": strategy_id,
+                    "action": "skipped_shadow_signal_not_rearmed",
+                    "blocked_reasons": [rearm_blocker],
                 }
             )
             continue
@@ -1893,6 +1930,11 @@ def _finish_paper_trade_candidates(
             strategy_snapshot=strategy_snapshots.get(
                 getattr(trade, "strategy_decision_snapshot_id", None)
             ),
+            strategy_definition_override=resolve_strategy_definition(
+                db,
+                getattr(trade, "strategy_id", None),
+                getattr(trade, "strategy_version", None),
+            ),
             account_risk=account_risk,
             paper_wallet=paper_wallet,
             max_open_trades=min(
@@ -1911,7 +1953,7 @@ def _finish_paper_trade_candidates(
         for trade in trades
     ]
 
-    records = _annotate_candidate_arbitration(records, auto)
+    records = _annotate_candidate_arbitration(records, auto, db)
 
     return normalized_symbol, records
 
@@ -2790,6 +2832,7 @@ def _paper_trade_candidate(
     coin_has_active_trade=False,
     stop_reentry_cooldown=None,
     strategy_snapshot=None,
+    strategy_definition_override=None,
 ):
     risk_payload = _risk_decision_payload(risk, stale_after_seconds)
     planned_stop_percent = (
@@ -2823,6 +2866,7 @@ def _paper_trade_candidate(
         derivatives,
         fill_profile=fill_profile,
         strategy_snapshot=strategy_snapshot,
+        strategy_definition_override=strategy_definition_override,
     )
     if market_participation is not _MARKET_PARTICIPATION_UNSET:
         trade_blockers.extend(
@@ -3043,6 +3087,7 @@ def _paper_trade_blocked_reasons(
     derivatives=None,
     fill_profile=None,
     strategy_snapshot=None,
+    strategy_definition_override=None,
 ):
     reasons = []
 
@@ -3056,7 +3101,7 @@ def _paper_trade_blocked_reasons(
         "strategy_decision_snapshot_id",
         None,
     )
-    definition = strategy_definition(plan_strategy_id)
+    definition = strategy_definition_override or strategy_definition(plan_strategy_id)
     if (
         definition is None
         or definition.get("status") != "ACTIVE"

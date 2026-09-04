@@ -657,6 +657,9 @@ def test_forward_readiness_requires_performance_not_only_sample_size():
             "win_rate": 53.33,
             "profit_factor": 1.5,
             "expectancy_inr": 100.0,
+            "target_successes": 18,
+            "initial_stop_failures": 12,
+            "max_drawdown_percent": 5.0,
         }
     )
 
@@ -674,6 +677,9 @@ def test_forward_readiness_marks_all_gate_passes_as_promotion_candidate_only():
             "win_rate": 57.5,
             "profit_factor": 1.42,
             "expectancy_inr": 85.0,
+            "target_successes": 24,
+            "initial_stop_failures": 16,
+            "max_drawdown_percent": 6.0,
         }
     )
 
@@ -681,3 +687,37 @@ def test_forward_readiness_marks_all_gate_passes_as_promotion_candidate_only():
     assert all(readiness["gates"].values())
     assert readiness["promotion_candidate"] is True
     assert readiness["authorizes_live_execution"] is False
+
+
+def test_forward_readiness_requires_more_targets_than_initial_stops():
+    readiness = strategy_api._forward_test_readiness(
+        {
+            "closed_trades": 40,
+            "win_rate": 60.0,
+            "profit_factor": 1.5,
+            "expectancy_inr": 100.0,
+            "target_successes": 18,
+            "initial_stop_failures": 22,
+            "max_drawdown_percent": 5.0,
+        }
+    )
+
+    assert readiness["status"] == "EVIDENCE_COMPLETE_FAILED"
+    assert readiness["gates"]["targets_exceed_initial_stops"] is False
+
+
+def test_forward_readiness_rejects_excessive_drawdown():
+    readiness = strategy_api._forward_test_readiness(
+        {
+            "closed_trades": 40,
+            "win_rate": 60.0,
+            "profit_factor": 1.5,
+            "expectancy_inr": 100.0,
+            "target_successes": 24,
+            "initial_stop_failures": 16,
+            "max_drawdown_percent": 10.01,
+        }
+    )
+
+    assert readiness["status"] == "EVIDENCE_COMPLETE_FAILED"
+    assert readiness["gates"]["maximum_drawdown"] is False

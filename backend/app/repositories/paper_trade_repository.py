@@ -688,8 +688,9 @@ class PaperTradeRepository:
             ),
             created_at=closed_at,
         )
-        if result == "TIME_EXIT":
-            trade.result = "WIN" if trade.pnl_percent > 0 else "LOSS"
+        # Exit trigger and financial result are separate facts. A protected
+        # stop after T1 may close profitably and must not be counted as a loss.
+        trade.result = "WIN" if trade.pnl_percent > 0 else "LOSS"
         trade.closed_at = closed_at
 
         if getattr(trade, "thesis_id", None):

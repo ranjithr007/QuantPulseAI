@@ -19,6 +19,8 @@ POSTGRESQL_POST_BASELINE_TABLES = frozenset(
         "spot_market_candles",
         "orderbook_snapshots",
         "app_notifications",
+        "strategy_learning_evaluations",
+        "strategy_version_configs",
     }
 )
 
