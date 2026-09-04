@@ -48,7 +48,7 @@ def _trade(index, *, winning):
     )
 
 
-def _row(index, *, winning):
+def _row(index, *, winning, strategy_version=None):
     item = _trade(index, winning=winning)
     return StrategyShadowTrade(
         trade_plan_id=index,
@@ -56,7 +56,7 @@ def _row(index, *, winning):
         symbol=item.symbol,
         side=item.side,
         strategy_id=CORE_SIGNAL_STRATEGY["id"],
-        strategy_version=CORE_SIGNAL_STRATEGY["version"],
+        strategy_version=strategy_version or CORE_SIGNAL_STRATEGY["version"],
         strategy_decision_snapshot_id=index,
         entry_price=100.0,
         stop_loss=99.25,
@@ -125,6 +125,55 @@ def test_due_evaluation_creates_one_immutable_paper_candidate():
         db.close()
 
 
+def test_due_evaluation_waits_for_thirty_closed_trades():
+    db = _session()
+    try:
+        db.add_all([_row(index + 1, winning=True) for index in range(29)])
+        db.commit()
+
+        result = evaluate_due_strategy_versions(db)
+
+        assert result["evaluated_count"] == 0
+        assert result["created_candidate_count"] == 0
+        assert db.query(StrategyLearningEvaluation).count() == 0
+        assert db.query(StrategyVersionConfig).count() == 0
+    finally:
+        db.close()
+
+
+def test_profitable_candidate_becomes_paper_champion_but_never_live():
+    db = _session()
+    try:
+        db.add_all([_row(index + 1, winning=index < 10) for index in range(30)])
+        db.commit()
+        first = evaluate_due_strategy_versions(db)
+        candidate_version = first["candidates"][0]["version"]
+
+        db.add_all(
+            [
+                _row(index + 101, winning=index < 18, strategy_version=candidate_version)
+                for index in range(30)
+            ]
+        )
+        db.commit()
+
+        result = evaluate_due_strategy_versions(db)
+        config = (
+            db.query(StrategyVersionConfig)
+            .filter(StrategyVersionConfig.version == candidate_version)
+            .one()
+        )
+
+        assert result["evaluated_count"] == 1
+        assert result["created_candidate_count"] == 0
+        assert config.status == "PAPER_CHAMPION"
+        assert config.official_paper_enabled is True
+        assert config.live_execution_enabled is False
+        assert result["live_execution_enabled"] is False
+    finally:
+        db.close()
+
+
 def test_candidate_filters_quarantined_symbol_without_rewriting_evidence():
     definition = {
         **CORE_SIGNAL_STRATEGY,
@@ -152,6 +201,50 @@ def test_candidate_filters_quarantined_symbol_without_rewriting_evidence():
     assert payload["trigger"]["status"] == "READY"
     assert candidate["trigger"]["status"] == "WAIT"
     assert "quarantined" in candidate["trigger"]["reason"]
+
+
+def test_candidate_filters_never_rewrite_entry_stop_or_targets():
+    definition = {
+        **CORE_SIGNAL_STRATEGY,
+        "version": "core_signal_candidate_geometry_test",
+        "source_evaluation_id": 1,
+        "learning_parameters": {
+            "minimum_confidence": 40,
+            "allowed_timeframes": ["1h"],
+            "allowed_regimes": ["BULL_PULLBACK"],
+            "require_fresh_inputs": True,
+        },
+    }
+    trade_plan = {
+        "entry_timeframe": "1h",
+        "regime": "BULL_PULLBACK",
+        "entry_price": 100.0,
+        "stop_loss": 99.25,
+        "target1": 101.5,
+        "target2": 102.3,
+    }
+    payload = {
+        "symbol": "BTCUSDT",
+        "confirmation": {"confidence": 65},
+        "trigger": {"status": "READY", "side": "LONG", "entry_timeframe": "1h"},
+        "trade_plan": trade_plan,
+        "trade_plan_validation": {"is_valid": True, "errors": []},
+        "timeframes": [
+            {
+                "timeframe": "1h",
+                "status": "OK",
+                "regime": "BULL_PULLBACK",
+                "confidence": 65,
+                "freshness": {"is_stale": False},
+            }
+        ],
+    }
+
+    candidate = apply_learning_parameters(payload, definition)
+
+    assert candidate["trade_plan"] == trade_plan
+    assert payload["trade_plan"] == trade_plan
+    assert candidate["trigger"]["status"] == "READY"
 
 
 def test_candidate_rearm_requires_new_candle_but_not_for_opposite_side():
