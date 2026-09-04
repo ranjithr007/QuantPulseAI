@@ -17,6 +17,7 @@ import {
   markNotificationRead,
 } from "../hooks/dashboardApi";
 import { formatTimeInIst } from "../utils/formatters";
+import { notificationHref } from "../utils/notificationLinks";
 
 
 const POLL_INTERVAL_MS = 30000;
@@ -194,7 +195,7 @@ export default function NotificationCenter({ getPageHref, view }) {
               <div className="px-4 py-10 text-center">
                 <Bell className="mx-auto h-6 w-6 text-slate-600" />
                 <div className="mt-2 text-sm text-slate-400">No notifications yet</div>
-                <div className="mt-1 text-xs text-slate-600">Official paper-trade events will appear here.</div>
+                <div className="mt-1 text-xs text-slate-600">Official paper-trade events and strategy-learning reviews will appear here.</div>
               </div>
             ) : (
               <div className="divide-y divide-white/5">
@@ -202,9 +203,7 @@ export default function NotificationCenter({ getPageHref, view }) {
                   <NotificationRow
                     key={notification.id}
                     notification={notification}
-                    href={notification.symbol
-                      ? getPageHref("coin-details", { ...view, symbol: notification.symbol })
-                      : null}
+                    href={notificationHref(notification, getPageHref, view)}
                     onRead={() => markRead(notification)}
                     onNavigate={() => setOpen(false)}
                   />
@@ -214,7 +213,7 @@ export default function NotificationCenter({ getPageHref, view }) {
           </div>
 
           <div className="border-t border-white/10 px-4 py-2 text-[10px] text-slate-600">
-            Official portfolio only · Shadow strategy trades are intentionally silent · Times shown in IST
+            Official paper trades and learning reviews · Individual strategy-paper trade alerts remain off · Times shown in IST
           </div>
         </section>
       ) : null}
@@ -235,6 +234,12 @@ function NotificationRow({ notification, href, onRead, onNavigate }) {
           {!notification.isRead ? <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-cyan-400" /> : null}
         </div>
         <div className="mt-1 text-xs leading-5 text-slate-400">{notification.message}</div>
+        {notification.category === "STRATEGY" ? (
+          <div className="mt-1 break-words text-xs text-cyan-300">
+            Paper learning · {notification.metadata?.strategyVersion || notification.metadata?.strategyId || "Strategy review"}
+            <span className="mt-1 block">View Strategies review →</span>
+          </div>
+        ) : null}
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[10px] uppercase tracking-[0.1em] text-slate-600">
           <span>{notification.category}</span>
           {notification.symbol ? <span>{notification.symbol}</span> : null}
