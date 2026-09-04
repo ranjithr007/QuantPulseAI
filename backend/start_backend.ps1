@@ -45,7 +45,7 @@ else {
 }
 
 if (-not $env:QUANTPULSE_SCHEDULER_JOBS) {
-    $env:QUANTPULSE_SCHEDULER_JOBS = "deterministic_pipeline,derivative,candle_completeness,pipeline_retention"
+    $env:QUANTPULSE_SCHEDULER_JOBS = "deterministic_pipeline,derivative,candle_completeness,strategy_learning,pipeline_retention"
 }
 
 if (-not $env:QUANTPULSE_START_LIVE_MARKET) {

@@ -2,7 +2,7 @@ x-backend-environment: &backend-environment
   QUANTPULSE_ENV: production
   QUANTPULSE_DATABASE_URL: ${QUANTPULSE_DATABASE_URL:?QUANTPULSE_DATABASE_URL is required}
   QUANTPULSE_ALLOW_SQLITE_FALLBACK: "false"
-  QUANTPULSE_SCHEDULER_JOBS: deterministic_pipeline,derivative,candle_completeness,pipeline_retention
+  QUANTPULSE_SCHEDULER_JOBS: deterministic_pipeline,derivative,candle_completeness,strategy_learning,pipeline_retention
   QUANTPULSE_PIPELINE_RETENTION_ENABLED: "true"
   QUANTPULSE_PIPELINE_RETENTION_DAYS: "30"
   QUANTPULSE_LIVE_MARKET_SYMBOLS: BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT,BNBUSDT,DOGEUSDT

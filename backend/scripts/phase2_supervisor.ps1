@@ -172,7 +172,7 @@ function Start-Backend {
 
     $env:QUANTPULSE_START_SCHEDULER = "true"
     $env:QUANTPULSE_SCHEDULER_JOBS = (
-        "deterministic_pipeline,derivative,candle_completeness,pipeline_retention"
+        "deterministic_pipeline,derivative,candle_completeness,strategy_learning,pipeline_retention"
     )
     $env:QUANTPULSE_START_LIVE_MARKET = "true"
 

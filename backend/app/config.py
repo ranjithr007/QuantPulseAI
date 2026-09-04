@@ -12,6 +12,7 @@ DEFAULT_SCHEDULER_JOBS = [
     "heatmap",
     "orderbook",
     "walk_forward_queue",
+    "strategy_learning",
     "pipeline_retention",
 ]
 DEFAULT_LIVE_MARKET_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
@@ -82,6 +83,13 @@ class Settings:
             "QUANTPULSE_SCHEDULER_JOBS",
             DEFAULT_SCHEDULER_JOBS,
         )
+        # Strategy learning is a required companion to the full deterministic
+        # paper pipeline. Preserve narrow collector-only worker allowlists.
+        if (
+            "deterministic_pipeline" in self.scheduler_job_ids
+            and "strategy_learning" not in self.scheduler_job_ids
+        ):
+            self.scheduler_job_ids.append("strategy_learning")
         self.database_url = os.getenv("QUANTPULSE_DATABASE_URL") or _build_sqlserver_url()
         self.database_pool_size = int(os.getenv("QUANTPULSE_DATABASE_POOL_SIZE", "5"))
         self.database_max_overflow = int(

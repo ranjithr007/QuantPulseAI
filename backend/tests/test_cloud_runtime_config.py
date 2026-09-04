@@ -45,6 +45,33 @@ def test_worker_role_owns_scheduler_without_live_listener(monkeypatch):
     assert settings.run_live_market is False
 
 
+def test_full_pipeline_worker_always_includes_strategy_learning(monkeypatch):
+    monkeypatch.setenv(
+        "QUANTPULSE_SCHEDULER_JOBS",
+        "deterministic_pipeline,derivative,pipeline_retention",
+    )
+
+    settings = Settings()
+
+    assert settings.scheduler_job_ids == [
+        "deterministic_pipeline",
+        "derivative",
+        "pipeline_retention",
+        "strategy_learning",
+    ]
+
+
+def test_collector_only_worker_does_not_gain_strategy_learning(monkeypatch):
+    monkeypatch.setenv(
+        "QUANTPULSE_SCHEDULER_JOBS",
+        "market,candle_completeness",
+    )
+
+    settings = Settings()
+
+    assert settings.scheduler_job_ids == ["market", "candle_completeness"]
+
+
 def test_production_api_requires_strong_admin_key(monkeypatch):
     monkeypatch.setenv("QUANTPULSE_ENV", "production")
     monkeypatch.setenv("QUANTPULSE_PROCESS_ROLE", "api")
