@@ -12,6 +12,7 @@ from app.database.models.strategy_learning import StrategyVersionConfig
 from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
+from app.repositories.notification_repository import NotificationRepository
 from app.strategies.registry import STRATEGY_REGISTRY
 
 
@@ -271,12 +272,23 @@ def evaluate_due_strategy_versions(db):
                 config.status = "FAILED"
                 config.official_paper_enabled = False
 
+        candidate = None
         if not accepted and not _has_collecting_candidate(
             db, definition["id"]
         ):
             candidate = _create_candidate(db, definition, evaluation, recommendations)
             evaluation.candidate_version = candidate.version
             created_candidates.append(candidate)
+
+        _notify_learning_evaluation(
+            db,
+            definition=definition,
+            evaluation=evaluation,
+            report=report,
+            candidate=candidate,
+            config=config,
+            accepted=accepted,
+        )
 
     db.commit()
     return {
@@ -560,6 +572,76 @@ def _create_candidate(db, definition, evaluation, parameters):
     db.add(candidate)
     db.flush()
     return candidate
+
+
+def _notify_learning_evaluation(
+    db,
+    *,
+    definition,
+    evaluation,
+    report,
+    candidate,
+    config,
+    accepted,
+):
+    metrics = report["metrics"]
+    if accepted and config is not None:
+        event_type = "STRATEGY_PAPER_CHAMPION"
+        severity = "SUCCESS"
+        title = f"{definition['name']} passed paper champion review"
+    elif candidate is not None and config is not None:
+        event_type = "STRATEGY_CANDIDATE_REPLACED"
+        severity = "WARNING"
+        title = f"{definition['name']} needs another paper revision"
+    elif candidate is not None:
+        event_type = "STRATEGY_CANDIDATE_CREATED"
+        severity = "WARNING"
+        title = f"{definition['name']} paper candidate created"
+    elif accepted:
+        event_type = "STRATEGY_LEARNING_PASSED"
+        severity = "SUCCESS"
+        title = f"{definition['name']} passed its learning review"
+    else:
+        event_type = "STRATEGY_LEARNING_FAILED"
+        severity = "WARNING"
+        title = f"{definition['name']} learning review needs changes"
+
+    candidate_version = (
+        candidate.version
+        if candidate is not None
+        else evaluation.candidate_version
+    )
+    message = (
+        f"Milestone {evaluation.milestone} using the latest "
+        f"{evaluation.window_size} closed trades: "
+        f"win rate {float(metrics.get('win_rate') or 0):.1f}%, "
+        f"targets {int(metrics.get('target_successes') or 0)}, "
+        f"initial stops {int(metrics.get('initial_stop_failures') or 0)}, "
+        f"profit factor {float(metrics.get('profit_factor') or 0):.2f}, "
+        f"expectancy INR {float(metrics.get('expectancy_inr') or 0):+,.2f}."
+    )
+    if candidate_version:
+        message += f" Paper candidate: {candidate_version}."
+
+    NotificationRepository().create(
+        db,
+        event_key=f"strategy_learning:{evaluation.id}:{event_type}",
+        category="STRATEGY",
+        event_type=event_type,
+        severity=severity,
+        title=title,
+        message=message,
+        metadata={
+            "strategyId": definition["id"],
+            "strategyVersion": definition["version"],
+            "milestone": evaluation.milestone,
+            "windowSize": evaluation.window_size,
+            "status": evaluation.status,
+            "candidateVersion": candidate_version,
+            "gates": report.get("gates") or {},
+            "liveExecutionEnabled": False,
+        },
+    )
 
 
 def _beats_current_benchmark(db, config, candidate_metrics):

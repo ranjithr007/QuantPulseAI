@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from app.database.models.strategy_learning import StrategyLearningEvaluation
 from app.database.models.strategy_learning import StrategyVersionConfig
 from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
+from app.database.models.app_notification import AppNotification
 from app.database.sqlserver import Base
 from app.strategies.learning import analyze_strategy_trades
 from app.strategies.learning import apply_learning_parameters
@@ -121,6 +123,15 @@ def test_due_evaluation_creates_one_immutable_paper_candidate():
         definitions = strategy_definitions(db, CORE_SIGNAL_STRATEGY["id"])
         assert len(definitions) == 2
         assert definitions[1]["strategy_type"] == "AUTO_CANDIDATE"
+        notifications = db.query(AppNotification).all()
+        assert len(notifications) == 1
+        assert notifications[0].event_type == "STRATEGY_CANDIDATE_CREATED"
+        assert notifications[0].category == "STRATEGY"
+        assert notifications[0].severity == "WARNING"
+        metadata = json.loads(notifications[0].metadata_json)
+        assert metadata["liveExecutionEnabled"] is False
+        assert metadata["candidateVersion"] == config.version
+        assert metadata["windowSize"] == 30
     finally:
         db.close()
 
@@ -137,6 +148,53 @@ def test_due_evaluation_waits_for_thirty_closed_trades():
         assert result["created_candidate_count"] == 0
         assert db.query(StrategyLearningEvaluation).count() == 0
         assert db.query(StrategyVersionConfig).count() == 0
+        assert db.query(AppNotification).count() == 0
+    finally:
+        db.close()
+
+
+def test_profitable_base_review_notifies_once_without_creating_candidate():
+    db = _session()
+    try:
+        db.add_all([_row(index + 1, winning=index < 18) for index in range(30)])
+        db.commit()
+
+        evaluate_due_strategy_versions(db)
+        evaluate_due_strategy_versions(db)
+
+        notification = db.query(AppNotification).one()
+        assert notification.event_type == "STRATEGY_LEARNING_PASSED"
+        assert notification.severity == "SUCCESS"
+        assert db.query(StrategyVersionConfig).count() == 0
+    finally:
+        db.close()
+
+
+def test_failed_candidate_notifies_replacement_without_enabling_live():
+    db = _session()
+    try:
+        db.add_all([_row(index + 1, winning=False) for index in range(30)])
+        db.commit()
+        first = evaluate_due_strategy_versions(db)
+        version = first["candidates"][0]["version"]
+        db.add_all([
+            _row(index + 101, winning=False, strategy_version=version)
+            for index in range(30)
+        ])
+        db.commit()
+
+        result = evaluate_due_strategy_versions(db)
+        evaluate_due_strategy_versions(db)
+
+        assert result["created_candidate_count"] == 1
+        notifications = db.query(AppNotification).order_by(AppNotification.id).all()
+        assert [row.event_type for row in notifications] == [
+            "STRATEGY_CANDIDATE_CREATED", "STRATEGY_CANDIDATE_REPLACED"
+        ]
+        metadata = json.loads(notifications[-1].metadata_json)
+        assert metadata["candidateVersion"] != version
+        assert metadata["liveExecutionEnabled"] is False
+        assert all(not row.live_execution_enabled for row in db.query(StrategyVersionConfig))
     finally:
         db.close()
 
@@ -170,6 +228,12 @@ def test_profitable_candidate_becomes_paper_champion_but_never_live():
         assert config.official_paper_enabled is True
         assert config.live_execution_enabled is False
         assert result["live_execution_enabled"] is False
+        notifications = db.query(AppNotification).order_by(AppNotification.id).all()
+        assert [row.event_type for row in notifications] == [
+            "STRATEGY_CANDIDATE_CREATED",
+            "STRATEGY_PAPER_CHAMPION",
+        ]
+        assert notifications[-1].severity == "SUCCESS"
     finally:
         db.close()
 
