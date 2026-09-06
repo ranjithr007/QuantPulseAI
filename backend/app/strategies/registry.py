@@ -17,6 +17,7 @@ MARKET_MOVE_DECISION_VERSION = "market_move_strategy_v1"
 REGIME_TREND_STRATEGY_ID = "REGIME_TREND"
 REGIME_TREND_STRATEGY_VERSION = "regime_trend_v1"
 REGIME_TREND_DECISION_VERSION = "regime_trend_strategy_v1"
+REGIME_TREND_ENTRY_STRATEGY_ID = "REGIME_TREND_ENTRY"
 ORDERFLOW_SMC_STRATEGY_ID = "ORDERFLOW_SMC"
 ORDERFLOW_SMC_STRATEGY_VERSION = "orderflow_smc_v1"
 ORDERFLOW_SMC_DECISION_VERSION = "orderflow_smc_strategy_v1"
@@ -97,6 +98,17 @@ REGIME_TREND_STRATEGY = {
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
     "official_execution_enabled": True,
+}
+
+REGIME_TREND_ENTRY_STRATEGY = {
+    **REGIME_TREND_STRATEGY,
+    "id": REGIME_TREND_ENTRY_STRATEGY_ID,
+    "version": "regime_trend_entry_v1",
+    "decision_version": "regime_trend_entry_strategy_v1",
+    "name": "Regime Trend Entry Candidate",
+    "description": "Trend-only Feature/Regime alignment with tested boundary rejection, EMA and spot CVD confirmation. Original exits retained for entry-only comparison.",
+    "strategy_type": "ENTRY_CANDIDATE",
+    "official_execution_enabled": False,
 }
 
 ORDERFLOW_SMC_STRATEGY = {
@@ -217,6 +229,7 @@ STRATEGY_REGISTRY = {
     CORE_SIGNAL_STRATEGY_ID: CORE_SIGNAL_STRATEGY,
     MARKET_MOVE_STRATEGY_ID: MARKET_MOVE_STRATEGY,
     REGIME_TREND_STRATEGY_ID: REGIME_TREND_STRATEGY,
+    REGIME_TREND_ENTRY_STRATEGY_ID: REGIME_TREND_ENTRY_STRATEGY,
     ORDERFLOW_SMC_STRATEGY_ID: ORDERFLOW_SMC_STRATEGY,
     LIQUIDATION_CARRY_STRATEGY_ID: LIQUIDATION_CARRY_STRATEGY,
     CORE_FUSION_STRATEGY_ID: CORE_FUSION_STRATEGY,

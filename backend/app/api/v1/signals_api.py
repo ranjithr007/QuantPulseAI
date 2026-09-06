@@ -70,6 +70,7 @@ from app.strategies.registry import LIQUIDATION_CARRY_STRATEGY_ID
 from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
 from app.strategies.registry import ORDERFLOW_SMC_STRATEGY_ID
 from app.strategies.registry import REGIME_TREND_STRATEGY_ID
+from app.strategies.registry import REGIME_TREND_ENTRY_STRATEGY_ID
 from app.strategies.registry import RANGE_REVERSION_STRATEGY_ID
 from app.strategies.registry import STRATEGY_REGISTRY
 from app.strategies.registry import TREND_PULLBACK_STRATEGY_ID
@@ -78,6 +79,7 @@ from app.strategies.candidate_builders import build_liquidation_carry_payload
 from app.strategies.candidate_builders import build_orderflow_smc_payload
 from app.strategies.candidate_builders import build_range_reversion_payload
 from app.strategies.candidate_builders import build_regime_trend_payload
+from app.strategies.candidate_builders import build_regime_trend_entry_payload
 from app.strategies.candidate_builders import build_trend_pullback_payload
 from app.strategies.learning import active_candidate_definitions
 from app.strategies.learning import apply_learning_parameters
@@ -2137,6 +2139,7 @@ def _persist_strategy_candidates(db, payload, market_participation):
         market_participation,
     )
     regime_trend_payload = build_regime_trend_payload(payload)
+    regime_entry_payload = build_regime_trend_entry_payload(payload, market_participation)
     orderflow_smc_payload = build_orderflow_smc_payload(payload)
     liquidation_carry_payload = build_liquidation_carry_payload(
         payload,
@@ -2168,6 +2171,11 @@ def _persist_strategy_candidates(db, payload, market_participation):
         effective_timestamp=evaluation_timestamp,
     )
     regime_trend_definition = strategy_definition(REGIME_TREND_STRATEGY_ID)
+    regime_entry_definition = strategy_definition(REGIME_TREND_ENTRY_STRATEGY_ID)
+    regime_entry_snapshot = _persist_derived_strategy_snapshot(
+        db, regime_entry_payload, regime_entry_definition,
+        effective_timestamp=evaluation_timestamp,
+    )
     orderflow_smc_definition = strategy_definition(ORDERFLOW_SMC_STRATEGY_ID)
     liquidation_carry_definition = strategy_definition(
         LIQUIDATION_CARRY_STRATEGY_ID
@@ -2208,6 +2216,8 @@ def _persist_strategy_candidates(db, payload, market_participation):
         effective_timestamp=evaluation_timestamp,
     )
     base_records = [
+        {"definition": regime_entry_definition, "payload": regime_entry_payload,
+         "snapshot": regime_entry_snapshot},
         {
             "definition": strategy_definition(CORE_SIGNAL_STRATEGY_ID),
             "payload": payload,
@@ -2250,6 +2260,7 @@ def _persist_strategy_candidates(db, payload, market_participation):
         },
     ]
     payloads_by_strategy = {
+        REGIME_TREND_ENTRY_STRATEGY_ID: (regime_entry_payload, regime_entry_snapshot),
         CORE_SIGNAL_STRATEGY_ID: (payload, core_snapshot),
         MARKET_MOVE_STRATEGY_ID: (market_move_payload, market_move_snapshot),
         REGIME_TREND_STRATEGY_ID: (regime_trend_payload, regime_trend_snapshot),

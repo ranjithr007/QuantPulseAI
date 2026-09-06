@@ -37,7 +37,7 @@ def test_every_registered_strategy_competes_for_official_paper_execution():
     assert all(
         definition["status"] == "ACTIVE"
         and definition["execution_scope"] == "PAPER_ONLY"
-        and definition["official_execution_enabled"] is True
+        and definition["official_execution_enabled"] is (definition["id"] != "REGIME_TREND_ENTRY")
         and definition["one_active_trade_per_symbol"] is True
         for definition in STRATEGY_REGISTRY.values()
     )

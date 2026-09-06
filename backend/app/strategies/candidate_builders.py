@@ -52,6 +52,48 @@ def build_regime_trend_payload(core_payload):
     )
 
 
+def build_regime_trend_entry_payload(core_payload, market_participation):
+    raw = market_participation or {}
+    spot_by_timeframe = {
+        item.get("timeframe"): item
+        for item in (raw.get("spot") or {}).get("timeframes") or []
+    }
+    fresh_spot = not freshness_status(
+        raw.get("effective_timestamp"), MARKET_PARTICIPATION_MAX_AGE_SECONDS
+    ).get("is_stale", True)
+
+    def entry_gate(item):
+        if item.get("status") != "OK":
+            return item
+        side = _side(item.get("score"))
+        regime = ((item.get("component_scores") or {}).get("regime") or {}).get("value")
+        allowed = {"TRENDING_BULL": "LONG", "BULL_PULLBACK": "LONG",
+                   "TRENDING_BEAR": "SHORT", "BEAR_RALLY": "SHORT"}
+        spot = spot_by_timeframe.get(item.get("timeframe")) or {}
+        price = _number(spot.get("spot_price"))
+        ema = _number(spot.get("ema20"))
+        atr = _number(item.get("atr"))
+        cvd = _number(spot.get("spot_cvd_percent"))
+        zone = spot.get("support" if side == "LONG" else "resistance") or {}
+        conditions = [
+            ("Trend-only regime must match the entry direction", side is not None and allowed.get(regime) == side),
+            ("Fresh selected-timeframe spot evidence is required", fresh_spot and spot.get("status") == "READY"),
+            ("Tested boundary rejection is required", _number(zone.get("tests")) >= 2 and zone.get("latest_rejected") is True),
+            ("Spot CVD must confirm direction", cvd > 0 if side == "LONG" else cvd < 0),
+            ("Entry must confirm EMA within one ATR", price > 0 and ema > 0 and atr > 0 and
+             (0 <= price - ema <= atr if side == "LONG" else 0 <= ema - price <= atr)),
+        ]
+        reason = next((name for name, passed in conditions if not passed), None)
+        return {**item, "status": "WAIT" if reason else "OK", "reason": reason,
+                "entry_conditions": [{"name": name, "passed": bool(passed)} for name, passed in conditions]}
+
+    return _build_component_payload(
+        core_payload, label="Regime Trend Entry Candidate",
+        required_components=("feature", "regime"), maximum_component_total=49.0,
+        entry_gate=entry_gate,
+    )
+
+
 def build_orderflow_smc_payload(core_payload):
     return _build_component_payload(
         core_payload,
@@ -424,6 +466,7 @@ def _build_component_payload(
     label,
     required_components,
     maximum_component_total,
+    entry_gate=None,
 ):
     timeframes = [
         _component_timeframe(
@@ -433,6 +476,8 @@ def _build_component_payload(
         )
         for item in core_payload.get("timeframes") or []
     ]
+    if entry_gate is not None:
+        timeframes = [entry_gate(item) for item in timeframes]
     labels = tuple(item.get("timeframe") for item in timeframes)
     complete_stack = labels == tuple(OFFICIAL_ENTRY_TIMEFRAMES)
     actionable = [
