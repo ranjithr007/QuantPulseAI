@@ -5,6 +5,11 @@ const API_BASE = import.meta.env.PROD
 function apiUrl(path) {
   return new URL(String(path).replace(/^\/+/, ""), API_BASE);
 }
+
+export async function loadStrategyComparison({ symbol, days, jobId, signal }) {
+  return requestJson(jobId ? `backtest/walk-forward/jobs/${encodeURIComponent(jobId)}` : "backtest/strategy-comparison/jobs",
+    jobId ? {} : { symbol, days }, signal, 20000, jobId ? "GET" : "POST");
+}
 const STALE_AFTER_BY_TIMEFRAME = {
   "1m": 5 * 60,
   "5m": 15 * 60,

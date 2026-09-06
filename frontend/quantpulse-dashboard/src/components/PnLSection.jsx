@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import ExitPolicyEvidence from "./ExitPolicyEvidence";
 import { useEffect, useState } from "react";
 import {
   Activity,
@@ -627,6 +628,7 @@ function OpenPositionsTable({ openPositions }) {
                 <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.entry_price)}</td>
                 <td className="px-3 py-2.5 text-rose-200">
                   <div>{formatPrice(trade.stop_loss)}</div>
+                  <ExitPolicyEvidence trade={trade} />
                   {stopProtectionLabel(trade) ? <div className="mt-0.5 text-[10px] uppercase tracking-wide text-emerald-300">{stopProtectionLabel(trade)}</div> : null}
                 </td>
                 <td className={clsx("px-3 py-2.5", trade.target1_hit_at ? "text-emerald-300" : "text-slate-300")}>

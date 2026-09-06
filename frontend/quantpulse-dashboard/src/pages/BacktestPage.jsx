@@ -25,6 +25,7 @@ import {
   loadWalkForwardSummary,
 } from "../hooks/dashboardApi";
 import MetricCard from "../components/ui/MetricCard";
+import StrategyBacktestComparison from "../components/StrategyBacktestComparison";
 import Pill from "../components/ui/Pill";
 import { formatDate, formatPercent, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
 
@@ -359,6 +360,8 @@ export default function BacktestPage({
             <Pill tone={displayedWinRate >= 50 ? "emerald" : "amber"}>{formatPercent(displayedWinRate, 0)} win rate</Pill>
           </div>
         </div>
+
+        <StrategyBacktestComparison key={view.symbol} symbol={view.symbol} />
 
         {!engineResult ? (
           <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100">

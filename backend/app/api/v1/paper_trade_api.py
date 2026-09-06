@@ -2645,6 +2645,8 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
             None,
         ),
         "exit_policy": exit_levels["exit_policy"],
+        "recorded_exit_policy": getattr(paper_trade, "exit_policy", None),
+        "recorded_initial_stop_loss": getattr(paper_trade, "initial_stop_loss", None),
         "exit_levels_source": exit_levels["source"],
         "initial_stop_loss": exit_levels["initial_stop_loss"],
         "target1_fraction": exit_levels["target1_fraction"],

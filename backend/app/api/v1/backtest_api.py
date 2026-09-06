@@ -23,6 +23,7 @@ from app.backtesting.walk_forward_validator import minimum_candles_for_folds
 from app.backtesting.walk_forward_validator import phase2_walk_forward_defaults
 from app.backtesting.walk_forward_jobs import complete_walk_forward_job
 from app.backtesting.walk_forward_jobs import create_walk_forward_job
+from app.backtesting.walk_forward_jobs import create_automatic_walk_forward_job
 from app.backtesting.walk_forward_jobs import expire_stale_walk_forward_job
 from app.backtesting.walk_forward_jobs import fail_walk_forward_job
 from app.backtesting.walk_forward_jobs import load_latest_walk_forward_job
@@ -40,6 +41,23 @@ from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 
 router = APIRouter(prefix="/backtest", tags=["Backtesting"])
+
+
+@router.post("/strategy-comparison/jobs", status_code=202)
+def submit_strategy_comparison(
+    background_tasks: BackgroundTasks,
+    symbol: str = Query(pattern="^[A-Z0-9]{3,20}$"),
+    days: int = Query(default=7, ge=1, le=30),
+):
+    """Automatically reuse a one-hour cached, worker-executed comparison."""
+    from app.backtesting.strategy_comparison import ENGINE
+    parameters = {"engine": ENGINE, "symbol": symbol, "days": days}
+    record, created = create_automatic_walk_forward_job(parameters, refresh_after_seconds=3600)
+    if created and get_settings().process_role == "all":
+        background_tasks.add_task(_run_walk_forward_validation_job, record["job_id"], parameters)
+    return public_walk_forward_job(record)
+
+
 MAX_WALK_FORWARD_CANDLES = 20000
 WALK_FORWARD_STRATEGIES = (
     "^(SIGNAL_GATED|BASELINE|RESEARCH_CALIBRATION|SHORT_EDGE_CALIBRATION|"
@@ -497,6 +515,12 @@ def get_walk_forward_validation_job(job_id: str):
 def _run_walk_forward_validation_job(job_id, parameters):
     mark_walk_forward_job_running(job_id)
     try:
+        from app.backtesting.strategy_comparison import ENGINE, build_strategy_comparison
+        if parameters.get("engine") == ENGINE:
+            with SessionLocal() as db:
+                response = build_strategy_comparison(db, parameters["symbol"], parameters["days"])
+            complete_walk_forward_job(job_id, response)
+            return
         result = execute_walk_forward(**parameters)
         symbol = parameters["symbol"]
         timeframe = parameters["timeframe"]

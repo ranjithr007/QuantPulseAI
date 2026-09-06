@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import clsx from "clsx";
+import ExitPolicyEvidence from "../components/ExitPolicyEvidence";
 import {
   Activity,
   AlertTriangle,
@@ -328,7 +329,7 @@ function StrategyPaperHistory({ trades, loading = false }) {
                 <td className="px-4 py-3 font-semibold text-white">{trade.symbol}</td>
                 <td><StatusBadge label={trade.side} tone={trade.side === "LONG" ? "emerald" : "rose"} /> <span className="ml-1">{trade.entry_timeframe || "—"}</span></td>
                 <td>{price(trade.entry_price)}</td>
-                <td>{price(trade.stop_loss)}</td>
+                <td><div>{price(trade.stop_loss)}</div><ExitPolicyEvidence trade={trade} /></td>
                 <td>{price(trade.target1)}</td>
                 <td>{price(trade.target2)}</td>
                 <td><StatusBadge label={trade.status} tone={trade.status === "OPEN" ? "cyan" : trade.result === "WIN" ? "emerald" : "rose"} /></td>

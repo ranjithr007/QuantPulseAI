@@ -882,6 +882,10 @@ def _strategy_performance(trades):
 
 def _strategy_paper_trade_payload(trade):
     return {
+        "recorded_exit_policy": getattr(trade, "exit_policy", None),
+        "recorded_initial_stop_loss": getattr(trade, "initial_stop_loss", None),
+        "strategy_id": getattr(trade, "strategy_id", None),
+        "strategy_version": getattr(trade, "strategy_version", None),
         "id": trade.id,
         "symbol": trade.symbol,
         "side": trade.side,
