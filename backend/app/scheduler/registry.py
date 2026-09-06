@@ -12,6 +12,7 @@ DEFAULT_JOB_IDS = [
     "orderbook",
     "walk_forward_queue",
     "strategy_learning",
+    "paper_trade_fast_exit",
     "pipeline_retention",
 ]
 
@@ -27,6 +28,7 @@ class SchedulerJobDefinition:
     minutes: int | None = None
     max_instances: int = 1
     coalesce: bool = False
+    executor: str = "default"
 
     def load(self):
         module = import_module(self.module)
@@ -48,6 +50,8 @@ class SchedulerJobDefinition:
 
         if self.coalesce:
             kwargs["coalesce"] = True
+        if self.executor != "default":
+            kwargs["executor"] = self.executor
 
         return kwargs
 
@@ -66,6 +70,13 @@ class SchedulerJobDefinition:
 
 
 JOB_DEFINITIONS = {
+    "paper_trade_fast_exit": SchedulerJobDefinition(
+        id="paper_trade_fast_exit",
+        name="One-second paper stop and target protection",
+        module="app.jobs.paper_trade_fast_exit_job",
+        function="run_paper_trade_fast_exit_job",
+        trigger="interval", seconds=1, coalesce=True, executor="paper_exits",
+    ),
     "market": SchedulerJobDefinition(
         id="market",
         name="Market data collector",

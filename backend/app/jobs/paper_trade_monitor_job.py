@@ -5,6 +5,7 @@ from app.collectors.binances.mark_price_collector import MarkPriceCollector
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
+from app.paper_trading.exit_lock import lock_open_trade
 from app.repositories.candle_repository import get_final_candles_after
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.paper_trade_repository import PaperTradeRepository
@@ -105,6 +106,15 @@ def run_paper_trade_monitor_job():
                 last_decision = None
                 trade_closed = False
                 for candle in candles:
+                    trade = lock_open_trade(db, trade)
+                    if trade is None:
+                        trade_closed = True
+                        break
+                    if _predates_live_protection(trade, candle):
+                        candle = _overlap_close_evidence(trade, candle)
+                        if candle is None:
+                            continue
+                        summary["errors"].append(f"{trade.symbol}: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY")
                     decision = {
                         **evaluate_paper_trade_exit(trade, candle),
                         "monitor_timeframe": timeframe,
@@ -150,9 +160,13 @@ def run_paper_trade_monitor_job():
                                 "target1_hit_at": updated_trade.target1_hit_at,
                             }
                         )
-                        if getattr(candle, "live_mark", False):
+                        if _needs_target2_recheck(updated_trade, candle):
+                            updated_trade = lock_open_trade(db, updated_trade)
+                            if updated_trade is None:
+                                trade_closed = True
+                                break
                             target2_decision = {
-                                **evaluate_paper_trade_exit(updated_trade, candle),
+                                **evaluate_paper_trade_exit(updated_trade, _after_target1_evidence(updated_trade, candle)),
                                 "monitor_timeframe": timeframe,
                             }
                             if target2_decision["action"] == "CLOSE":
@@ -231,6 +245,11 @@ def run_paper_trade_monitor_job():
                 )
                 continue
 
+            finally:
+                # Release read-only locks before the next symbol's network I/O.
+                # Repository mutations have already committed independently.
+                safe_rollback(db)
+
         summary["shadow"] = _run_strategy_shadow_monitor(db)
         if (
             summary["errors"]
@@ -295,6 +314,15 @@ def _run_strategy_shadow_monitor(db):
             closed = False
             last_checkpoint = None
             for candle in candles:
+                trade = lock_open_trade(db, trade)
+                if trade is None:
+                    closed = True
+                    break
+                if _predates_live_protection(trade, candle):
+                    candle = _overlap_close_evidence(trade, candle)
+                    if candle is None:
+                        continue
+                    summary["errors"].append(f"{trade.symbol}: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY")
                 decision = evaluate_paper_trade_exit(trade, candle)
                 last_checkpoint = _candle_checkpoint(candle)
                 action = decision["action"]
@@ -320,8 +348,12 @@ def _run_strategy_shadow_monitor(db):
                     summary["partial_closes"] += 1
                     # A live mark may already be beyond both targets. Recheck
                     # immediately after persisting T1 so the remaining leg exits.
-                    if getattr(candle, "live_mark", False):
-                        decision = evaluate_paper_trade_exit(trade, candle)
+                    if _needs_target2_recheck(trade, candle):
+                        trade = lock_open_trade(db, trade)
+                        if trade is None:
+                            closed = True
+                            break
+                        decision = evaluate_paper_trade_exit(trade, _after_target1_evidence(trade, candle))
                         if decision["action"] == "CLOSE":
                             trade = repo.close_trade(
                                 db,
@@ -372,7 +404,51 @@ def _run_strategy_shadow_monitor(db):
             summary["errors"].append(
                 f"{trade.strategy_id} {trade.symbol}: {summarize_network_error(exc)}"
             )
+        finally:
+            safe_rollback(db)
     return summary
+
+
+def _needs_target2_recheck(trade, candle):
+    return getattr(candle, "live_mark", False) or (
+        float(candle.high_price) >= trade.target2 if trade.side == "LONG"
+        else float(candle.low_price) <= trade.target2
+    )
+
+
+def _after_target1_evidence(trade, candle):
+    if getattr(candle, "live_mark", False):
+        return candle
+    # The old stop was already tested. Do not apply the NEW stop to a low/high
+    # that may have happened before T1. Both targets were necessarily traversed
+    # if the favorable extreme reaches T2; other ordering remains unknown.
+    price = float(candle.high_price if trade.side == "LONG" else candle.low_price)
+    return SimpleNamespace(high_price=price, low_price=price, close_price=price,
+        candle_time=candle.candle_time, close_time=getattr(candle, "close_time", None),
+        live_mark=False)
+
+
+def _overlap_close_evidence(trade, candle):
+    end = normalize_timestamp_to_utc(getattr(candle, "close_time", None))
+    checkpoint = normalize_timestamp_to_utc(trade.last_exit_evaluated_at)
+    if end is None or end <= checkpoint:
+        return None
+    # OHLC cannot establish which side of the stop change a wick occurred on.
+    # Use the known close after the checkpoint, and explicitly flag lost coverage.
+    price = float(candle.close_price)
+    return SimpleNamespace(high_price=price, low_price=price, close_price=price,
+        candle_time=end.replace(tzinfo=None), close_time=end.replace(tzinfo=None),
+        open_time=end.replace(tzinfo=None), live_mark=True)
+
+
+def _predates_live_protection(trade, candle):
+    # The live path may have changed the active stop after this candle began.
+    # Do not retroactively apply that new stop to an earlier high/low.
+    if getattr(candle, "live_mark", False):
+        return False
+    checkpoint = normalize_timestamp_to_utc(getattr(trade, "last_exit_evaluated_at", None))
+    candle_start = normalize_timestamp_to_utc(getattr(candle, "open_time", None) or getattr(candle, "candle_time", None))
+    return checkpoint is not None and candle_start is not None and candle_start < checkpoint
 
 
 def _exit_candles(db, trade):
@@ -426,7 +502,8 @@ def _candle_checkpoint(candle):
         # replayed later and no intrabar stop/target evidence is skipped.
         return None
     value = normalize_timestamp_to_utc(
-        getattr(candle, "open_time", None)
+        getattr(candle, "close_time", None)
+        or getattr(candle, "open_time", None)
         or getattr(candle, "candle_time", None)
     )
     if value is None:

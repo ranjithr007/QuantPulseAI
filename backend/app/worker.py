@@ -27,6 +27,8 @@ def main():
 
     print("QuantPulse scheduler worker started")
     stop_event.wait()
+    from app.services.paper_exit_prices import paper_exit_prices
+    paper_exit_prices.stop()
 
     scheduler = get_scheduler()
     if scheduler and scheduler.running:

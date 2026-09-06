@@ -10,23 +10,23 @@ class SmartMoneyEngine:
 
         # Long liquidation hunt
 
-        if liquidity.long_squeeze_probability > 60 and heatmap.bias == "HUNT_LONGS":
+        if liquidity.long_squeeze_probability > 60 and heatmap.bias == "LONG_LIQUIDATIONS":
 
             direction = "SHORT"
 
-            confidence += 70
+            confidence += 70 * min(100, max(0, float(heatmap.confidence or 0))) / 100
 
-            reasons.append("Long liquidation hunt detected")
+            reasons.append("Observed long liquidations with long-squeeze risk")
 
         # Short liquidation hunt
 
-        elif liquidity.short_squeeze_probability > 60 and heatmap.bias == "HUNT_SHORTS":
+        elif liquidity.short_squeeze_probability > 60 and heatmap.bias == "SHORT_LIQUIDATIONS":
 
             direction = "LONG"
 
-            confidence += 70
+            confidence += 70 * min(100, max(0, float(heatmap.confidence or 0))) / 100
 
-            reasons.append("Short squeeze setup detected")
+            reasons.append("Observed short liquidations with short-squeeze risk")
 
         return {
             "direction": direction,

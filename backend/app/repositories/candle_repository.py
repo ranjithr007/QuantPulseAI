@@ -256,7 +256,7 @@ def get_final_candles_after(db, symbol, timeframe, after_timestamp, limit=1000):
         .filter(MarketCandle.symbol == symbol)
         .filter(MarketCandle.timeframe == timeframe)
         .filter(MarketCandle.is_final == true())
-        .filter(MarketCandle.open_time > after)
+        .filter(MarketCandle.close_time > after)
         .filter(MarketCandle.close_time <= now)
         .order_by(MarketCandle.open_time.asc(), MarketCandle.id.asc())
         .limit(candidate_limit)

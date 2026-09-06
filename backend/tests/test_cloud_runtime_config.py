@@ -58,6 +58,7 @@ def test_full_pipeline_worker_always_includes_strategy_learning(monkeypatch):
         "derivative",
         "pipeline_retention",
         "strategy_learning",
+        "paper_trade_fast_exit",
     ]
 
 

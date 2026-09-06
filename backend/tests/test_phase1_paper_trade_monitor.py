@@ -829,7 +829,7 @@ class Phase1PaperTradeMonitorTests(unittest.TestCase):
         self.assertIn("trade.fees_percent = round(fees_percent, 4)", source)
         self.assertIn("trade.funding_cost_percent = round(funding_cost_percent, 6)", source)
         self.assertIn("gross_pnl - fees_percent - funding_cost_percent", source)
-        self.assertIn("closed_at = datetime.utcnow()", source)
+        self.assertIn("closed_at = exit_evidence_time(trade, fill_profile)", source)
         self.assertIn("trade.closed_at = closed_at", source)
 
 

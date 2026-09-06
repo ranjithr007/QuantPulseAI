@@ -5,6 +5,7 @@ They never read mutable state, approve risk, or execute a trade.
 """
 
 from app.governance.evidence_policy import MIN_ENTRY_CONFIDENCE
+from app.intelligence.liquidation_evidence import liquidation_pressure_score, ORDER_SIDE_METHOD
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
 from app.trading.market_participation_guard import (
     MARKET_PARTICIPATION_MAX_AGE_SECONDS,
@@ -66,13 +67,14 @@ def build_liquidation_carry_payload(core_payload, market_participation):
     liquidation = raw.get("liquidation") or {}
     components = raw.get("components") or {}
     derivative_score = _number(components.get("derivatives"))
-    liquidation_score = _number(components.get("liquidation"))
+    liquidation_score = liquidation_pressure_score(liquidation)
     funding = _optional_number(derivatives.get("funding_rate"))
     open_interest = _optional_number(
         derivatives.get("open_interest_change_percent")
     )
     observed_liquidation = (
         liquidation.get("data_quality") == "OBSERVED"
+        and liquidation.get("direction_method") == ORDER_SIDE_METHOD
         and str(liquidation.get("status") or "").upper() == "READY"
     )
     fresh = not freshness_status(

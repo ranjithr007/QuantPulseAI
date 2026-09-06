@@ -19,6 +19,7 @@ from app.repositories._db_utils import flush_or_rollback
 from app.repositories.trade_thesis_repository import TradeThesisRepository
 from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.paper_trading.exit_lock import advance_exit_checkpoint
 
 
 class PaperTradeRepository:
@@ -564,12 +565,13 @@ class PaperTradeRepository:
         trade.remaining_position_fraction = max(0.0, 1.0 - fraction)
         trade.target1_hit_at = candle_time or datetime.utcnow()
         trade.target1_exit_price = float(exit_price)
-        trade.stop_loss = target1_protection_stop(
+        protected_stop = target1_protection_stop(
             trade.side,
             trade.entry_price,
             trade.target1,
             _price_precision(trade.entry_price),
         )
+        trade.stop_loss = max(float(trade.stop_loss), protected_stop) if trade.side == "LONG" else min(float(trade.stop_loss), protected_stop)
         _ensure_trade_sizing_snapshot(trade)
         gross_leg_percent = _directional_pnl_percent(
             trade.side,
@@ -603,7 +605,7 @@ class PaperTradeRepository:
         db.refresh(trade)
         return trade
 
-    def move_stop_loss(self, db, trade, stop_loss, evaluated_at=None):
+    def move_stop_loss(self, db, trade, stop_loss, evaluated_at=None, notify=True):
         """Persist a strictly more protective stop for an open paper trade."""
         current_stop = float(trade.stop_loss)
         requested_stop = float(stop_loss)
@@ -619,19 +621,21 @@ class PaperTradeRepository:
         trade.stop_loss = requested_stop
         if evaluated_at is not None:
             trade.last_exit_evaluated_at = evaluated_at
-        _notify_stop_moved(db, trade, current_stop, requested_stop)
+        if notify:
+            _notify_stop_moved(db, trade, current_stop, requested_stop)
         commit_or_rollback(db)
         db.refresh(trade)
         return trade
 
     def mark_exit_evaluated(self, db, trade, evaluated_at):
-        trade.last_exit_evaluated_at = evaluated_at
+        trade = advance_exit_checkpoint(db, trade, evaluated_at)
         commit_or_rollback(db)
         db.refresh(trade)
         return trade
 
     def close_trade(self, db, trade, exit_price, result, fill_profile=None):
-        closed_at = datetime.utcnow()
+        from app.paper_trading.exit_time import exit_evidence_time
+        closed_at = exit_evidence_time(trade, fill_profile)
         trade.status = "CLOSED"
         trade.exit_price = exit_price
         trade.result = result

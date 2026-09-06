@@ -11,6 +11,7 @@ from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.repositories._db_utils import commit_or_rollback, flush_or_rollback
+from app.paper_trading.exit_lock import advance_exit_checkpoint
 
 
 class StrategyShadowTradeRepository:
@@ -222,12 +223,13 @@ class StrategyShadowTradeRepository:
         trade.remaining_position_fraction = max(0.0, 1.0 - fraction)
         trade.target1_hit_at = candle_time or datetime.utcnow()
         trade.target1_exit_price = float(exit_price)
-        trade.stop_loss = target1_protection_stop(
+        protected_stop = target1_protection_stop(
             trade.side,
             trade.entry_price,
             trade.target1,
             _price_precision(trade.entry_price),
         )
+        trade.stop_loss = max(float(trade.stop_loss), protected_stop) if trade.side == "LONG" else min(float(trade.stop_loss), protected_stop)
         contribution = (
             _directional_pnl_percent(trade.side, trade.entry_price, exit_price)
             - (float(trade.fee_bps or 0) * 2 / 100)
@@ -255,13 +257,14 @@ class StrategyShadowTradeRepository:
         return trade
 
     def mark_exit_evaluated(self, db, trade, evaluated_at):
-        trade.last_exit_evaluated_at = evaluated_at
+        trade = advance_exit_checkpoint(db, trade, evaluated_at)
         commit_or_rollback(db)
         db.refresh(trade)
         return trade
 
     def close_trade(self, db, trade, exit_price, result, fill_profile=None):
-        closed_at = datetime.utcnow()
+        from app.paper_trading.exit_time import exit_evidence_time
+        closed_at = exit_evidence_time(trade, fill_profile)
         trade.status = "CLOSED"
         trade.exit_price = float(exit_price)
         trade.exit_reason = str(

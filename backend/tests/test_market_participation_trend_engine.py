@@ -62,7 +62,7 @@ def test_bullish_spot_participation_produces_separate_executable_long_trend():
         },
         breadth=breadth,
         ethbtc={"status": "READY", "score": 40},
-        liquidation={"data_quality": "OBSERVED", "bias": "HUNT_SHORTS"},
+        liquidation={"data_quality": "OBSERVED", "direction_method": "ORDER_SIDE_V1", "imbalance_score": 100, "bias": "SHORT_LIQUIDATIONS"},
     )
 
     assert result["status"] == "READY"
@@ -87,7 +87,7 @@ def test_bearish_spot_participation_produces_separate_executable_short_trend():
             "bearish_percent": 100,
         },
         ethbtc={"status": "READY", "score": -40},
-        liquidation={"data_quality": "OBSERVED", "bias": "HUNT_LONGS"},
+        liquidation={"data_quality": "OBSERVED", "direction_method": "ORDER_SIDE_V1", "imbalance_score": -100, "bias": "LONG_LIQUIDATIONS"},
     )
 
     assert result["direction"] == "BEARISH"

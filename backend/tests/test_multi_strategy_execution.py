@@ -214,7 +214,7 @@ def _market_move(now, *, carry_ready=False):
                 "liquidation": {
                     "status": "READY",
                     "data_quality": "OBSERVED",
-                    "bias": "HUNT_SHORTS",
+                    "direction_method": "ORDER_SIDE_V1", "imbalance_score": 100, "bias": "SHORT_LIQUIDATIONS",
                 },
             }
         )

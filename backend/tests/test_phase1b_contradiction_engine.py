@@ -58,7 +58,7 @@ def smart_money(bias="SMART_MONEY_SHORT"):
     return Obj(bias=bias)
 
 
-def heatmap(bias="HUNT_LONGS"):
+def heatmap(bias="LONG_LIQUIDATIONS"):
     return Obj(bias=bias, created_at=None)
 
 

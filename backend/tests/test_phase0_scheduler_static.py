@@ -24,6 +24,7 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
                 "orderbook",
                 "walk_forward_queue",
                 "strategy_learning",
+                "paper_trade_fast_exit",
                 "pipeline_retention",
             ],
         )

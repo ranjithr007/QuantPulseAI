@@ -256,7 +256,7 @@ export default function PnLSection({
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">Equity curve</div>
-                <div className="text-xs text-slate-500">Cumulative closed trade PnL</div>
+                <div className="text-xs text-slate-500">Loaded {tradeHistory.length}-trade sample · cumulative trade percentages, not account return</div>
               </div>
               <Pill tone="cyan">{formatSigned(maxDrawdown)} max drawdown</Pill>
             </div>
@@ -283,7 +283,7 @@ export default function PnLSection({
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">PnL mix</div>
-                <div className="text-xs text-slate-500">Closed trades by signal type</div>
+                <div className="text-xs text-slate-500">Loaded sample by signal type · not lifetime totals</div>
               </div>
               <Pill tone="slate">{tradeHistory.length} closed</Pill>
             </div>
@@ -319,7 +319,7 @@ export default function PnLSection({
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">PNL by symbol</div>
-                <div className="text-xs text-slate-500">Closed trade performance</div>
+                <div className="text-xs text-slate-500">Loaded closed-trade sample · not lifetime account return</div>
               </div>
             </div>
             <div className="h-60 min-w-0 w-full">

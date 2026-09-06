@@ -346,9 +346,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
                     symbol="BTCUSDT",
                     timeframe="5m",
                     open_price=100.5,
-                    high_price=112.0,
+                    high_price=101.7,
                     low_price=100.0,
-                    close_price=102.5,
+                    close_price=101.6,
                     volume=1000,
                     candle_time=now - timedelta(minutes=10),
                     open_time=now - timedelta(minutes=10),
@@ -749,7 +749,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
         with self.Session() as db:
             trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
             self.assertEqual("PAPER_STAGED_EXIT_V2", trade.exit_policy)
-            self.assertEqual(75.7087, trade.stop_loss)
+            # The overlapping candle's post-entry close now advances trailing
+            # protection instead of silently dropping that evidence.
+            self.assertEqual(75.7279, trade.stop_loss)
             self.assertEqual(77.425, trade.target1)
             self.assertEqual(78.0353, trade.target2)
             self.assertEqual(1.0, trade.remaining_position_fraction)

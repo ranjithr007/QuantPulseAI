@@ -201,6 +201,7 @@ function DashboardApp({ username, onLogout }) {
     pnlBySymbol,
     pnlBySide,
     tradeHistory,
+    closedTradeCount,
     openPositions,
     dailyPnl,
     weeklyPnl,
@@ -374,6 +375,7 @@ function DashboardApp({ username, onLogout }) {
       pnlBySymbol={pnlBySymbol}
       pnlBySide={pnlBySide}
       tradeHistory={tradeHistory}
+      closedTradeCount={closedTradeCount}
       openPositions={openPositions}
       dailyPnl={dailyPnl}
       weeklyPnl={weeklyPnl}
@@ -428,6 +430,7 @@ function DashboardLayout({
   pnlBySymbol,
   pnlBySide,
   tradeHistory,
+  closedTradeCount,
   openPositions,
   dailyPnl,
   weeklyPnl,
@@ -472,7 +475,7 @@ function DashboardLayout({
         ) : null}
 
         <Suspense fallback={<RouteLoading />}>
-          <Routes>
+          <RouteErrorBoundary><Routes>
             <Route
               path="/dashboard"
               element={
@@ -648,6 +651,7 @@ function DashboardLayout({
                   losingTrades={losingTrades}
                   winRate={winRate}
                   tradeHistory={tradeHistory}
+                  closedTradeCount={closedTradeCount}
                   openPositions={openPositions}
                   paperWallet={paperWallet}
                   ledgerScope={ledgerScope}
@@ -705,11 +709,26 @@ function DashboardLayout({
             />
             <Route path="/" element={<Navigate to={buildPageUrl("dashboard", view)} replace />} />
             <Route path="*" element={<Navigate to={buildPageUrl("dashboard", view)} replace />} />
-          </Routes>
+          </Routes></RouteErrorBoundary>
         </Suspense>
       </main>
     </div>
   );
+}
+
+class RouteErrorBoundary extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (this.state.failed) return (
+      <section role="alert" className="m-6 rounded-lg border p-6">
+        <h2>Unable to load this page</h2>
+        <p>A connection problem or application update may have interrupted loading. Your saved trades are unaffected.</p>
+        <button className="mt-4 rounded border px-4 py-2" onClick={() => window.location.reload()}>Reload application</button>
+      </section>
+    );
+    return this.props.children;
+  }
 }
 
 function RouteLoading() {

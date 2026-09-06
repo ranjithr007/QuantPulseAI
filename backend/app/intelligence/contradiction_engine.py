@@ -593,9 +593,9 @@ def _direction_from_heatmap(heatmap):
         return "WAIT"
 
     bias = getattr(heatmap, "bias", None)
-    if _text_matches(bias, "HUNT_SHORTS"):
+    if _text_matches(bias, "SHORT_LIQUIDATIONS"):
         return "LONG"
-    if _text_matches(bias, "HUNT_LONGS"):
+    if _text_matches(bias, "LONG_LIQUIDATIONS"):
         return "SHORT"
     return "WAIT"
 

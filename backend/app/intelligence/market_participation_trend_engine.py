@@ -217,9 +217,9 @@ def build_market_participation_trend(
     components["liquidation"] = liquidation_score
     if liquidation_score:
         reasons.append(
-            "Liquidation pressure favours upside"
+            "Observed short-liquidation forced-buy pressure"
             if liquidation_score > 0
-            else "Long-liquidation pressure is below the market"
+            else "Observed long-liquidation forced-sell pressure"
         )
 
     external_score, external_status = _external_component(external_context)
@@ -447,14 +447,8 @@ def _ethbtc_component(ethbtc):
 
 
 def _liquidation_component(liquidation):
-    if not liquidation or liquidation.get("data_quality") != "OBSERVED":
-        return 0.0
-    bias = str(liquidation.get("bias") or "").upper()
-    if bias == "HUNT_LONGS":
-        return -8.0
-    if bias == "HUNT_SHORTS":
-        return 8.0
-    return 0.0
+    from app.intelligence.liquidation_evidence import liquidation_pressure_score
+    return liquidation_pressure_score(liquidation)
 
 
 def _external_component(context):

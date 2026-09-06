@@ -440,10 +440,11 @@ def _load_strategy_performance(
     initial_stop = and_(
         exit_reason.in_(("STOP", "STOP_LOSS")),
         model.target1_hit_at.is_(None),
+        realized < 0,
     )
     protected_stop = and_(
         exit_reason.in_(("STOP", "STOP_LOSS")),
-        target1_reached,
+        or_(target1_reached, realized >= 0),
     )
     query = db.query(
         model.strategy_id,
@@ -816,12 +817,13 @@ def _strategy_performance(trades):
         for item in closed
         if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
         and item.target1_hit_at is None
+        and float(item.realized_pnl_inr or 0) < 0
     ]
     protected_stop_exits = [
         item
         for item in closed
         if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
-        and item.target1_hit_at is not None
+        and (item.target1_hit_at is not None or float(item.realized_pnl_inr or 0) >= 0)
     ]
     net_pnl_inr = round(
         sum(float(item.realized_pnl_inr or 0) for item in closed),
@@ -903,6 +905,7 @@ def _strategy_paper_trade_payload(trade):
         "initial_stop_failure": bool(
             str(trade.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
             and trade.target1_hit_at is None
+            and float(trade.realized_pnl_inr or 0) < 0
         ),
     }
 

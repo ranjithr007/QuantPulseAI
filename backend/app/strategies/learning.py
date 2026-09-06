@@ -391,6 +391,7 @@ def latest_evaluations(db, definitions):
 
 
 def evaluation_payload(row):
+    current_metrics = _json(row.metrics_json).get("metric_version") == "NET_STOP_V2"
     return {
         "id": row.id,
         "strategy_id": row.strategy_id,
@@ -398,7 +399,7 @@ def evaluation_payload(row):
         "milestone": row.milestone,
         "window_size": row.window_size,
         "closed_trade_count": row.closed_trade_count,
-        "status": row.status,
+        "status": row.status if current_metrics else "LEGACY_METRICS_REVIEW_REQUIRED",
         "metrics": _json(row.metrics_json),
         "diagnostics": _json(row.diagnostics_json),
         "recommended_changes": _json(row.recommended_changes_json),
@@ -431,12 +432,13 @@ def _trade_metrics(trades):
         for item in trades
         if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
         and item.target1_hit_at is None
+        and float(item.realized_pnl_inr or 0) < 0
     )
     protected_stops = sum(
         1
         for item in trades
         if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
-        and item.target1_hit_at is not None
+        and (item.target1_hit_at is not None or float(item.realized_pnl_inr or 0) >= 0)
     )
     pnl = [float(item.realized_pnl_inr or 0) for item in trades]
     gains = sum(max(value, 0) for value in pnl)
@@ -447,6 +449,7 @@ def _trade_metrics(trades):
         "wins": wins,
         "losses": closed - wins,
         "win_rate": round(wins / closed * 100, 2) if closed else 0.0,
+        "metric_version": "NET_STOP_V2",
         "target_successes": target_successes,
         "target2_hits": sum(
             1 for item in trades if str(item.exit_reason or "").upper() == "TARGET2"
@@ -667,6 +670,10 @@ def _beats_current_benchmark(db, config, candidate_metrics):
     if benchmark is None:
         return False
     metrics = _json(benchmark.metrics_json)
+    if metrics.get("metric_version") != "NET_STOP_V2":
+        # Preserve the saved report but compare using the corrected metric
+        # definition. Never promote against an incompatible cached benchmark.
+        return False
     return bool(
         float(candidate_metrics.get("profit_factor") or 0)
         >= float(metrics.get("profit_factor") or 0)

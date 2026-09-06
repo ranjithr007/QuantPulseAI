@@ -14,6 +14,7 @@ import {
 import { loadMarketParticipationTrends } from "../hooks/dashboardApi";
 import { formatNumber, formatPercent, formatPrice, formatSigned } from "../utils/formatters";
 import Pill from "../components/ui/Pill";
+import { liquidationEngineEvidence } from "../utils/liquidationEvidence";
 
 export default function MarketMovePage({ view, selectedDetail }) {
   const [payload, setPayload] = useState({ records: [] });
@@ -224,6 +225,7 @@ function EngineScoreCard({ engines }) {
               <ScoreBar score={engine.score} />
             </div>
             <div className="mt-1 pl-[150px] text-[10px] leading-4 text-slate-500 sm:pl-[178px]">{engine.reason}</div>
+            {engine.details ? <div className="mt-1 text-[10px] leading-4 text-slate-500">{engine.details}</div> : null}
           </div>
         ))}
       </div>
@@ -423,10 +425,7 @@ function buildEngines(detail, participation) {
     ? normalizeExternalScore(macroInput ?? macroContext.score)
     : null;
   const liquidation = participation?.liquidation || {};
-  const liquidationObserved = liquidation.data_quality === "OBSERVED";
-  const liquidationScore = liquidationObserved
-    ? liquidation.bias === "HUNT_SHORTS" ? 100 : liquidation.bias === "HUNT_LONGS" ? -100 : normalizeComponent(participation?.components?.liquidation, 8)
-    : null;
+  const liquidationEvidence = liquidationEngineEvidence(liquidation);
   const orderFlow = breakdown["Order flow"];
   const smc = breakdown.SMC;
   const regime = breakdown.Regime;
@@ -442,7 +441,7 @@ function buildEngines(detail, participation) {
           : `${macroContext?.inputs?.provider || "Macro provider"} is ${macroContext.status || "DEGRADED"}; advisory ${formatSigned(normalizeExternalScore(macroInput), 0)} excluded from composite`
         : macroContext?.inputs?.reasons?.[0] || "Verified FRED macro context",
     },
-    { label: "Liquidations", score: liquidationScore, reason: liquidationReason(liquidation) },
+    { label: "Liquidations", ...liquidationEvidence },
     { label: "Order Flow", score: componentScore(orderFlow, 25, Boolean(detail?.selectedOrderflow)), reason: orderFlow?.reason || "Order-flow evidence pending" },
     { label: "Whales", score: whaleScore, reason: whaleReason(detail, whaleScore) },
     { label: "SMC", score: componentScore(smc, 30, Boolean(detail?.selectedSmc)), reason: smc?.reason || "SMC evidence pending" },
@@ -494,13 +493,6 @@ function whaleReason(detail, score) {
   if (score > 5) return `Whale buying leads selling (${detail?.whaleBuyCount || 0} vs ${detail?.whaleSellCount || 0})`;
   if (score < -5) return `Whale selling leads buying (${detail?.whaleSellCount || 0} vs ${detail?.whaleBuyCount || 0})`;
   return "Whale activity is balanced";
-}
-
-function liquidationReason(liquidation) {
-  if (liquidation?.data_quality !== "OBSERVED") return liquidation?.reason || "Observed liquidation feed unavailable";
-  if (liquidation.bias === "HUNT_SHORTS") return "Short liquidation cascade pressure";
-  if (liquidation.bias === "HUNT_LONGS") return "Long liquidation cascade pressure";
-  return "Liquidation pressure is balanced";
 }
 
 function normalizeComponent(value, expectedMaximum) {

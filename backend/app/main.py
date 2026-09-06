@@ -97,6 +97,8 @@ async def lifespan(app: FastAPI):
         await stop_live_market_listener()
 
     if active_scheduler and active_scheduler.running:
+        from app.services.paper_exit_prices import paper_exit_prices
+        paper_exit_prices.stop()
         active_scheduler.shutdown(wait=False)
 
 

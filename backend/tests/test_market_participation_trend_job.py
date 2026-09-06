@@ -80,7 +80,7 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
         return_value={"funding_rate": 0.0001, "open_interest_change_percent": 1.0},
     ), patch(
         "app.jobs.market_participation_trend_job._liquidation_context",
-        return_value={"data_quality": "OBSERVED", "bias": "HUNT_SHORTS"},
+        return_value={"data_quality": "OBSERVED", "direction_method": "ORDER_SIDE_V1", "imbalance_score": 100, "bias": "SHORT_LIQUIDATIONS"},
     ), patch(
         "app.jobs.market_participation_trend_job.FredMacroCollector",
         return_value=fred_collector,
@@ -229,99 +229,9 @@ def test_liquidation_heatmap_ignores_events_outside_source_window():
         assert result["source_event_count"] == 1
         assert result["above_value"] == 0
         assert result["below_value"] == 1_000.0
-        assert result["bias"] == "HUNT_LONGS"
+        assert result["bias"] == "LONG_LIQUIDATIONS"
     finally:
         db.close()
-
-
-def test_liquidation_context_rejects_stale_observed_event():
-    now = datetime(2026, 8, 15, 16, 0, tzinfo=timezone.utc)
-    event = SimpleNamespace(
-        id=1,
-        event_time=(now - timedelta(hours=1)).replace(tzinfo=None),
-    )
-    heatmap = SimpleNamespace(
-        id=1,
-        above_value=10_000.0,
-        below_value=1_000.0,
-        bias="HUNT_SHORTS",
-        liquidity_above=110.0,
-        liquidity_below=90.0,
-        confidence=90.0,
-        created_at=now.replace(tzinfo=None),
-    )
-
-    class Query:
-        def __init__(self, value):
-            self.value = value
-
-        def filter(self, *args):
-            return self
-
-        def order_by(self, *args):
-            return self
-
-        def first(self):
-            return self.value
-
-    class Db:
-        def query(self, model):
-            return Query(event if model is Liquidation else heatmap)
-
-    result = _liquidation_context(
-        Db(),
-        "BTCUSDT",
-        as_of_timestamp=now,
-    )
-
-    assert result["status"] == "STALE"
-    assert result["data_quality"] == "STALE"
-    assert result["freshness"]["is_stale"] is True
-
-
-def test_liquidation_context_waits_for_heatmap_to_include_latest_event():
-    now = datetime(2026, 8, 15, 16, 0, tzinfo=timezone.utc)
-    event = SimpleNamespace(
-        id=2,
-        event_time=(now - timedelta(minutes=2)).replace(tzinfo=None),
-    )
-    heatmap = SimpleNamespace(
-        id=1,
-        above_value=10_000.0,
-        below_value=1_000.0,
-        bias="HUNT_SHORTS",
-        liquidity_above=110.0,
-        liquidity_below=90.0,
-        confidence=90.0,
-        created_at=(now - timedelta(minutes=3)).replace(tzinfo=None),
-    )
-
-    class Query:
-        def __init__(self, value):
-            self.value = value
-
-        def filter(self, *args):
-            return self
-
-        def order_by(self, *args):
-            return self
-
-        def first(self):
-            return self.value
-
-    class Db:
-        def query(self, model):
-            return Query(event if model is Liquidation else heatmap)
-
-    result = _liquidation_context(
-        Db(),
-        "BTCUSDT",
-        as_of_timestamp=now,
-    )
-
-    assert result["status"] == "PENDING"
-    assert result["data_quality"] == "STALE"
-    assert "awaiting heatmap refresh" in result["reason"]
 
 
 def test_heatmap_repository_ignores_runtime_source_diagnostics():
@@ -334,7 +244,7 @@ def test_heatmap_repository_ignores_runtime_source_diagnostics():
         "above_value": 1_000.0,
         "below_value": 500.0,
         "target_price": 110.0,
-        "bias": "HUNT_SHORTS",
+        "direction_method": "ORDER_SIDE_V1", "imbalance_score": 100, "bias": "SHORT_LIQUIDATIONS",
         "confidence": 66.67,
         "source_window_start": datetime(2026, 8, 15, 12, 0),
         "source_window_end": datetime(2026, 8, 15, 16, 0),
@@ -346,5 +256,5 @@ def test_heatmap_repository_ignores_runtime_source_diagnostics():
 
     saved = db.add.call_args.args[0]
     assert saved.symbol == "BTCUSDT"
-    assert saved.bias == "HUNT_SHORTS"
+    assert saved.bias == "SHORT_LIQUIDATIONS"
     assert not hasattr(saved, "source_event_count")

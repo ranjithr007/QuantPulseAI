@@ -15,15 +15,20 @@ def start_scheduler(job_ids=None):
 
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.executors.pool import ThreadPoolExecutor
     except ModuleNotFoundError as exc:
         print(f"Scheduler disabled: missing dependency {exc.name}")
         return False
 
     if scheduler is None:
-        scheduler = BackgroundScheduler(timezone="Asia/Kolkata", daemon=True)
+        scheduler = BackgroundScheduler(timezone="Asia/Kolkata", daemon=True,
+            executors={"default": ThreadPoolExecutor(10), "paper_exits": ThreadPoolExecutor(1)})
 
     settings = get_settings()
     selected_job_ids = resolve_job_ids(job_ids or settings.scheduler_job_ids)
+    if set(selected_job_ids) & {"deterministic_pipeline", "pipeline_cycle", "paper_trade_monitor", "paper_trade_execute"}:
+        if "paper_trade_fast_exit" not in selected_job_ids:
+            selected_job_ids = [*selected_job_ids, "paper_trade_fast_exit"]
 
     scheduler.remove_all_jobs()
 

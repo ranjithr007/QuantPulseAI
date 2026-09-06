@@ -12,7 +12,7 @@ def test_ai_signal_job_closes_db_when_save_fails():
         short_squeeze_probability=90,
     )
     heatmap = SimpleNamespace(
-        bias="HUNT_SHORTS",
+        bias="SHORT_LIQUIDATIONS", confidence=100,
         current_price=65000.0,
         target_price=64000.0,
     )

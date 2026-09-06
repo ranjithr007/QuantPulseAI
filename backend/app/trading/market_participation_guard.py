@@ -1,4 +1,5 @@
 from app.utils.freshness import freshness_status
+from app.intelligence.liquidation_evidence import ORDER_SIDE_METHOD
 
 
 MARKET_PARTICIPATION_MAX_AGE_SECONDS = 75 * 60
@@ -38,6 +39,16 @@ def evaluate_market_participation(payload, side, *, as_of_timestamp=None):
     }
     if not payload:
         return base
+    liquidation = payload.get("liquidation") or {}
+    if (
+        _number((payload.get("components") or {}).get("liquidation")) != 0
+        and liquidation.get("direction_method") != ORDER_SIDE_METHOD
+    ):
+        return {
+            **base,
+            "status": "LEGACY_LIQUIDATION_EVIDENCE",
+            "reason": "Market participation is awaiting corrected order-side liquidation scoring",
+        }
     if not expected_direction:
         return {
             **base,

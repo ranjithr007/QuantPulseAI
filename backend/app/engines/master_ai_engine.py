@@ -59,17 +59,17 @@ class MasterAIEngine:
         # Heatmap Engine
         # ==================
 
-        if heatmap.bias == "HUNT_LONGS":
+        if heatmap.bias == "LONG_LIQUIDATIONS":
 
-            short_score += 30
+            short_score += 30 * min(100, max(0, float(heatmap.confidence or 0))) / 100
 
-            reasons.append("Liquidity below price")
+            reasons.append("Observed long-liquidation forced selling")
 
-        elif heatmap.bias == "HUNT_SHORTS":
+        elif heatmap.bias == "SHORT_LIQUIDATIONS":
 
-            long_score += 30
+            long_score += 30 * min(100, max(0, float(heatmap.confidence or 0))) / 100
 
-            reasons.append("Liquidity above price")
+            reasons.append("Observed short-liquidation forced buying")
 
         # ==================
         # Whale Engine

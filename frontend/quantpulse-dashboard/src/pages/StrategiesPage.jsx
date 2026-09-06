@@ -242,7 +242,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
           <ValueCard label="Profit factor" value={performance.profit_factor == null ? "—" : number(performance.profit_factor, 2)} />
           <ValueCard label="Consolidated winner trades" value={officialPerformance.total_trades || 0} tone="cyan" />
           <ValueCard label="Target successes" value={`${performance.target_successes || 0} · ${formatPercent(performance.target_success_rate || 0, 1)}`} tone="emerald" />
-          <ValueCard label="Initial stop failures" value={`${performance.initial_stop_failures || 0} · ${formatPercent(performance.initial_stop_failure_rate || 0, 1)}`} tone="rose" />
+          <ValueCard label="Pre-T1 losing stops" value={`${performance.initial_stop_failures || 0} · ${formatPercent(performance.initial_stop_failure_rate || 0, 1)}`} tone="rose" />
           <ValueCard label="Protected stop exits" value={performance.protected_stop_exits || 0} tone="cyan" />
         </div>
 
@@ -285,10 +285,10 @@ function StrategyLearningStatus({ learning }) {
         <StatusBadge label="LIVE DISABLED" tone="slate" />
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <ValueCard label="Targets / initial stops" value={`${metrics.target_successes || 0} / ${metrics.initial_stop_failures || 0}`} tone={(metrics.target_successes || 0) > (metrics.initial_stop_failures || 0) ? "emerald" : "rose"} />
+        <ValueCard label="Targets / pre-T1 losing stops" value={`${metrics.target_successes || 0} / ${metrics.initial_stop_failures || 0}`} tone={(metrics.target_successes || 0) > (metrics.initial_stop_failures || 0) ? "emerald" : "rose"} />
         <ValueCard label="Window win rate" value={formatPercent(metrics.win_rate || 0, 1)} />
         <ValueCard label="Window expectancy" value={`₹${number(metrics.expectancy_inr || 0, 2)}`} tone={(metrics.expectancy_inr || 0) > 0 ? "emerald" : "rose"} />
-        <ValueCard label="Candidate version" value={learning.candidate_version || "No change required"} tone="cyan" />
+        <ValueCard label="Candidate version" value={learning.candidate_version || "No new candidate version"} tone="cyan" />
       </div>
       {gateEntries.length ? (
         <div className="mt-3 flex flex-wrap gap-2">

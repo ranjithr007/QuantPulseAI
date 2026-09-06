@@ -69,7 +69,7 @@ def _market_participation(now, *, observed=True, aligned=True):
         "liquidation": {
             "status": "READY" if observed else "UNAVAILABLE",
             "data_quality": "OBSERVED" if observed else "ESTIMATED_OR_MISSING",
-            "bias": "HUNT_SHORTS",
+            "direction_method": "ORDER_SIDE_V1", "imbalance_score": 100, "bias": "SHORT_LIQUIDATIONS",
         },
         "spot": {
             "timeframes": [

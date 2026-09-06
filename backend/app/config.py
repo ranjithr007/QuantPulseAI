@@ -13,6 +13,7 @@ DEFAULT_SCHEDULER_JOBS = [
     "orderbook",
     "walk_forward_queue",
     "strategy_learning",
+    "paper_trade_fast_exit",
     "pipeline_retention",
 ]
 DEFAULT_LIVE_MARKET_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
@@ -90,6 +91,9 @@ class Settings:
             and "strategy_learning" not in self.scheduler_job_ids
         ):
             self.scheduler_job_ids.append("strategy_learning")
+        if set(self.scheduler_job_ids) & {"deterministic_pipeline", "pipeline_cycle", "paper_trade_monitor", "paper_trade_execute"}:
+            if "paper_trade_fast_exit" not in self.scheduler_job_ids:
+                self.scheduler_job_ids.append("paper_trade_fast_exit")
         self.database_url = os.getenv("QUANTPULSE_DATABASE_URL") or _build_sqlserver_url()
         self.database_pool_size = int(os.getenv("QUANTPULSE_DATABASE_POOL_SIZE", "5"))
         self.database_max_overflow = int(

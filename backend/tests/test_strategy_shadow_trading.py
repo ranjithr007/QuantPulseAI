@@ -166,6 +166,9 @@ def test_shadow_monitor_applies_target1_then_target2_and_records_net_result():
             )
         assert result["executed_count"] == 1
         trade = db.query(StrategyShadowTrade).one()
+        trade.opened_at = datetime.utcnow() - timedelta(hours=1)
+        trade.last_exit_evaluated_at = trade.opened_at
+        db.commit()
         base = trade.opened_at + timedelta(minutes=5)
         candles = [
             SimpleNamespace(

@@ -110,7 +110,7 @@ def _evaluate_staged_exit(trade, candle, high, low):
                 trade.entry_price,
                 trade.target1,
             ),
-            "candle_time": candle.candle_time,
+            "candle_time": getattr(candle, "close_time", None) or candle.candle_time,
             "high_price": high,
             "low_price": low,
         }
@@ -271,6 +271,8 @@ def _time_exit_decision(trade, candle):
 
 
 def _exit_decision(trade, candle, result, exit_price, fill_profile=None):
+    fill_profile = dict(fill_profile or {})
+    fill_profile["exit_evidence_at"] = getattr(candle, "close_time", None) or candle.candle_time
     return {
         "paper_trade_id": trade.id,
         "symbol": trade.symbol,
