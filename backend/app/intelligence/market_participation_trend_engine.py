@@ -150,6 +150,8 @@ def analyze_spot_timeframe(symbol, timeframe, candles):
         "bar_count": len(bars),
         "source_timestamp": latest.get("close_time"),
         "spot_price": last_close,
+        "atr": _average_true_range(bars[-21:]),
+        "atr_source": "FINAL_SPOT_CANDLES",
         "ema20": round(ema20, 8),
         "price_change_percent": round(price_change_percent, 4),
         "spot_cvd_quote": round(spot_delta, 2),
@@ -482,8 +484,12 @@ def _ema(values, period):
 
 def _average_true_range(bars):
     ranges = [
-        max(0.0, _number(item.get("high")) - _number(item.get("low")))
-        for item in bars
+        max(
+            _number(item.get("high")) - _number(item.get("low")),
+            abs(_number(item.get("high")) - _number(previous.get("close"))),
+            abs(_number(item.get("low")) - _number(previous.get("close"))),
+        )
+        for previous, item in zip(bars, bars[1:])
     ]
     return sum(ranges) / len(ranges) if ranges else 0.0
 

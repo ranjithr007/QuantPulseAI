@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import threading
 import time
 from collections import OrderedDict
@@ -2425,13 +2426,23 @@ def _build_market_move_strategy_payload(core_payload, market_participation):
     confidence = float(raw.get("confidence") or 0)
     trade_plan = None
     validation = {"is_valid": False, "errors": []}
-    if participation.get("allowed") and current_price and float(current_price) > 0:
+    try:
+        selected_atr = float((selected or {}).get("atr") or 0)
+    except (TypeError, ValueError):
+        selected_atr = 0.0
+    atr_ready = math.isfinite(selected_atr) and selected_atr > 0
+    zone = (selected or {}).get("support" if side == "LONG" else "resistance") or {}
+    structure_level = zone.get("lower" if side == "LONG" else "upper")
+    if participation.get("allowed") and current_price and float(current_price) > 0 and atr_ready:
         trade_plan = build_trade_plan(
             side,
             float(current_price),
+            atr=selected_atr,
             confidence=confidence,
             symbol=symbol,
             timeframe=entry_timeframe,
+            execution_profile="PAPER_ATR_STRUCTURE_V1",
+            structure_level=structure_level,
         )
         validation = validate_trade_plan_direction(
             side,
@@ -2444,6 +2455,10 @@ def _build_market_move_strategy_payload(core_payload, market_participation):
         if not current_price:
             validation["errors"].append(
                 "Market Move selected timeframe price is unavailable"
+            )
+        if not atr_ready:
+            validation["errors"].append(
+                "Market Move selected timeframe ATR is unavailable; awaiting fresh spot analysis"
             )
     validation["errors"] = [
         item for item in validation["errors"] if item
@@ -2469,7 +2484,7 @@ def _build_market_move_strategy_payload(core_payload, market_participation):
             "status": "READY" if ready else "WAIT",
             "side": side,
             "entry_timeframe": entry_timeframe,
-            "reason": participation.get("reason"),
+            "reason": "; ".join(validation["errors"]) or participation.get("reason"),
             "conditions": [],
         },
         "trade_plan": trade_plan,

@@ -172,6 +172,7 @@ def _market_move(now, *, carry_ready=False):
                     "direction": "BULLISH",
                     "score": score,
                     "spot_price": 702.0,
+                    "atr": 5.0,
                     "ema20": 700.0,
                     "spot_cvd_percent": 2.0,
                     "support": {
