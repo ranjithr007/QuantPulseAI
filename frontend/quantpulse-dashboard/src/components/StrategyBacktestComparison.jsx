@@ -38,7 +38,7 @@ export default function StrategyBacktestComparison({ symbol }) {
   const report = job?.response;
   const results = report?.results || [];
   const key = (item) => `${item.strategy_id}:${item.version}`;
-  const detail = results.find((item) => key(item) === selected);
+  const detail = results.find((item) => key(item) === selected) || results[0];
   const trades = [...(detail?.trades || [])].reverse();
   const pages = Math.max(1, Math.ceil(trades.length / 10));
   return <section className="my-5 rounded-xl border border-slate-300 bg-white p-4 text-slate-800" aria-label="All strategies backtest">
@@ -72,6 +72,17 @@ export default function StrategyBacktestComparison({ symbol }) {
       </table></div>
       {detail && <div className="mt-4">
         <h4 className="font-semibold">{detail.name} · replay trade details</h4>
+        <p className="text-xs text-slate-600">{detail.version} · select a strategy name above to change this summary. These are recorded-decision replay results, not walk-forward validation or paper PNL.</p>
+        <div className="my-3 grid gap-3 sm:grid-cols-3">
+          {[
+            ["Period PNL before funding", ["REPLAYED", "INCOMPLETE"].includes(detail.status) ? money(detail.pnl_inr) : "Not available"],
+            ["Closed trades", ["REPLAYED", "INCOMPLETE"].includes(detail.status) ? detail.closed_trades : "Not available"],
+            ["Win rate", detail.win_rate == null ? "Not available" : `${detail.win_rate}%`],
+            ["Realized drawdown", ["REPLAYED", "INCOMPLETE"].includes(detail.status) ? `${detail.realized_drawdown_percent}%` : "Not available"],
+            ["Profit factor", detail.profit_factor ?? "Not available"],
+            ["Average closed trade PNL", detail.closed_trades > 0 ? money(detail.pnl_inr / detail.closed_trades) : "Not available"],
+          ].map(([label, value]) => <div key={label} className="rounded border border-slate-200 p-3"><div className="text-xs text-slate-500">{label}</div><div className="text-lg font-semibold">{value}</div></div>)}
+        </div>
         <p className="text-xs text-slate-600">Latest {trades.length} of {detail.closed_trades} closed trades. T1 hits may also end at a stop; these counts overlap. Censored positions: {detail.censored_positions}.</p>
         {detail.excluded_decisions > 0 && <p className="text-xs text-amber-700">{detail.excluded_decisions} decisions excluded: missing completed pipeline lineage or invalid historical payload.</p>}
         {Object.entries(detail.skipped || {}).map(([reason, count]) => <p className="text-xs text-amber-700" key={reason}>{reason.replaceAll("_", " ")}: {count} candidate checks</p>)}

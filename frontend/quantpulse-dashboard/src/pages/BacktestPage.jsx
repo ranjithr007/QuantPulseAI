@@ -26,6 +26,7 @@ import {
 } from "../hooks/dashboardApi";
 import MetricCard from "../components/ui/MetricCard";
 import StrategyBacktestComparison from "../components/StrategyBacktestComparison";
+import { savedBacktestSide } from "../utils/backtestScope";
 import Pill from "../components/ui/Pill";
 import { formatDate, formatPercent, formatSigned, safeNumber, tooltipStyle } from "../utils/formatters";
 
@@ -137,7 +138,34 @@ export default function BacktestPage({
   ];
   const totalClosed = engineResult?.total_trades ?? displayTradeHistory.length;
   const expectancy = calculateExpectancy(displayTradeHistory);
-  const { signalSide, signalSideSource } = deriveBacktestSignalSide(selectedDetail?.signalType, view.symbol, []);
+  const [savedScopes, setSavedScopes] = useState(null);
+  const [scopeError, setScopeError] = useState("");
+  const [refreshTick, setRefreshTick] = useState(0);
+  const directSide = deriveBacktestSignalSide(selectedDetail?.signalType, view.symbol, []).signalSide;
+  const scopeMatches = savedScopes?.symbol === view.symbol && savedScopes?.timeframe === (view.timeframe || "1h");
+  const signalSide = directSide || (scopeMatches ? savedBacktestSide(savedScopes.records, view.symbol, view.timeframe || "1h") : null);
+  const signalSideSource = directSide ? "signal" : "history";
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer;
+    async function refresh() {
+      try {
+        const response = await loadPhase2ValidationSummary({ symbol: view.symbol, timeframe: view.timeframe || "1h", limit: 20, signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setSavedScopes({ symbol: view.symbol, timeframe: view.timeframe || "1h", records: response?.records || [] });
+        setScopeError("");
+        setRefreshTick((value) => value + 1);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setScopeError(error.message || "Unable to load saved validation scopes");
+      }
+      timer = setTimeout(refresh, 30000);
+    }
+    setScopeError("");
+    refresh();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [view.symbol, view.timeframe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -294,7 +322,7 @@ export default function BacktestPage({
       cancelled = true;
       controller.abort();
     };
-  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled]);
+  }, [view?.symbol, view?.timeframe, signalSide, phase2Enabled, refreshTick]);
 
   async function handleExportPhase2Report() {
     if (!view?.symbol || !signalSide || !phase2ReportSummary?.result) {
@@ -356,27 +384,28 @@ export default function BacktestPage({
           </div>
           <div className="flex flex-wrap gap-2">
             <Pill tone="violet">REPLAY ONLY</Pill>
-            <Pill tone="cyan">{totalClosed} closed trades</Pill>
-            <Pill tone={displayedWinRate >= 50 ? "emerald" : "amber"}>{formatPercent(displayedWinRate, 0)} win rate</Pill>
+            <Pill tone="cyan">{engineResult ? `${totalClosed} closed trades` : "No saved directional replay"}</Pill>
+            {engineResult && <Pill tone={displayedWinRate >= 50 ? "emerald" : "amber"}>{formatPercent(displayedWinRate, 0)} win rate</Pill>}
           </div>
         </div>
 
         <StrategyBacktestComparison key={view.symbol} symbol={view.symbol} />
+        {scopeError && <div role="alert" className="text-sm text-red-700">{scopeError}</div>}
 
         {!engineResult ? (
           <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100">
-            No replay result is loaded. Paper-trading PNL is intentionally excluded from this page.
+            No saved directional replay is available for this scope. The independent all-strategies comparison above runs regardless of the current signal. Paper-trading PNL is not substituted for backtest results.
           </div>
         ) : null}
 
-        <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
+        {engineResult && <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
           <MetricCard label="Daily PNL" value={formatSigned(displayedDailyPnl)} note="Closed trades" icon={Activity} accent="cyan" />
           <MetricCard label="Weekly PNL" value={formatSigned(displayedWeeklyPnl)} note="Closed trades" icon={LineChartIcon} accent="amber" />
           <MetricCard label="Monthly PNL" value={formatSigned(displayedMonthlyPnl)} note="Closed trades" icon={BarChart3} accent="violet" />
           <MetricCard label="Max drawdown" value={formatSigned(displayedMaxDrawdown)} note="Equity trough" icon={TrendingDown} accent="rose" />
           <MetricCard label="Win / loss" value={`${displayedWinningTrades} / ${displayedLosingTrades}`} note="Closed outcomes" icon={ShieldCheck} accent="emerald" />
           <MetricCard label="Expectancy" value={formatSigned(expectancy)} note="Average trade PNL" icon={TrendingUp} accent={expectancy >= 0 ? "emerald" : "rose"} />
-        </div>
+        </div>}
 
         <div className="mt-3.5 rounded-lg border border-white/10 bg-slate-900/70 p-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -384,7 +413,7 @@ export default function BacktestPage({
               <div className="text-sm font-medium text-white">Filtered strategy replay</div>
               <div className="text-xs text-slate-500">
                 {!signalSide
-                  ? "Waiting for an automatic BUY or SELL validation scope."
+                  ? "No saved LONG or SHORT validation scope yet; checking automatically every 30 seconds."
                   : `${view.symbol} ${signalSide} candle-regime filter on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`}
               </div>
             </div>
@@ -539,7 +568,7 @@ export default function BacktestPage({
               <div className="text-xs text-slate-500">
                 {signalSide
                   ? `${view.symbol} ${signalSide} out-of-sample validation on ${view.timeframe || "1h"}${signalSideSource === "history" ? " (recent history fallback)" : ""}`
-                  : "Choose a BUY or SELL signal on the dashboard to run walk-forward validation."}
+                  : "No saved directional validation yet. Historical results load automatically, including while the current signal is WAIT."}
               </div>
             </div>
             <div className="flex items-center gap-2">
