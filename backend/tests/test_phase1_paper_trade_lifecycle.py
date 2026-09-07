@@ -1,4 +1,5 @@
 import unittest
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -321,7 +322,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             duplicate = execute_paper_trade_candidates_for_symbol("BTCUSDT", stale_after_seconds=900)
 
         self.assertEqual(1, execution["candidate_count"])
-        self.assertEqual(1, execution["executed_count"])
+        self.assertEqual(1, execution["executed_count"], execution)
         self.assertGreater(execution["executed"][0]["entry_price"], 100.0)
         self.assertEqual("intraday", execution["executed"][0]["mode"])
         self.assertEqual("1h", execution["executed"][0]["entry_timeframe"])
@@ -332,8 +333,12 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
 
         with self.Session() as db:
             trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
-            self.assertEqual(170_000, trade.position_notional_inr)
-            self.assertEqual(34_000, trade.margin_used_inr)
+            self.assertGreater(trade.position_notional_inr, 0)
+            self.assertLess(trade.position_notional_inr, 170_000)
+            self.assertAlmostEqual(trade.position_notional_inr / 5, trade.margin_used_inr, places=2)
+            evidence = json.loads(trade.execution_evidence_json)
+            self.assertEqual("EQUITY_RISK_V1", evidence["sizing_policy"])
+            self.assertLessEqual(evidence["risk_sizing"]["estimated_max_loss_inr"], 1000)
             self.assertEqual(5, trade.leverage)
             entry_event = db.query(PaperWalletLedgerEntry).one()
             self.assertEqual("ENTRY", entry_event.event_type)

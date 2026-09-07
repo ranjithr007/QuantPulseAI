@@ -137,6 +137,7 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         pnl_section = (
             FRONTEND_ROOT / "src" / "components" / "PnLSection.jsx"
         ).read_text(encoding="utf-8")
+        history = (FRONTEND_ROOT / "src" / "components" / "PaperTradeHistory.jsx").read_text(encoding="utf-8")
 
         scoped_pages = dashboard_api.split(
             "const SYMBOL_SCOPED_PAPER_PAGES = new Set([", 1
@@ -152,12 +153,17 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("include_signal: false", dashboard_api)
         self.assertIn("summary_only: true", dashboard_api)
         self.assertIn("signal: selectedSignal", dashboard_data)
-        self.assertIn('status: "CLOSED"', pnl_section)
+        self.assertIn('status: "CLOSED"', history)
         self.assertIn("openPositions.map((trade)", pnl_section)
-        self.assertIn("visibleTrades.map((trade)", pnl_section)
+        self.assertIn("visibleTrades.map((trade)", history)
         self.assertNotIn("openPositions.slice(", pnl_section)
-        self.assertIn("loadPaperTrades({", pnl_section)
-        self.assertIn("Trade history pagination", pnl_section)
+        self.assertIn("<PaperTradeHistory tradeHistory={tradeHistory}", pnl_section)
+        self.assertIn("loadPaperTrades({", history)
+        self.assertIn("Trade history pagination", history)
+        self.assertIn("validatedHistoryPage(response, currentPage, revision)", history)
+        self.assertIn("visibleHistoryPage(snapshot, currentPage, revision, error)", history)
+        self.assertIn("controller.abort()", history)
+        self.assertIn("No earlier page rows are shown", history)
         self.assertIn("Stop-loss", pnl_section)
         self.assertIn("Target 1", pnl_section)
         self.assertIn("Target 2", pnl_section)
@@ -171,7 +177,7 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn("ledgerScope.quarantined_records", pnl_section)
         self.assertIn('T1 closes 75% / protected stop / T2 closes 25%', pnl_section)
         self.assertIn("Deadline (IST)", pnl_section)
-        self.assertIn("Closed (IST)", pnl_section)
+        self.assertIn("Closed (IST)", history)
         self.assertIn('label="Starting paper capital"', pnl_section)
         self.assertIn('label="Current wallet balance"', pnl_section)
         self.assertIn('label="Account equity"', pnl_section)
@@ -233,7 +239,8 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('path="/trading-details"', main)
         self.assertIn('<Navigate to={buildPageUrl("auto-trading", view)} replace />', main)
         self.assertIn('backtest: { signals: true }', dashboard_api)
-        self.assertIn("Paper-trading PNL is intentionally excluded", backtest)
+        self.assertIn("Paper-trading PNL is not substituted for backtest results", backtest)
+        self.assertIn("const engineTrades = engineResult?.trades || []", backtest)
         self.assertNotIn("paperTradeHistory", backtest)
         self.assertNotIn("[0, 1]", header)
         self.assertNotIn('dataKey="rsScore"', rotation)

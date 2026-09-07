@@ -1,7 +1,9 @@
 """Fingerprint-locked PostgreSQL baseline built from the reviewed ORM schema."""
 
 import hashlib
+from functools import lru_cache
 
+from sqlalchemy import MetaData
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import CreateTable
@@ -23,11 +25,43 @@ POSTGRESQL_POST_BASELINE_TABLES = frozenset(
         "strategy_version_configs",
     }
 )
+POSTGRESQL_POST_BASELINE_COLUMNS = {
+    "paper_trades": frozenset({"trailing_activation_r", "execution_evidence_json", "exit_evidence_json"}),
+    "strategy_shadow_trades": frozenset({"trailing_activation_r", "execution_evidence_json", "exit_evidence_json"}),
+}
+POSTGRESQL_POST_BASELINE_INDEXES = frozenset({"ix_paper_trades_closed_history"})
+
+
+@lru_cache(maxsize=1)
+def _reviewed_baseline_metadata():
+    """Project only explicitly migrated additions out of an isolated copy.
+
+    The original fingerprint remains locked. Runtime ORM tables are never
+    mutated, and any unrelated schema change still fails baseline review.
+    Forward migrations add these nullable columns/index to a new installation.
+    """
+    metadata = MetaData(naming_convention=Base.metadata.naming_convention)
+    # Preserve exact original DDL/constraint order for unaffected tables.
+    for table_name in POSTGRESQL_POST_BASELINE_COLUMNS:
+        Base.metadata.tables[table_name].to_metadata(metadata)
+    for table_name, column_names in POSTGRESQL_POST_BASELINE_COLUMNS.items():
+        table = metadata.tables[table_name]
+        for name in column_names:
+            if name in table.c:
+                # SQLAlchemy exposes no public drop-column operation for an
+                # in-memory Table. This edits only the isolated frozen copy.
+                table._columns.remove(table.c[name])
+    for table in metadata.tables.values():
+        for index in tuple(table.indexes):
+            if index.name in POSTGRESQL_POST_BASELINE_INDEXES:
+                table.indexes.remove(index)
+    return metadata
 
 
 def _baseline_tables():
+    projected = _reviewed_baseline_metadata().tables
     return [
-        table
+        projected[table.name] if table.name in projected else table
         for table in Base.metadata.sorted_tables
         if table.name not in POSTGRESQL_POST_BASELINE_TABLES
     ]

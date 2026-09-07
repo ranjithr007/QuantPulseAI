@@ -13,6 +13,7 @@ from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
+from app.paper_trading.exit_evidence import classify_exit, read_evidence
 from app.strategies.registry import STRATEGY_REGISTRY
 from app.strategies.registry import strategy_definition
 from app.strategies.learning import latest_evaluations
@@ -147,6 +148,12 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
     strategy_book_history = strategy_data.get("strategy_paper_history", {}).get(
         key, []
     )
+    learning_evaluation = strategy_data.get("learning_evaluations", {}).get(key)
+    cohort_metrics = (learning_evaluation or {}).get("metrics") or {}
+    readiness_metrics = (
+        cohort_metrics if cohort_metrics.get("metric_version") == "STOP_CAUSE_COHORT_V3"
+        else shadow_performance
+    )
     return {
         **definition,
         "coverage": {
@@ -184,10 +191,8 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
         ],
         "ledger_loaded": ledger_loaded,
         "official_performance": official_performance,
-        "forward_test_readiness": _forward_test_readiness(shadow_performance),
-        "learning_evaluation": strategy_data.get("learning_evaluations", {}).get(
-            key
-        ),
+        "forward_test_readiness": _forward_test_readiness(readiness_metrics, require_verified_cohort=True),
+        "learning_evaluation": learning_evaluation,
         "candidates": candidates,
     }
 
@@ -437,11 +442,28 @@ def _load_strategy_performance(
     realized = func.coalesce(model.realized_pnl_inr, 0.0)
     exit_reason = func.upper(func.coalesce(model.exit_reason, ""))
     target1_reached = model.target1_hit_at.is_not(None)
-    initial_stop = and_(
+    pre_t1_losing_stop = and_(
         exit_reason.in_(("STOP", "STOP_LOSS")),
         model.target1_hit_at.is_(None),
         realized < 0,
     )
+    side = func.upper(model.side)
+    valid_levels = and_(model.initial_stop_loss > 0, model.stop_loss > 0,
+                        side.in_(("LONG", "SHORT")))
+    magnitude = case((func.abs(model.initial_stop_loss) >= func.abs(model.stop_loss),
+                      func.abs(model.initial_stop_loss)), else_=func.abs(model.stop_loss))
+    tolerance = case((magnitude * 1e-9 > 1e-10, magnitude * 1e-9), else_=1e-10)
+    unchanged = and_(valid_levels, func.abs(model.initial_stop_loss - model.stop_loss) <= tolerance)
+    tightened = and_(valid_levels, ~unchanged, or_(
+        and_(side == "LONG", model.stop_loss > model.initial_stop_loss),
+        and_(side == "SHORT", model.stop_loss < model.initial_stop_loss),
+    ))
+    stopped_before_t1 = and_(exit_reason.in_(("STOP", "STOP_LOSS")), model.target1_hit_at.is_(None))
+    initial_stop = and_(pre_t1_losing_stop, unchanged)
+    unknown_stop = and_(stopped_before_t1, or_(
+        model.initial_stop_loss.is_(None), model.stop_loss.is_(None),
+        model.side.is_(None), ~valid_levels, and_(~unchanged, ~tightened),
+    ))
     protected_stop = and_(
         exit_reason.in_(("STOP", "STOP_LOSS")),
         or_(target1_reached, realized >= 0),
@@ -463,6 +485,10 @@ def _load_strategy_performance(
         func.sum(
             case((and_(closed, initial_stop), 1), else_=0)
         ).label("initial_stop_failures"),
+        func.sum(case((and_(closed, pre_t1_losing_stop), 1), else_=0)).label("pre_t1_losing_stops"),
+        func.sum(case((and_(closed, stopped_before_t1, tightened), 1), else_=0)).label("trailed_stop_pre_t1_exits"),
+        func.sum(case((and_(closed, exit_reason.in_(("STOP", "STOP_LOSS")), target1_reached), 1), else_=0)).label("protected_stop_after_t1_exits"),
+        func.sum(case((and_(closed, unknown_stop), 1), else_=0)).label("unknown_stop_exits"),
         func.sum(
             case((and_(closed, protected_stop), 1), else_=0)
         ).label("protected_stop_exits"),
@@ -641,6 +667,11 @@ def _performance_from_aggregate(row, max_drawdown_percent):
         "target2_hits": int(row.target2_hits or 0),
         "target_successes": target1_hits,
         "initial_stop_failures": initial_stop_failures,
+        "pre_t1_losing_stops": int(row.pre_t1_losing_stops or 0),
+        "trailed_stop_pre_t1_exits": int(row.trailed_stop_pre_t1_exits or 0),
+        "protected_stop_after_t1_exits": int(row.protected_stop_after_t1_exits or 0),
+        "unknown_stop_exits": int(row.unknown_stop_exits or 0),
+        "metric_version": "STOP_CAUSE_V3",
         "protected_stop_exits": int(row.protected_stop_exits or 0),
         "time_exits": int(row.time_exits or 0),
         "target_success_rate": round(target1_hits / closed * 100, 2) if closed else 0.0,
@@ -812,13 +843,15 @@ def _strategy_performance(trades):
     target2_hits = [
         item for item in closed if str(item.exit_reason or "").upper() == "TARGET2"
     ]
-    initial_stop_failures = [
+    pre_t1_losing_stops = [
         item
         for item in closed
         if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
         and item.target1_hit_at is None
         and float(item.realized_pnl_inr or 0) < 0
     ]
+    initial_stop_failures = [item for item in pre_t1_losing_stops if classify_exit(item) == "INITIAL_STOP"]
+    exit_classes = [classify_exit(item) for item in closed]
     protected_stop_exits = [
         item
         for item in closed
@@ -855,6 +888,11 @@ def _strategy_performance(trades):
         "target2_hits": len(target2_hits),
         "target_successes": len(target1_hits),
         "initial_stop_failures": len(initial_stop_failures),
+        "pre_t1_losing_stops": len(pre_t1_losing_stops),
+        "trailed_stop_pre_t1_exits": exit_classes.count("TRAILED_STOP_PRE_T1"),
+        "protected_stop_after_t1_exits": exit_classes.count("PROTECTED_STOP_AFTER_T1"),
+        "unknown_stop_exits": exit_classes.count("UNKNOWN_STOP"),
+        "metric_version": "STOP_CAUSE_V3",
         "protected_stop_exits": len(protected_stop_exits),
         "time_exits": sum(
             1 for item in closed if str(item.exit_reason or "").upper() == "TIME_EXIT"
@@ -881,11 +919,24 @@ def _strategy_performance(trades):
 
 
 def _strategy_paper_trade_payload(trade):
+    exit_evidence = read_evidence(getattr(trade, "exit_evidence_json", None))
+    classification = exit_evidence.get("classification") or classify_exit(trade)
     return {
         "recorded_exit_policy": getattr(trade, "exit_policy", None),
         "recorded_initial_stop_loss": getattr(trade, "initial_stop_loss", None),
         "strategy_id": getattr(trade, "strategy_id", None),
         "strategy_version": getattr(trade, "strategy_version", None),
+        "execution_evidence": read_evidence(getattr(trade, "execution_evidence_json", None)),
+        "exit_evidence": exit_evidence,
+        "trailing_activation_r": getattr(trade, "trailing_activation_r", None),
+        "exit_classification": classification,
+        "exit_classification_source": "RECORDED_TRIGGER" if exit_evidence.get("classification") else "RECORDED_LEVELS_INFERENCE",
+        "position_notional_inr": getattr(trade, "position_notional_inr", None),
+        "margin_used_inr": getattr(trade, "margin_used_inr", None),
+        "gross_pnl_percent": getattr(trade, "gross_pnl_percent", None),
+        "entry_slippage_percent": getattr(trade, "entry_slippage_percent", None),
+        "exit_slippage_percent": getattr(trade, "exit_slippage_percent", None),
+        "planned_entry_price": getattr(trade, "planned_entry_price", None),
         "id": trade.id,
         "symbol": trade.symbol,
         "side": trade.side,
@@ -906,7 +957,8 @@ def _strategy_paper_trade_payload(trade):
         "closed_at": trade.closed_at,
         "target1_hit_at": trade.target1_hit_at,
         "target_success": trade.target1_hit_at is not None,
-        "initial_stop_failure": bool(
+        "initial_stop_failure": classification == "INITIAL_STOP" and float(trade.realized_pnl_inr or 0) < 0,
+        "pre_t1_losing_stop": bool(
             str(trade.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
             and trade.target1_hit_at is None
             and float(trade.realized_pnl_inr or 0) < 0
@@ -928,6 +980,7 @@ def _forward_test_readiness(
     minimum_win_rate=55.0,
     minimum_profit_factor=1.30,
     maximum_drawdown_percent=10.0,
+    require_verified_cohort=False,
 ):
     closed = int(performance.get("closed_trades") or 0)
     win_rate = float(performance.get("win_rate") or 0)
@@ -938,6 +991,7 @@ def _forward_test_readiness(
     expectancy_inr = float(performance.get("expectancy_inr") or 0)
     target_successes = int(performance.get("target_successes") or 0)
     initial_stop_failures = int(performance.get("initial_stop_failures") or 0)
+    pre_t1_losing_stops = int(performance.get("pre_t1_losing_stops", initial_stop_failures) or 0)
     max_drawdown = float(performance.get("max_drawdown_percent") or 0)
     sample_passed = closed >= minimum_closed_trades
     gates = {
@@ -945,12 +999,16 @@ def _forward_test_readiness(
         "win_rate": win_rate >= minimum_win_rate,
         "profit_factor": normalized_profit_factor >= minimum_profit_factor,
         "cost_adjusted_expectancy": expectancy_inr > 0,
-        "targets_exceed_initial_stops": target_successes > initial_stop_failures,
+        "targets_exceed_initial_stops": target_successes > pre_t1_losing_stops,
         "maximum_drawdown": max_drawdown <= maximum_drawdown_percent,
     }
+    if require_verified_cohort:
+        gates["verified_policy_cohort"] = performance.get("cohort_verified") is True
     promotion_candidate = sample_passed and all(gates.values())
     if not sample_passed:
         status = "COLLECTING"
+    elif require_verified_cohort and not gates["verified_policy_cohort"]:
+        status = "COLLECTING_COHORT"
     elif promotion_candidate:
         status = "PROMOTION_CANDIDATE"
     else:
@@ -965,10 +1023,13 @@ def _forward_test_readiness(
         "maximum_drawdown_percent": maximum_drawdown_percent,
         "target_successes": target_successes,
         "initial_stop_failures": initial_stop_failures,
+        "pre_t1_losing_stops": pre_t1_losing_stops,
+        "sample_interpretation": "Aggregate diagnostics only; compare matched recorded policy cohorts before selecting a strategy. Thirty trades do not establish live readiness.",
         "requires_targets_exceed_initial_stops": True,
         "requires_positive_cost_adjusted_expectancy": True,
         "gates": gates,
         "promotion_candidate": promotion_candidate,
+        "metrics_scope": "VERIFIED_POLICY_COHORT" if performance.get("cohort_verified") else "AGGREGATE_DIAGNOSTIC",
         "authorizes_live_execution": False,
     }
 

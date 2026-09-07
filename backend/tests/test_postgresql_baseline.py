@@ -1,8 +1,12 @@
 from pathlib import Path
+import importlib.util
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 
 from app.database import postgresql_baseline
 
@@ -24,6 +28,32 @@ def test_baseline_refuses_non_postgresql_bind():
 
     with pytest.raises(RuntimeError, match="only supports PostgreSQL"):
         postgresql_baseline.create_postgresql_baseline(bind)
+
+
+def test_forward_exit_evidence_migration_matches_live_orm_without_mutating_baseline():
+    baseline = {table.name: table for table in postgresql_baseline._baseline_tables()}
+    live = postgresql_baseline.Base.metadata.tables
+    for table_name, additions in postgresql_baseline.POSTGRESQL_POST_BASELINE_COLUMNS.items():
+        assert additions.isdisjoint(baseline[table_name].c.keys())
+        assert additions.issubset(live[table_name].c.keys())
+    fingerprint = postgresql_baseline.postgresql_schema_fingerprint()
+    migration_path = PROJECT_ROOT / "backend" / "alembic" / "versions" / "x2p3q4r5s6t7_add_paper_execution_evidence.py"
+    spec = importlib.util.spec_from_file_location("baseline_exit_evidence_forward_migration", migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as connection:
+        for name in ("paper_trades", "strategy_shadow_trades"):
+            baseline[name].create(connection)
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+        for name in ("paper_trades", "strategy_shadow_trades"):
+            columns = {item["name"] for item in sa.inspect(connection).get_columns(name)}
+            indexes = {item["name"] for item in sa.inspect(connection).get_indexes(name)}
+            assert columns == set(live[name].c.keys())
+            assert indexes == {item.name for item in live[name].indexes}
+    assert postgresql_baseline.postgresql_schema_fingerprint() == fingerprint
+    assert fingerprint == postgresql_baseline.POSTGRESQL_BASELINE_FINGERPRINT
 
 
 def test_baseline_create_and_drop_use_locked_metadata():
@@ -78,6 +108,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260902_pnl_query_indexes.py",
         "pg_20260903_participation_latest_index.py",
         "pg_20260904_strategy_learning.py",
+        "pg_20260907_exit_evidence.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -174,3 +205,8 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     assert 'revision = "pg_20260904_strategy_learning"' in strategy_learning
     assert "fix_strategy_trade_result_labels.py" in strategy_learning
     assert "add_strategy_learning.py" in strategy_learning
+
+    exit_evidence = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260907_exit_evidence.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260904_strategy_learning"' in exit_evidence
+    assert 'revision = "pg_20260907_exit_evidence"' in exit_evidence
+    assert "add_paper_execution_evidence.py" in exit_evidence

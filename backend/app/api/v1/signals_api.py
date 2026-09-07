@@ -68,6 +68,8 @@ from app.strategies.registry import CORE_SIGNAL_STRATEGY_ID
 from app.strategies.registry import CORE_SIGNAL_DECISION_VERSION
 from app.strategies.registry import LIQUIDATION_CARRY_STRATEGY_ID
 from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
+from app.strategies.registry import MARKET_MOVE_ENTRY_STRATEGY_ID
+from app.strategies.registry import MARKET_MOVE_EXIT_STRATEGY_ID
 from app.strategies.registry import ORDERFLOW_SMC_STRATEGY_ID
 from app.strategies.registry import REGIME_TREND_STRATEGY_ID
 from app.strategies.registry import REGIME_TREND_ENTRY_STRATEGY_ID
@@ -83,6 +85,7 @@ from app.strategies.candidate_builders import build_regime_trend_entry_payload
 from app.strategies.candidate_builders import build_trend_pullback_payload
 from app.strategies.learning import active_candidate_definitions
 from app.strategies.learning import apply_learning_parameters
+from app.strategies.entry_quality import build_market_move_experiment_payload
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
@@ -2138,6 +2141,24 @@ def _persist_strategy_candidates(db, payload, market_participation):
         payload,
         market_participation,
     )
+    market_move_experiments = []
+    for experiment_id, entry_only in (
+        (MARKET_MOVE_ENTRY_STRATEGY_ID, True),
+        (MARKET_MOVE_EXIT_STRATEGY_ID, False),
+    ):
+        definition = strategy_definition(experiment_id)
+        experiment_payload = build_market_move_experiment_payload(
+            market_move_payload, market_participation, entry_only=entry_only,
+        )
+        experiment_snapshot = _persist_derived_strategy_snapshot(
+            db, experiment_payload, definition,
+            market_participation=market_participation,
+            effective_timestamp=evaluation_timestamp,
+        )
+        market_move_experiments.append({
+            "definition": definition, "payload": experiment_payload,
+            "snapshot": experiment_snapshot,
+        })
     regime_trend_payload = build_regime_trend_payload(payload)
     regime_entry_payload = build_regime_trend_entry_payload(payload, market_participation)
     orderflow_smc_payload = build_orderflow_smc_payload(payload)
@@ -2295,7 +2316,7 @@ def _persist_strategy_candidates(db, payload, market_participation):
                 "snapshot": candidate_snapshot,
             }
         )
-    return base_records + candidate_records
+    return base_records + market_move_experiments + candidate_records
 
 
 def _persist_learning_candidate_snapshot(
@@ -2579,6 +2600,9 @@ def _persist_governed_strategy_snapshot(
         "execution_profile": (payload.get("trade_plan") or {}).get(
             "execution_profile"
         ),
+        "entry_quality": payload.get("entry_quality") or {},
+        "execution_evidence": payload.get("execution_evidence") or {},
+        "trailing_activation_r": payload.get("trailing_activation_r"),
         "market_participation": market_participation or {},
         "blocked_reasons": list(blocked_reasons),
         "one_active_trade_per_symbol": True,

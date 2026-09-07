@@ -13,7 +13,7 @@ def run_watchlist_persist_job():
         cleanup_result = _invalidate_low_confidence_open_trades()
         persist_result = persist_ready_watchlist_setups_for_stack(mode="intraday")
         return {
-            "status": "OK",
+            "status": _persistence_status(persist_result),
             "source": "watchlist_persist",
             "cleanup": cleanup_result,
             "persistence": persist_result,
@@ -26,6 +26,26 @@ def run_watchlist_persist_job():
             "error": summarize_network_error(ex),
             "source": "watchlist_persist",
         }
+
+
+def _persistence_status(result):
+    """Do not turn a returned persistence failure into a successful worker run.
+
+    Ordinary candidate WAIT/skips are not infrastructure failures. The current
+    writer returns a summary without a status on success, which remains valid.
+    """
+    if not isinstance(result, dict):
+        return "FAILED"
+    status = str(result.get("status") or "").upper()
+    if status in {"FAILED", "ERROR", "UNAVAILABLE", "BLOCKED"}:
+        return status
+    cache = result.get("cache") or {}
+    if (status in {"PARTIAL", "DEGRADED"}
+            or result.get("error") or result.get("errors")
+            or result.get("failed_symbols")
+            or cache.get("stale_symbols") or cache.get("missing_symbols")):
+        return "DEGRADED"
+    return "OK"
 
 
 def _invalidate_low_confidence_open_trades():

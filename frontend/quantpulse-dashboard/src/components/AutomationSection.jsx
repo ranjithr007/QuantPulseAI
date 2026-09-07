@@ -99,15 +99,15 @@ export default function AutomationSection({
                 label="Minimum confidence"
                 value={`${auto.minConfidence}%`}
                 render={() => (
-                  <div className="text-xs text-slate-500">Governed execution boundary (full size at 60%)</div>
+                  <div className="text-xs text-slate-500">Governed execution boundary; higher risk-budget tier from 60%, not guaranteed full notional.</div>
                 )}
               />
 
               <RiskField
-                label="Per-trade risk cap"
-                value="Not applied"
+                label="New-entry risk budget"
+                value="0.25% / 0.5% equity"
                 render={() => (
-                  <div className="text-xs text-slate-500">Paper sizing uses the 75% / 85% capital tiers and the governed stop-loss.</div>
+                  <div className="text-xs text-slate-500">New paper entries risk 0.25% of current equity at confidence 40–59, or 0.5% at 60+. Stop distance and modeled costs set notional, subject to capital and margin caps.</div>
                 )}
               />
 

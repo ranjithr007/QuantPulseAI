@@ -4,6 +4,7 @@ from sqlalchemy import and_, case, func, inspect, or_, text
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.paper_trade import PaperTrade
+from app.database.models.paper_wallet_ledger import PaperWalletLedgerEntry
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
@@ -21,6 +22,7 @@ from app.repositories.trade_thesis_repository import TradeThesisRepository
 from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.paper_trading.exit_lock import advance_exit_checkpoint
+from app.paper_trading.exit_evidence import entry_evidence_fields, record_exit_evidence
 
 
 class PaperTradeRepository:
@@ -29,6 +31,8 @@ class PaperTradeRepository:
     def acquire_account_execution_lock(self, db):
         """Serialize account-wide paper capacity checks within one transaction."""
         dialect = str(db.get_bind().dialect.name).lower()
+        if dialect == "sqlite":
+            self.ensure_table(db)  # Schema initialization precedes reservation.
         if dialect == "postgresql":
             db.execute(
                 text("SELECT pg_advisory_xact_lock(:lock_key)"),
@@ -54,11 +58,13 @@ class PaperTradeRepository:
         if not USING_SQLITE_FALLBACK:
             return
 
-        engine = db.get_bind()
-        PaperTrade.__table__.create(bind=engine, checkfirst=True)
+        connection = db.connection()
+        changed = not inspect(connection).has_table(PaperTrade.__tablename__)
+        if changed:
+            PaperTrade.__table__.create(bind=connection, checkfirst=True)
         existing = {
             column["name"]
-            for column in inspect(engine).get_columns(PaperTrade.__tablename__)
+            for column in inspect(connection).get_columns(PaperTrade.__tablename__)
         }
         evidence_columns = {
             "data_generation_id": "VARCHAR(100)",
@@ -75,6 +81,9 @@ class PaperTradeRepository:
             "open_interest_change_percent": "FLOAT",
             "exit_policy": "VARCHAR(50)",
             "initial_stop_loss": "FLOAT",
+            "trailing_activation_r": "FLOAT",
+            "execution_evidence_json": "TEXT",
+            "exit_evidence_json": "TEXT",
             "target1_fraction": "FLOAT",
             "remaining_position_fraction": "FLOAT",
             "max_hold_hours": "INTEGER",
@@ -97,26 +106,53 @@ class PaperTradeRepository:
                         f"ALTER TABLE paper_trades ADD COLUMN {column} {definition}"
                     )
                 )
-        db.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "uq_paper_trades_one_open_symbol ON paper_trades(symbol) "
-                "WHERE status = 'OPEN'"
-            )
-        )
-        db.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_paper_trades_exit_reason "
-                "ON paper_trades(exit_reason)"
-            )
-        )
-        db.commit()
+                changed = True
+        indexes = {item["name"] for item in inspect(connection).get_indexes(PaperTrade.__tablename__)}
+        definitions = {
+            "uq_paper_trades_one_open_symbol": "CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trades_one_open_symbol ON paper_trades(symbol) WHERE status = 'OPEN'",
+            "ix_paper_trades_exit_reason": "CREATE INDEX IF NOT EXISTS ix_paper_trades_exit_reason ON paper_trades(exit_reason)",
+            "ix_paper_trades_closed_history": "CREATE INDEX IF NOT EXISTS ix_paper_trades_closed_history ON paper_trades(status, closed_at, id)",
+        }
+        for name, definition in definitions.items():
+            if name not in indexes:
+                db.execute(text(definition))
+                changed = True
+        if changed:
+            db.commit()
 
     def get_open_trades(self, db, include_quarantined=False):
         self.ensure_table(db)
         query = db.query(PaperTrade).filter(PaperTrade.status == "OPEN")
         query = _apply_production_ledger_scope(query, include_quarantined)
         return query.all()
+
+    def valuation_snapshot(self, db):
+        """Read realized ledger totals and OPEN positions in one MVCC statement.
+
+        An exit cannot appear as both newly realized cash and a stale OPEN row
+        in this snapshot. No row locks delay the independent exit monitor.
+        """
+        self.ensure_table(db)
+        ledger_scope = or_(PaperWalletLedgerEntry.symbol.is_(None),
+                           ~func.upper(PaperWalletLedgerEntry.symbol).like(f"{QA_PAPER_SYMBOL_PREFIX}%"))
+        totals = (
+            db.query(func.coalesce(func.sum(PaperWalletLedgerEntry.delta_inr), 0.0).label("realized_pnl_inr"),
+                     func.count(PaperWalletLedgerEntry.id).label("ledger_entry_count"))
+            .filter(ledger_scope).subquery()
+        )
+        opened_scope = and_(PaperTrade.status == "OPEN",
+                           or_(PaperTrade.symbol.is_(None), ~func.upper(PaperTrade.symbol).like(f"{QA_PAPER_SYMBOL_PREFIX}%")))
+        rows = (
+            db.query(PaperTrade, totals.c.realized_pnl_inr, totals.c.ledger_entry_count)
+            .select_from(totals).outerjoin(PaperTrade, opened_scope)
+            .order_by(PaperTrade.id.asc()).populate_existing().all()
+        )
+        return {
+            "open_trades": [row[0] for row in rows if row[0] is not None],
+            "realized_pnl_inr": float(rows[0][1]),
+            "ledger_entry_count": int(rows[0][2]),
+            "valuation_snapshot_version": "SINGLE_STATEMENT_V1",
+        }
 
     def ensure_staged_exit_policy(self, db, trade):
         """Apply the official staged policy to an existing open paper trade."""
@@ -234,7 +270,8 @@ class PaperTradeRepository:
         if entry_timeframes:
             query = query.filter(PaperTrade.entry_timeframe.in_(entry_timeframes))
 
-        query = query.order_by(PaperTrade.created_at.desc(), PaperTrade.id.desc())
+        order_time = PaperTrade.closed_at if str(status or "").upper() == "CLOSED" else PaperTrade.created_at
+        query = query.order_by(order_time.desc(), PaperTrade.id.desc())
         if offset:
             query = query.offset(max(0, int(offset)))
         if limit is not None:
@@ -449,6 +486,7 @@ class PaperTradeRepository:
             fee_bps=fill_profile.get("fee_bps", 7.5),
         )
         paper_trade = PaperTrade(
+            **entry_evidence_fields(candidate),
             trade_plan_id=trade_plan["id"],
             risk_decision_id=authorization_risk["id"],
             thesis_id=trade_plan.get("thesis_id"),
@@ -643,6 +681,7 @@ class PaperTradeRepository:
         trade.exit_price = exit_price
         trade.result = result
         trade.exit_reason = _paper_exit_reason(result, fill_profile)
+        record_exit_evidence(trade, fill_profile, exit_price)
         if fill_profile:
             trade.exit_slippage_percent = fill_profile.get("exit_slippage_pct")
 

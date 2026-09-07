@@ -138,6 +138,7 @@ def run_deterministic_pipeline_job():
                     continue
                 result = _invoke_stage(job, context)
                 stage_failed = _failed(result)
+                stage_degraded = not stage_failed and _degraded(result)
                 if stage_failed:
                     is_blocking_failure = name not in NON_BLOCKING_STRATEGY_STAGES
                     blocked = blocked or is_blocking_failure
@@ -148,12 +149,14 @@ def run_deterministic_pipeline_job():
                         "blocking": is_blocking_failure,
                         "result": result,
                     }
+                elif stage_degraded:
+                    degraded_stages.append(name)
                 results[name] = result
                 if job_record is not None:
                     ledger.finish_job(
                         ledger_db,
                         job_record.id,
-                        status="FAILED" if stage_failed else "COMPLETED",
+                        status="FAILED" if stage_failed else "DEGRADED" if stage_degraded else "COMPLETED",
                         rows_written=_rows_written(result),
                         output_generation_id=generation_id,
                         error_category=(
@@ -208,15 +211,26 @@ def run_deterministic_pipeline_job():
 
 
 def _failed(result):
+    if isinstance(result, list):
+        return any(_failed(item) for item in result)
     if not isinstance(result, dict):
         return False
-    return str(result.get("status") or "").upper() in {"FAILED", "ERROR"}
+    return str(result.get("status") or "").upper() in {"FAILED", "ERROR", "UNAVAILABLE", "BLOCKED"}
+
+
+def _degraded(result):
+    if isinstance(result, list):
+        return any(_degraded(item) for item in result)
+    if not isinstance(result, dict):
+        return False
+    return (str(result.get("status") or "").upper() in {"PARTIAL", "DEGRADED"}
+            or bool(result.get("error") or result.get("errors")))
 
 
 def _rows_written(result):
     if not isinstance(result, dict):
         return len(result) if isinstance(result, list) else 0
-    for key in ("rows_written", "saved", "inserted", "count"):
+    for key in ("rows_written", "saved_count", "persisted_count", "saved", "inserted", "count"):
         value = result.get(key)
         if isinstance(value, int):
             return value
@@ -236,9 +250,14 @@ def _execution_ready(results):
             return False
         if isinstance(result, dict):
             stage_status = str(result.get("status") or "").upper()
-            if stage_status in {"FAILED", "ERROR", "BLOCKED"}:
+            allowed_statuses = {"OK", "COMPLETED", "SUCCESS", "RECOVERED"}
+            if name == "risk":
+                # Partial per-symbol risk failures must not stop independent,
+                # approved plans. Candidate-level risk gates remain required.
+                allowed_statuses.add("DEGRADED")
+            if stage_status not in allowed_statuses:
                 return False
-            if result.get("errors") and not (
+            if (result.get("error") or result.get("errors")) and not (
                 name == "risk" and stage_status == "DEGRADED"
             ):
                 return False
@@ -248,10 +267,10 @@ def _execution_ready(results):
                 return False
             for item in result:
                 if not isinstance(item, dict):
-                    continue
-                if str(item.get("status") or "").upper() in {"FAILED", "ERROR", "BLOCKED"}:
                     return False
-                if item.get("errors"):
+                if str(item.get("status") or "").upper() not in {"OK", "COMPLETED", "SUCCESS", "RECOVERED"}:
+                    return False
+                if item.get("error") or item.get("errors"):
                     return False
             continue
         # A scalar stage result cannot establish successful lineage.

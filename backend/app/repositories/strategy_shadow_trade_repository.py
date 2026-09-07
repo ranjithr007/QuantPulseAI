@@ -1,6 +1,7 @@
 from datetime import datetime
+from hashlib import blake2b
 
-from sqlalchemy import and_, case, func, inspect, or_
+from sqlalchemy import and_, case, func, inspect, or_, text
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.strategy_shadow_trade import StrategyShadowTrade
@@ -13,21 +14,52 @@ from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.repositories._db_utils import commit_or_rollback, flush_or_rollback
 from app.paper_trading.exit_lock import advance_exit_checkpoint
+from app.paper_trading.exit_evidence import entry_evidence_fields, record_exit_evidence
+from app.paper_trading.evidence_scope import QA_PAPER_SYMBOL_PREFIX
 
 
 class StrategyShadowTradeRepository:
     """Isolated Strategy Paper ledger with its own normalized virtual capital."""
 
+    def acquire_book_execution_lock(self, db, strategy_id, strategy_version):
+        """Serialize equity/capacity checks and entry across every coin in a book."""
+        resource = f"quantpulse:strategy-book:{strategy_id}:{strategy_version}"
+        dialect = str(db.get_bind().dialect.name).lower()
+        if dialect == "sqlite":
+            self.ensure_table(db)  # Schema initialization precedes reservation.
+        if dialect == "postgresql":
+            key = int.from_bytes(blake2b(resource.encode(), digest_size=8).digest(), "big", signed=True)
+            db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": key})
+        elif dialect == "mssql":
+            result = db.execute(text(
+                "DECLARE @result int; EXEC @result = sp_getapplock "
+                "@Resource = :resource, @LockMode = 'Exclusive', "
+                "@LockOwner = 'Transaction', @LockTimeout = 15000; SELECT @result"
+            ), {"resource": resource}).scalar()
+            if result is not None and int(result) < 0:
+                raise RuntimeError("Could not acquire strategy paper book execution lock")
+        return True
+
     def ensure_table(self, db):
         if not USING_SQLITE_FALLBACK:
             return
-        engine = db.get_bind()
-        StrategyShadowTrade.__table__.create(bind=engine, checkfirst=True)
+        connection = db.connection()
+        created = not inspect(connection).has_table(StrategyShadowTrade.__tablename__)
+        if created:
+            StrategyShadowTrade.__table__.create(bind=connection, checkfirst=True)
         # ``create(checkfirst=True)`` is intentionally idempotent. Inspecting
         # here also forces a clear failure when a legacy fallback schema is
         # missing the governed table rather than silently mixing ledgers.
-        if StrategyShadowTrade.__tablename__ not in inspect(engine).get_table_names():
+        if StrategyShadowTrade.__tablename__ not in inspect(connection).get_table_names():
             raise RuntimeError("Strategy shadow ledger could not be initialized")
+        existing = {column["name"] for column in inspect(connection).get_columns(StrategyShadowTrade.__tablename__)}
+        changed = created
+        for name, kind in {"trailing_activation_r": "FLOAT", "execution_evidence_json": "TEXT", "exit_evidence_json": "TEXT"}.items():
+            if name not in existing:
+                db.execute(text(f"ALTER TABLE strategy_shadow_trades ADD COLUMN {name} {kind}"))
+                changed = True
+        if changed:
+            db.commit()
 
     def get_open_trades(self, db):
         self.ensure_table(db)
@@ -36,6 +68,32 @@ class StrategyShadowTradeRepository:
             .filter(StrategyShadowTrade.status == "OPEN")
             .all()
         )
+
+    def valuation_snapshot(self, db, *, strategy_id=None, strategy_version=None):
+        """Consistent book cash/OPEN position snapshot without exit row locks."""
+        self.ensure_table(db)
+        scope = [or_(StrategyShadowTrade.symbol.is_(None),
+                     ~func.upper(StrategyShadowTrade.symbol).like(f"{QA_PAPER_SYMBOL_PREFIX}%"))]
+        if strategy_id is not None:
+            scope.append(StrategyShadowTrade.strategy_id == strategy_id)
+        if strategy_version is not None:
+            scope.append(StrategyShadowTrade.strategy_version == strategy_version)
+        realized = case(
+            (StrategyShadowTrade.status == "CLOSED", func.coalesce(StrategyShadowTrade.realized_pnl_inr, 0.0)),
+            (StrategyShadowTrade.status == "OPEN", func.coalesce(StrategyShadowTrade.partial_realized_pnl_inr, 0.0)),
+            else_=0.0,
+        )
+        totals = db.query(func.coalesce(func.sum(realized), 0.0).label("realized_pnl_inr")).filter(*scope).subquery()
+        rows = (
+            db.query(StrategyShadowTrade, totals.c.realized_pnl_inr).select_from(totals)
+            .outerjoin(StrategyShadowTrade, and_(*scope, StrategyShadowTrade.status == "OPEN"))
+            .order_by(StrategyShadowTrade.id.asc()).populate_existing().all()
+        )
+        return {
+            "open_trades": [row[0] for row in rows if row[0] is not None],
+            "realized_pnl_inr": float(rows[0][1]),
+            "valuation_snapshot_version": "SINGLE_STATEMENT_V1",
+        }
 
     def all_trades(self, db, *, strategy_id=None, strategy_version=None):
         self.ensure_table(db)
@@ -48,11 +106,11 @@ class StrategyShadowTradeRepository:
             )
         return query.all()
 
-    def risk_snapshot_trades(self, db, *, window_start):
+    def risk_snapshot_trades(self, db, *, window_start, strategy_id=None, strategy_version=None):
         """Load only open positions and closed trades in the daily-risk window."""
 
         self.ensure_table(db)
-        return (
+        query = (
             db.query(StrategyShadowTrade)
             .filter(
                 or_(
@@ -63,8 +121,12 @@ class StrategyShadowTradeRepository:
                     ),
                 )
             )
-            .all()
         )
+        if strategy_id is not None:
+            query = query.filter(StrategyShadowTrade.strategy_id == strategy_id)
+        if strategy_version is not None:
+            query = query.filter(StrategyShadowTrade.strategy_version == strategy_version)
+        return query.all()
 
     def realized_pnl_by_strategy(self, db, strategy_keys):
         """Return exact lifetime realized P&L without hydrating trade history."""
@@ -163,6 +225,7 @@ class StrategyShadowTradeRepository:
         )
         opened_at = datetime.utcnow()
         trade = StrategyShadowTrade(
+            **entry_evidence_fields(candidate),
             trade_plan_id=plan["id"],
             risk_decision_id=authorization["id"],
             symbol=str(candidate["symbol"]).upper(),
@@ -274,6 +337,7 @@ class StrategyShadowTradeRepository:
         trade.exit_slippage_percent = (fill_profile or {}).get(
             "exit_slippage_pct"
         )
+        record_exit_evidence(trade, fill_profile, exit_price)
         gross = _gross_pnl_percent(trade, exit_price)
         fees = float(trade.fee_bps or 0) * 2 / 100
         funding = _funding_cost_percent(db, trade, closed_at)

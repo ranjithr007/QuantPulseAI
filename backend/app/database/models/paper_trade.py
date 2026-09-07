@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Index, Integer, String
+from sqlalchemy import Column, DateTime, Float, Index, Integer, String, Text
 
 from app.database.sqlserver import Base
 
@@ -32,6 +32,9 @@ class PaperTrade(Base):
     strategy_decision_snapshot_id = Column(Integer, nullable=True, index=True)
     exit_policy = Column(String(50), nullable=True)
     initial_stop_loss = Column(Float, nullable=True)
+    trailing_activation_r = Column(Float, nullable=True)
+    execution_evidence_json = Column(Text, nullable=True)
+    exit_evidence_json = Column(Text, nullable=True)
     target1_fraction = Column(Float, nullable=True)
     remaining_position_fraction = Column(Float, nullable=True)
     max_hold_hours = Column(Integer, nullable=True)
@@ -81,3 +84,4 @@ Index(
     PaperTrade.status,
     PaperTrade.closed_at,
 )
+Index("ix_paper_trades_closed_history", PaperTrade.status, PaperTrade.closed_at, PaperTrade.id)

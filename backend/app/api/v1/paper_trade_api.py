@@ -1,10 +1,10 @@
 import json
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
-from math import isfinite
+from math import ceil, isfinite
 
 from fastapi import APIRouter, Body, Query
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError, TimeoutError as DatabasePoolTimeout
 from app.contracts.bundle import PaperTradeBundleResponse
 from app.contracts.control import PaperTradeExecutionResponse
 
@@ -18,7 +18,9 @@ from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.entry_price_service import get_current_paper_entry_mark
+from app.paper_trading.exit_evidence import read_evidence as evidence_dict
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
+from app.paper_trading.inr_sizing import apply_equity_risk_budget
 from app.paper_trading.inr_sizing import build_inr_paper_wallet
 from app.paper_trading.inr_sizing import fit_inr_paper_sizing_to_margin_capacity
 from app.paper_trading.measurement import MeasurementGates
@@ -34,6 +36,7 @@ from app.risk.risk_engine import RiskEngine
 from app.risk.confidence_sizing import confidence_sizing_profile
 from app.intelligence.contradiction_engine import build_contradiction_report
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
+from app.trading.futures_cost_model import estimate_slippage_rates
 from app.paper_trading.exit_policy import approval_target_for_policy
 from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.paper_trading.exit_policy import PAPER_ADAPTIVE_EXIT_POLICY
@@ -56,6 +59,7 @@ from app.repositories.strategy_shadow_trade_repository import (
     StrategyShadowTradeRepository,
 )
 from app.strategies.registry import strategy_definition
+from app.strategies.entry_quality import revalidate_entry_candidate
 from app.strategies.learning import resolve_strategy_definition
 from app.strategies.learning import candidate_rearm_blocker
 from app.trading.market_participation_guard import market_participation_blockers
@@ -75,6 +79,8 @@ PAPER_RISK_MARK_TIMEFRAME = "5m"
 PAPER_RISK_MARK_MAX_AGE_SECONDS = 15 * 60
 PAPER_ENTRY_MARK_MAX_AGE_SECONDS = 60
 PAPER_ENTRY_MARK_CLOCK_SKEW_SECONDS = 30
+PAPER_EXECUTION_EVIDENCE_VERSION = "paper_loss_protection_v1"
+PAPER_EQUITY_MARK_MAX_AGE_SECONDS = 5
 _MARKET_PARTICIPATION_UNSET = object()
 _CURRENT_SIGNAL_VALIDATION_UNSET = object()
 PAPER_STOP_REENTRY_COOLDOWN_REASON = (
@@ -177,7 +183,7 @@ def _paper_wallet_snapshot(db, trades, account_risk=None):
     )
 
 
-def _account_risk_snapshot(db, trades):
+def _account_risk_snapshot(db, trades, *, automation=None):
     open_trades = [
         trade
         for trade in (trades or [])
@@ -225,11 +231,16 @@ def _account_risk_snapshot(db, trades):
             "stale_after_seconds": PAPER_RISK_MARK_MAX_AGE_SECONDS,
         }
 
-    try:
-        auto = automation_settings_payload(get_automation_settings(db))
-    except SQLAlchemyError:
-        db.rollback()
-        auto = DEFAULT_AUTOMATION_SETTINGS
+    if automation is not None:
+        # Settings may initialize/repair and commit. Never invoke that path
+        # while holding an entry reservation transaction.
+        auto = automation
+    else:
+        try:
+            auto = automation_settings_payload(get_automation_settings(db))
+        except SQLAlchemyError:
+            db.rollback()
+            auto = DEFAULT_AUTOMATION_SETTINGS
 
     snapshot = build_account_daily_pnl_snapshot(
         trades,
@@ -716,12 +727,18 @@ def get_paper_trades(
         }
 
     except SQLAlchemyError as exc:
-        return _paper_trade_unavailable_payload(
+        unavailable = _paper_trade_unavailable_payload(
             operation="trades",
             symbol_filter=symbol,
             status_filter=normalized_status,
-            detail="Paper-trade list is unavailable because the database is not reachable.",
+            detail="Paper-trade history query could not complete. Please retry; this is not an empty trade history.",
         )
+        unavailable.update(
+            page=page, page_size=limit, query_complete=False, retryable=True,
+            error_category=("DB_POOL_TIMEOUT" if isinstance(exc, DatabasePoolTimeout)
+                            else "DB_QUERY_FAILED"),
+        )
+        return unavailable
 
     finally:
         db.close()
@@ -918,6 +935,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 continue
 
+            reservation = _capture_entry_reservation(db)
             if repo.has_open_trade(db, candidate_symbol):
                 skipped.extend(
                     {
@@ -969,7 +987,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 db.rollback()
                 continue
-            locked_account_risk = _account_risk_snapshot(db, account_trades)
+            locked_account_risk = _account_risk_snapshot(db, account_trades, automation=auto)
             if not locked_account_risk.get("risk_available", False):
                 skipped.append(
                     {
@@ -1079,11 +1097,24 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 )
                 db.rollback()
                 continue
-            candidate["paper_sizing"] = fit_inr_paper_sizing_to_margin_capacity(
-                candidate.get("paper_sizing") or {},
-                remaining_margin_capacity,
+            entry_snapshot = repo.valuation_snapshot(db)
+            candidate, sizing_error = _budget_new_paper_entry(
+                candidate, _entry_snapshot_wallet(entry_snapshot, wallet),
+                open_trades=entry_snapshot["open_trades"],
             )
+            if sizing_error:
+                skipped.append({"symbol": candidate_symbol,
+                                "action": "skipped_equity_risk_budget_unavailable",
+                                "blocked_reasons": [sizing_error]})
+                db.rollback()
+                continue
 
+            if not _entry_reservation_intact(db, reservation):
+                skipped.append({"symbol": candidate_symbol,
+                                "action": "skipped_account_reservation_lost",
+                                "blocked_reasons": ["Entry transaction changed; retry with fresh equity"]})
+                db.rollback()
+                continue
             try:
                 paper_trade = repo.save_candidate(db, candidate)
             except IntegrityError:
@@ -1156,6 +1187,10 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
     ):
         return candidate, "Execution mark price is stale"
 
+    entry_quality, entry_error = revalidate_entry_candidate(candidate, live_mark)
+    if entry_error:
+        return candidate, entry_error
+
     trade_plan = candidate.get("trade_plan") or {}
     authorization_risk = candidate.get("risk_decision") or {}
     side = str(candidate.get("side") or "").upper()
@@ -1196,6 +1231,8 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
             PAPER_ADAPTIVE_EXIT_POLICY if adaptive_policy else None
         ),
         stop_loss_percent=planned_stop_percent,
+        atr=entry_quality.get("execution_atr"),
+        structure_level=entry_quality.get("execution_structure_level"),
     )
     if mark_levels is None:
         return candidate, "No paper exit policy is available for the selected timeframe"
@@ -1213,6 +1250,12 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
     if entry_fill is None or entry_fill <= 0:
         return candidate, "Paper entry fill could not be calculated from the live mark"
 
+    fill_quality, entry_error = revalidate_entry_candidate(
+        candidate, {**live_mark, "mark_price": entry_fill}
+    )
+    if entry_error:
+        return candidate, f"Simulated fill failed entry-quality checks: {entry_error}"
+
     execution_levels = build_policy_trade_levels(
         side,
         entry_fill,
@@ -1225,6 +1268,8 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
             PAPER_ADAPTIVE_EXIT_POLICY if adaptive_policy else None
         ),
         stop_loss_percent=planned_stop_percent,
+        atr=entry_quality.get("execution_atr"),
+        structure_level=entry_quality.get("execution_structure_level"),
     )
     if execution_levels is None:
         return candidate, "Paper exit levels could not be recalculated from the new entry"
@@ -1278,6 +1323,32 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         fee_bps=fee_bps,
         stop_loss_percent=execution_stop_percent,
     )
+    evidence = {
+        **(candidate.get("execution_evidence") or {}),
+        **fill_quality,
+        "release_version": PAPER_EXECUTION_EVIDENCE_VERSION,
+        "entry_quality_profile": (candidate.get("execution_evidence") or {}).get(
+            "entry_quality_profile", "BASELINE_ENTRY_V1"
+        ),
+        "exit_management_profile": (candidate.get("execution_evidence") or {}).get(
+            "exit_management_profile", "IMMEDIATE_TRAIL_V1"
+        ),
+        "signal_planned_entry_price": signal_entry,
+        "execution_mark_price": mark_price,
+        "execution_mark_observed_at": observed_utc.isoformat(),
+        "execution_mark_age_seconds": round(age_seconds, 3),
+        "execution_mark_source": live_mark.get("source"),
+        "execution_processed_at": datetime.now(timezone.utc).isoformat(),
+        "entry_fill_price": entry_fill,
+        "entry_drift_percent": entry_drift_percent,
+        "initial_stop_loss": execution_levels["stop_loss"],
+        "stop_loss_percent": execution_stop_percent,
+        "exit_policy": execution_levels.get("name"),
+        "effective_risk_reward": execution_risk["risk_reward"],
+        "fill_model": fill_profile.get("model"),
+        "fee_bps_per_side": fee_bps,
+        "entry_slippage_percent": fill_profile.get("entry_slippage_pct"),
+    }
 
     return {
         **candidate,
@@ -1285,7 +1356,117 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         "execution_risk": execution_risk,
         "execution_exit_levels": execution_levels,
         "paper_sizing": paper_sizing,
+        "execution_evidence": evidence,
     }, None
+
+
+def _capture_entry_reservation(db):
+    if not hasattr(db, "get_transaction"):
+        return None
+    return db.get_transaction() or db.begin()
+
+
+def _entry_reservation_intact(db, reservation):
+    # Lightweight unit-test DB doubles have no SQLAlchemy transaction API.
+    if not hasattr(db, "get_transaction"):
+        return True
+    return (reservation is not None and db.get_transaction() is reservation
+            and reservation.is_active)
+
+
+def _fresh_entry_wallet(wallet, trades):
+    """Execution-only valuation: UI candle caches cannot govern a new budget."""
+    positions = [trade for trade in trades or []
+                 if str(getattr(trade, "status", "")).upper() == "OPEN"]
+    prices, evidence = {}, {}
+    for symbol in sorted({str(trade.symbol).upper() for trade in positions}):
+        mark = _current_paper_entry_mark(symbol) or {}
+        price = _finite_float(mark.get("mark_price"))
+        try:
+            timestamp = normalize_timestamp_to_utc(mark.get("observed_at"))
+            age = (datetime.now(timezone.utc) - timestamp).total_seconds()
+        except (TypeError, ValueError, AttributeError):
+            age = None
+        if price is None or price <= 0 or age is None or not -1 <= age <= PAPER_EQUITY_MARK_MAX_AGE_SECONDS:
+            raise ValueError(f"Fresh equity mark unavailable for {symbol} (maximum age 5 seconds)")
+        prices[symbol] = price
+        evidence[symbol] = {"price": price, "observed_at": timestamp.isoformat(),
+                            "source": mark.get("source"), "age_seconds": round(age, 3)}
+    checked_at = datetime.now(timezone.utc)
+    if any((checked_at - normalize_timestamp_to_utc(item["observed_at"])).total_seconds()
+           > PAPER_EQUITY_MARK_MAX_AGE_SECONDS for item in evidence.values()):
+        raise ValueError("Equity quotes expired during valuation; retry with fresh marks")
+    if positions:
+        realized = _finite_float(wallet.get("realized_pnl_inr"))
+        if realized is None:
+            raise ValueError("Ledger realized PNL unavailable for fresh equity sizing")
+        wallet = build_inr_paper_wallet(positions, trade_realized_pnl_inr=realized,
+                                       current_prices=prices, require_open_prices=True)
+    return {**wallet, "entry_equity_marks": evidence,
+            "entry_equity_valued_at": datetime.now(timezone.utc).isoformat()}
+
+
+def _entry_snapshot_wallet(snapshot, previous_wallet):
+    # One SQL statement observes realized totals and remaining positions
+    # together, avoiding double-counting a position closed by the exit worker.
+    wallet = build_inr_paper_wallet(
+        snapshot["open_trades"], trade_realized_pnl_inr=snapshot["realized_pnl_inr"],
+    )
+    wallet["remaining_margin_capacity_inr"] = min(
+        wallet["remaining_margin_capacity_inr"],
+        float(previous_wallet.get("remaining_margin_capacity_inr") or 0),
+    )
+    wallet["valuation_snapshot_version"] = snapshot.get("valuation_snapshot_version")
+    return wallet
+
+
+def _budget_new_paper_entry(candidate, wallet, *, open_trades=None):
+    """Last entry boundary: use THIS ledger's marked equity and margin budget."""
+    if not wallet or not wallet.get("valuation_complete", False):
+        return candidate, "Fresh complete paper equity valuation is required for sizing"
+    risk = candidate.get("execution_risk") or {}
+    levels = candidate.get("execution_exit_levels") or {}
+    try:
+        if open_trades is not None:
+            prior_capacity = wallet.get("remaining_margin_capacity_inr")
+            snapshot_version = wallet.get("valuation_snapshot_version")
+            wallet = _fresh_entry_wallet(wallet, open_trades)
+            wallet["remaining_margin_capacity_inr"] = min(
+                float(prior_capacity or 0), wallet["remaining_margin_capacity_inr"]
+            )
+            wallet["valuation_snapshot_version"] = snapshot_version
+            if not wallet.get("valuation_complete", False):
+                raise ValueError("Fresh paper equity valuation is incomplete")
+        confidence = float(risk.get("confidence"))
+        entry = float(risk.get("entry_price"))
+        stop = float(risk.get("stop_loss"))
+        slippage = estimate_slippage_rates(
+            entry, stop, confidence=confidence, risk_reward=risk.get("risk_reward") or 2
+        )
+        # At least 10 bps adverse exit-slippage reserve and 1 bp funding per
+        # modeled eight-hour period. Entry slippage is already in the fill.
+        funding_rate = _finite_float((candidate.get("market_context") or {}).get("fundingRate"))
+        funding_percent = max(0.01, abs(funding_rate or 0) * 100)
+        periods = max(1, ceil(float(levels.get("max_hold_hours") or 48) / 8))
+        sizing = apply_equity_risk_budget(
+            candidate.get("paper_sizing"), confidence, wallet.get("equity_inr"),
+            exit_slippage_percent=max(0.1, slippage["stop"] * 100 * max(1, stop / entry)),
+            funding_reserve_percent=funding_percent * periods,
+        )
+        capacity = float(wallet.get("remaining_margin_capacity_inr") or 0)
+        if not isfinite(capacity) or capacity <= 0:
+            raise ValueError("No fresh paper margin capacity remains")
+        sizing = fit_inr_paper_sizing_to_margin_capacity(sizing, capacity)
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError) as exc:
+        return candidate, f"Paper equity risk budget unavailable: {exc}"
+    return {**candidate, "paper_sizing": sizing,
+            "execution_risk": {**risk, "risk_percent": sizing["estimated_equity_loss_percent"]},
+            "execution_evidence": {**(candidate.get("execution_evidence") or {}),
+                                   "sizing_policy": sizing["sizing_policy"],
+                                   "equity_marks": wallet.get("entry_equity_marks") or {},
+                                   "equity_valued_at": wallet.get("entry_equity_valued_at"),
+                                   "valuation_snapshot_version": wallet.get("valuation_snapshot_version"),
+                                   "risk_sizing": sizing}}, None
 
 
 def _attach_open_trade_price_evidence(open_trades, account_risk):
@@ -1572,21 +1753,11 @@ def _execute_strategy_shadow_candidates(db, records, auto):
             "skipped": [],
         }
     repo = StrategyShadowTradeRepository()
-    shadow_history = repo.risk_snapshot_trades(
-        db,
-        window_start=datetime.utcnow() - timedelta(hours=24),
-    )
-    strategy_keys = {
-        (
-            (candidate.get("trade_plan") or {}).get("strategy_id"),
-            (candidate.get("trade_plan") or {}).get("strategy_version"),
-        )
-        for candidate in records
-    }
-    realized_pnl_by_strategy = repo.realized_pnl_by_strategy(db, strategy_keys)
     live_marks = {}
 
     for candidate in records:
+        # Release a skipped previous book's lock before acquiring the next one.
+        db.rollback()
         plan = candidate.get("trade_plan") or {}
         strategy_id = plan.get("strategy_id")
         strategy_version = plan.get("strategy_version")
@@ -1613,6 +1784,15 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
+        repo.acquire_book_execution_lock(db, strategy_id, strategy_version)
+        reservation = _capture_entry_reservation(db)
+        strategy_history = repo.risk_snapshot_trades(
+            db, window_start=datetime.utcnow() - timedelta(hours=24),
+            strategy_id=strategy_id, strategy_version=strategy_version,
+        )
+        realized_pnl_by_strategy = repo.realized_pnl_by_strategy(
+            db, {(strategy_id, strategy_version)}
+        )
         if repo.has_open_trade(
             db,
             strategy_id,
@@ -1636,12 +1816,6 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
-        strategy_history = [
-            item
-            for item in shadow_history
-            if item.strategy_id == strategy_id
-            and item.strategy_version == strategy_version
-        ]
         cooldown = same_side_stop_reentry_cooldown(
             strategy_history,
             candidate["symbol"],
@@ -1675,7 +1849,7 @@ def _execute_strategy_shadow_candidates(db, records, auto):
             )
             continue
 
-        strategy_account_risk = _account_risk_snapshot(db, strategy_history)
+        strategy_account_risk = _account_risk_snapshot(db, strategy_history, automation=auto)
         if not strategy_account_risk.get("risk_available", False):
             skipped.append(
                 {
@@ -1774,10 +1948,23 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
-        repriced["paper_sizing"] = fit_inr_paper_sizing_to_margin_capacity(
-            repriced.get("paper_sizing") or {},
-            remaining_strategy_margin,
+        entry_snapshot = repo.valuation_snapshot(
+            db, strategy_id=strategy_id, strategy_version=strategy_version
         )
+        repriced, sizing_error = _budget_new_paper_entry(
+            repriced, _entry_snapshot_wallet(entry_snapshot, strategy_wallet),
+            open_trades=entry_snapshot["open_trades"],
+        )
+        if sizing_error:
+            skipped.append({"symbol": symbol, "strategy_id": strategy_id,
+                            "action": "skipped_shadow_equity_risk_budget_unavailable",
+                            "blocked_reasons": [sizing_error]})
+            continue
+        if not _entry_reservation_intact(db, reservation):
+            skipped.append({"symbol": symbol, "strategy_id": strategy_id,
+                            "action": "skipped_shadow_reservation_lost",
+                            "blocked_reasons": ["Entry transaction changed; retry with fresh equity"]})
+            continue
         try:
             trade = repo.save_candidate(db, repriced)
         except IntegrityError:
@@ -1791,8 +1978,8 @@ def _execute_strategy_shadow_candidates(db, records, auto):
             )
             continue
         executed.append(_strategy_shadow_trade_payload(trade))
-        shadow_history.append(trade)
 
+    db.rollback()
     return {
         "source": "strategy_shadow_execution_v1",
         "execution_book": "STRATEGY_PAPER",
@@ -1838,6 +2025,9 @@ def _safe_execute_strategy_shadow_candidates(db, records, auto):
 
 def _strategy_shadow_trade_payload(trade):
     return {
+        "execution_evidence": evidence_dict(getattr(trade, "execution_evidence_json", None)),
+        "exit_evidence": evidence_dict(getattr(trade, "exit_evidence_json", None)),
+        "trailing_activation_r": getattr(trade, "trailing_activation_r", None),
         "id": trade.id,
         "trade_plan_id": trade.trade_plan_id,
         "symbol": trade.symbol,
@@ -2570,6 +2760,7 @@ def _build_phase2_checkpoint_measurement(db):
 
 def _paper_trade_payload(paper_trade, fill_profile=None):
     exit_levels = _paper_trade_display_exit_levels(paper_trade)
+    execution_evidence = evidence_dict(getattr(paper_trade, "execution_evidence_json", None))
     remaining_fraction = getattr(
         paper_trade,
         "remaining_position_fraction",
@@ -2618,7 +2809,17 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
             "margin_used_inr": persisted_margin or sizing["margin_used_inr"],
         }
     )
+    recorded_sizing = execution_evidence.get("risk_sizing")
+    if isinstance(recorded_sizing, dict) and recorded_sizing.get("sizing_policy") == "EQUITY_RISK_V1":
+        sizing.update(recorded_sizing)
+        fraction = 1.0 if remaining_fraction is None else float(remaining_fraction)
+        sizing.update(remaining_fraction=fraction,
+                      remaining_notional_inr=round(sizing["position_notional_inr"] * fraction, 2),
+                      remaining_margin_inr=round(sizing["margin_used_inr"] * fraction, 2))
     payload = {
+        "execution_evidence": execution_evidence,
+        "exit_evidence": evidence_dict(getattr(paper_trade, "exit_evidence_json", None)),
+        "trailing_activation_r": getattr(paper_trade, "trailing_activation_r", None),
         "id": paper_trade.id,
         "trade_plan_id": paper_trade.trade_plan_id,
         "risk_decision_id": paper_trade.risk_decision_id,
@@ -2936,10 +3137,21 @@ def _paper_trade_candidate(
     }
     blocked_reasons = trade_blockers + coin_blockers + account_blockers
 
+    snapshot = evidence_dict(getattr(strategy_snapshot, "snapshot_json", None))
+    snapshot_plan = snapshot.get("trade_plan") or {}
+    snapshot_context = snapshot.get("context") or {}
+    entry_quality = snapshot_plan.get("entry_quality") or snapshot_context.get("entry_quality") or {}
+    execution_evidence = snapshot_plan.get("execution_evidence") or snapshot_context.get("execution_evidence") or {}
+    trailing_activation_r = snapshot_plan.get("trailing_activation_r")
+    if trailing_activation_r is None:
+        trailing_activation_r = snapshot_context.get("trailing_activation_r")
     return {
         "symbol": trade.symbol,
         "side": trade.side,
         "eligible": not blocked_reasons,
+        "entry_quality": entry_quality,
+        "execution_evidence": execution_evidence,
+        "trailing_activation_r": trailing_activation_r,
         "blocked_reasons": blocked_reasons,
         "blocker_scopes": blocker_scopes,
         "account_risk": account_risk,

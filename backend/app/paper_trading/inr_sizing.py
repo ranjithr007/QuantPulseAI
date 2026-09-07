@@ -1,4 +1,4 @@
-from math import isfinite
+from math import floor, isfinite
 
 from app.governance.evidence_policy import FULL_SIZE_ENTRY_CONFIDENCE
 from app.paper_trading.evidence_scope import production_paper_trade_records
@@ -12,6 +12,69 @@ PAPER_MAX_POSITION_INR = PAPER_CAPITAL_INR * (
 )
 DEFAULT_PAPER_LEVERAGE = 5.0
 MAX_ACCOUNT_MARGIN_UTILIZATION_PERCENT = 85.0
+EQUITY_RISK_POLICY = "EQUITY_RISK_V1"
+MINIMUM_TIER_EQUITY_RISK_PERCENT = 0.25
+MAXIMUM_TIER_EQUITY_RISK_PERCENT = 0.5
+
+
+def apply_equity_risk_budget(
+    sizing, confidence, equity_inr, *, exit_slippage_percent=0.1,
+    funding_reserve_percent=0.06,
+):
+    """Size NEW entries against marked equity; never resize existing positions.
+
+    The loss budget includes stop distance from the actual fill, fees, a
+    conservative exit-slippage reserve and funding reserve. These are estimates,
+    not a guaranteed maximum loss during gaps or unavailable market data.
+    The legacy 75/85% notionals are ceilings, not amounts we must spend.
+    """
+    result = dict(sizing or {})
+    equity = _finite_number("paper equity", equity_inr)
+    confidence = _finite_number("confidence", confidence)
+    stop = _finite_number("stop distance", result.get("stop_loss_percent"))
+    requested = _finite_number("requested notional", result.get("position_notional_inr"))
+    fee_cost = _finite_number("round-trip fees", result.get("estimated_round_trip_cost_inr"))
+    slip = _finite_number("exit slippage reserve", exit_slippage_percent)
+    funding = _finite_number("funding reserve", funding_reserve_percent)
+    if equity <= 0 or requested <= 0 or stop <= 0:
+        raise ValueError("Positive fresh equity, notional and stop distance are required")
+    if not 40 <= confidence <= 100 or min(fee_cost, slip, funding) < 0:
+        raise ValueError("Invalid confidence or risk-cost reserve for paper entry")
+    risk_percent = (MINIMUM_TIER_EQUITY_RISK_PERCENT
+                    if confidence < FULL_SIZE_ENTRY_CONFIDENCE
+                    else MAXIMUM_TIER_EQUITY_RISK_PERCENT)
+    budget = equity * risk_percent / 100
+    fee_percent = fee_cost / requested * 100
+    total_loss_percent = stop + fee_percent + slip + funding
+    # Floor to paise so rounding cannot increase approved exposure.
+    notional = floor(min(requested, budget / (total_loss_percent / 100)) * 100) / 100
+    if notional <= 0:
+        raise ValueError("Equity risk budget is too small for a paper position")
+    scale = notional / requested
+    for key in ("margin_used_inr", "remaining_notional_inr", "remaining_margin_inr",
+                "estimated_stop_loss_inr", "estimated_round_trip_cost_inr"):
+        result[key] = round(float(result.get(key) or 0) * scale, 2)
+    estimated_loss = notional * total_loss_percent / 100
+    result.update({
+        "sizing_policy": EQUITY_RISK_POLICY,
+        "position_tier": "MINIMUM" if confidence < FULL_SIZE_ENTRY_CONFIDENCE else "MAXIMUM",
+        "position_notional_inr": notional,
+        "allocation_percent": round(notional / PAPER_CAPITAL_INR * 100, 4),
+        "equity_at_entry_inr": round(equity, 2),
+        "risk_budget_percent": risk_percent,
+        "risk_budget_inr": round(budget, 2),
+        "notional_cap_inr": round(requested, 2),
+        "risk_adjusted": notional < requested,
+        "exit_slippage_reserve_percent": slip,
+        "funding_reserve_percent": funding,
+        "estimated_exit_slippage_inr": round(notional * slip / 100, 2),
+        "estimated_funding_reserve_inr": round(notional * funding / 100, 2),
+        "estimated_max_loss_inr": round(estimated_loss, 2),
+        "estimated_max_loss_percent": round(estimated_loss / PAPER_CAPITAL_INR * 100, 4),
+        "estimated_equity_loss_percent": round(estimated_loss / equity * 100, 4),
+        "loss_estimate_is_guaranteed": False,
+    })
+    return result
 
 
 def build_inr_paper_sizing(
@@ -136,6 +199,8 @@ def fit_inr_paper_sizing_to_margin_capacity(sizing, margin_capacity_inr):
         "estimated_stop_loss_inr",
         "estimated_round_trip_cost_inr",
         "estimated_max_loss_inr",
+        "estimated_exit_slippage_inr",
+        "estimated_funding_reserve_inr",
     ):
         if result.get(key) is not None:
             result[key] = round(float(result[key]) * scale, 2)
@@ -165,6 +230,10 @@ def fit_inr_paper_sizing_to_margin_capacity(sizing, margin_capacity_inr):
             "margin_capacity_at_entry_inr": round(margin_capacity, 2),
         }
     )
+    if result.get("equity_at_entry_inr"):
+        result["estimated_equity_loss_percent"] = round(
+            result["estimated_max_loss_inr"] / result["equity_at_entry_inr"] * 100, 4
+        )
     return result
 
 
@@ -281,6 +350,9 @@ def build_inr_paper_wallet(
         "ledger": ledger_payload,
         "leverage": float(leverage),
         "minimum_position_allocation_percent": MINIMUM_TIER_ALLOCATION_PERCENT,
+        "new_entry_sizing_policy": EQUITY_RISK_POLICY,
+        "minimum_tier_equity_risk_percent": MINIMUM_TIER_EQUITY_RISK_PERCENT,
+        "maximum_tier_equity_risk_percent": MAXIMUM_TIER_EQUITY_RISK_PERCENT,
         "maximum_position_allocation_percent": MAXIMUM_TIER_ALLOCATION_PERCENT,
         "maximum_position_notional_inr": PAPER_MAX_POSITION_INR,
         "maximum_margin_utilization_percent": MAX_ACCOUNT_MARGIN_UTILIZATION_PERCENT,

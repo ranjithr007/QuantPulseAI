@@ -11,9 +11,13 @@ from app.repositories.strategy_shadow_trade_repository import StrategyShadowTrad
 from app.repositories.notification_repository import NotificationRepository
 from app.services.paper_exit_prices import paper_exit_prices, MAX_PRICE_AGE_SECONDS
 from app.utils.freshness import normalize_timestamp_to_utc
+from app.paper_trading.exit_evidence import observation_evidence, merge_observations
 
 
 _alerted = {}
+_observations = {}
+_observation_flushed_at = {}
+OBSERVATION_CHECKPOINT_SECONDS = 60
 
 
 def _snapshot(trade):
@@ -40,8 +44,13 @@ def run_paper_trade_fast_exit_job():
     try:
         books = [(PaperTradeRepository(), False), (StrategyShadowTradeRepository(), True)]
         trades = [(repo, shadow, trade, _snapshot(trade)) for repo, shadow in books for trade in repo.get_open_trades(db)]
+        active_keys = {(shadow, snapshot.id, snapshot.opened_at) for _, shadow, _, snapshot in trades}
+        for key in set(_observations) - active_keys:
+            _observations.pop(key, None)
+            _observation_flushed_at.pop(key, None)
         marks = paper_exit_prices.take([snapshot.symbol for _, _, _, snapshot in trades])
         for repo, shadow, trade, snapshot in trades:
+            evidence_key = (shadow, snapshot.id, snapshot.opened_at)
             symbol = snapshot.symbol
             quotes = marks.get(symbol, [])
             if not quotes:
@@ -59,11 +68,13 @@ def run_paper_trade_fast_exit_job():
                     timestamp = observed.replace(tzinfo=None)
                     candle = SimpleNamespace(high_price=price, low_price=price, close_price=price,
                         candle_time=timestamp, open_time=timestamp, close_time=timestamp,
-                        live_mark=True, is_final=False)
+                        live_mark=True, is_final=False, source=mark.get("source") or "BINANCE_MARK_STREAM_1S")
+                    _observations[evidence_key] = observation_evidence(snapshot, candle, _observations.get(evidence_key))
+                    checkpoint_due = time.monotonic() - _observation_flushed_at.get(evidence_key, float("-inf")) >= OBSERVATION_CHECKPOINT_SECONDS
                     summary["processed"] += 1
                     # HOLD checks are read-only against this run's snapshot;
                     # only actionable ticks need an additional database lock.
-                    if evaluate_paper_trade_exit(snapshot, candle)["action"] == "HOLD":
+                    if evaluate_paper_trade_exit(snapshot, candle)["action"] == "HOLD" and not checkpoint_due:
                         continue
                     # Repository actions commit. Reacquire for every action and
                     # after T1 so another monitor cannot double-close a leg.
@@ -76,6 +87,7 @@ def run_paper_trade_fast_exit_job():
                             break
                         decision = evaluate_paper_trade_exit(current, candle)
                         action = decision["action"]
+                        merge_observations(current, _observations[evidence_key])
                         if action == "CLOSE":
                             repo.close_trade(db, current, decision["exit_price"], decision["result"], fill_profile=decision.get("fill_profile"))
                             summary["closed"] += 1
@@ -88,6 +100,11 @@ def run_paper_trade_fast_exit_job():
                             options = {} if shadow else {"notify": False}
                             repo.move_stop_loss(db, current, decision["new_stop_loss"], evaluated_at=timestamp, **options)
                             summary["stop_moves"] += 1
+                        else:
+                            # Persist sampled excursion bounds at most once a
+                            # minute during HOLD; never add per-tick audit rows.
+                            db.commit()
+                        _observation_flushed_at[evidence_key] = time.monotonic()
                         snapshot = _snapshot(current)
                         break
                     db.rollback()  # Release read locks; actions already committed.

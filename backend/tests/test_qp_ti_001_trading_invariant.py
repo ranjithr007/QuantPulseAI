@@ -32,6 +32,13 @@ from app.strategies.registry import TREND_PULLBACK_STRATEGY_VERSION
 from app.trading.trade_plan_engine import build_trade_plan
 
 
+class _ValuationSnapshotMixin:
+    def valuation_snapshot(self, db):
+        history = self.risk_snapshot_trades(db, window_start=datetime.utcnow() - timedelta(hours=24))
+        return {"open_trades": [row for row in history if getattr(row, "status", "") == "OPEN"],
+                "realized_pnl_inr": 0, "valuation_snapshot_version": "SINGLE_STATEMENT_V1"}
+
+
 def _candidate(plan_id, timeframe, confidence, *, side="LONG", risk_reward=2.0):
     direction = 1 if side == "LONG" else -1
     return {
@@ -147,7 +154,7 @@ def test_executor_fails_closed_when_automation_settings_are_unavailable(monkeypa
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def save_candidate(self, db, item):
             raise AssertionError("A locked executor must not persist a paper trade")
 
@@ -161,9 +168,11 @@ def test_executor_fails_closed_when_automation_settings_are_unavailable(monkeypa
     monkeypatch.setattr(
         paper_trade_api,
         "_paper_wallet_snapshot",
-        lambda db, trades: {
+        lambda db, trades, **kwargs: {
             "open_position_count": 0,
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
     monkeypatch.setattr(
@@ -400,7 +409,7 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def acquire_account_execution_lock(self, db):
             lock_calls.append("lock")
 
@@ -431,6 +440,8 @@ def test_executor_selects_only_strongest_eligible_candidate_per_symbol(monkeypat
         lambda db, trades, account_risk=None: {
             "open_position_count": 0,
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
     monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
@@ -467,7 +478,7 @@ def test_shadow_research_failure_never_blocks_official_paper_execution(monkeypat
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def acquire_account_execution_lock(self, db):
             return True
 
@@ -504,6 +515,8 @@ def test_shadow_research_failure_never_blocks_official_paper_execution(monkeypat
         lambda db, trades, account_risk=None: {
             "open_position_count": 0,
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
     monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
@@ -600,7 +613,7 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def acquire_account_execution_lock(self, db):
             pass
 
@@ -630,6 +643,8 @@ def test_active_btc_trade_does_not_block_eligible_eth_candidate(monkeypatch):
         lambda db, trades, account_risk=None: {
             "open_position_count": 0,
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
     monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
@@ -666,7 +681,7 @@ def test_executor_uses_remaining_safe_margin_instead_of_rejecting_trade(monkeypa
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def acquire_account_execution_lock(self, db):
             pass
 
@@ -695,7 +710,9 @@ def test_executor_uses_remaining_safe_margin_instead_of_rejecting_trade(monkeypa
         "_paper_wallet_snapshot",
         lambda db, trades, account_risk=None: {
             "open_position_count": 4,
-            "remaining_margin_capacity_inr": 22_000,
+            "remaining_margin_capacity_inr": 2_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
     monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
@@ -714,8 +731,8 @@ def test_executor_uses_remaining_safe_margin_instead_of_rejecting_trade(monkeypa
 
     assert result["executed_count"] == 1
     assert saved[0]["paper_sizing"]["capacity_adjusted"] is True
-    assert saved[0]["paper_sizing"]["margin_used_inr"] == 22_000
-    assert saved[0]["paper_sizing"]["position_notional_inr"] == 110_000
+    assert saved[0]["paper_sizing"]["margin_used_inr"] == 2_000
+    assert saved[0]["paper_sizing"]["position_notional_inr"] == 10_000
 
 
 def test_executor_blocks_only_same_side_during_post_stop_cooldown(monkeypatch):
@@ -736,7 +753,7 @@ def test_executor_blocks_only_same_side_during_post_stop_cooldown(monkeypatch):
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def acquire_account_execution_lock(self, db):
             pass
 
@@ -801,6 +818,8 @@ def test_candidate_exposes_post_stop_cooldown_as_coin_level_blocker():
         paper_wallet={
             "open_position_count": 0,
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
         stop_reentry_cooldown=cooldown,
     )
@@ -843,6 +862,8 @@ def test_candidate_blocks_stale_current_orderflow_at_trade_scope():
         paper_wallet={
             "open_position_count": 0,
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
 
@@ -869,7 +890,7 @@ def test_executor_allows_opposite_side_during_post_stop_cooldown(monkeypatch):
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def acquire_account_execution_lock(self, db):
             pass
 
@@ -896,7 +917,7 @@ def test_executor_allows_opposite_side_during_post_stop_cooldown(monkeypatch):
     monkeypatch.setattr(
         paper_trade_api,
         "_account_risk_snapshot",
-        lambda db, trades: {
+        lambda db, trades, **kwargs: {
             "risk_available": True,
             "limit_reached": False,
             "current_prices": {},
@@ -908,6 +929,8 @@ def test_executor_allows_opposite_side_during_post_stop_cooldown(monkeypatch):
         lambda db, trades, account_risk=None: {
             "open_position_count": 0,
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
     monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())
@@ -941,7 +964,7 @@ def test_executor_rechecks_account_capacity_under_lock_for_each_symbol(monkeypat
         def close(self):
             pass
 
-    class FakeRepo:
+    class FakeRepo(_ValuationSnapshotMixin):
         def acquire_account_execution_lock(self, db):
             nonlocal lock_count
             lock_count += 1
@@ -979,7 +1002,7 @@ def test_executor_rechecks_account_capacity_under_lock_for_each_symbol(monkeypat
     monkeypatch.setattr(
         paper_trade_api,
         "_account_risk_snapshot",
-        lambda db, trades: {
+        lambda db, trades, **kwargs: {
             "risk_available": True,
             "limit_reached": False,
             "current_prices": {},
@@ -991,6 +1014,8 @@ def test_executor_rechecks_account_capacity_under_lock_for_each_symbol(monkeypat
         lambda db, trades, account_risk=None: {
             "open_position_count": len(trades),
             "remaining_margin_capacity_inr": 85_000,
+            "valuation_complete": True,
+            "equity_inr": 200_000,
         },
     )
     monkeypatch.setattr(paper_trade_api, "get_automation_settings", lambda db: object())

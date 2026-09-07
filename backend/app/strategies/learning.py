@@ -12,6 +12,7 @@ from app.database.models.strategy_learning import StrategyVersionConfig
 from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
+from app.paper_trading.exit_evidence import classify_exit
 from app.repositories.notification_repository import NotificationRepository
 from app.strategies.registry import STRATEGY_REGISTRY
 
@@ -232,6 +233,7 @@ def evaluate_due_strategy_versions(db):
         )
         accepted = report["promotion_candidate"] and benchmark_passed
         report["gates"]["beats_current_benchmark"] = benchmark_passed
+        cohort_ready = report["gates"]["verified_policy_cohort"] and report["gates"]["sample_size"]
         evaluation = StrategyLearningEvaluation(
             strategy_id=definition["id"],
             strategy_version=definition["version"],
@@ -239,7 +241,9 @@ def evaluate_due_strategy_versions(db):
             window_size=EVALUATION_WINDOW_SIZE,
             closed_trade_count=len(trades),
             status=(
-                "PROMOTION_CANDIDATE"
+                "COLLECTING_COHORT"
+                if not cohort_ready
+                else "PROMOTION_CANDIDATE"
                 if accepted
                 else "CHANGES_REQUIRED"
             ),
@@ -254,7 +258,7 @@ def evaluate_due_strategy_versions(db):
         db.flush()
         evaluated.append(evaluation)
 
-        if config is not None:
+        if config is not None and cohort_ready and not definition.get("immutable_experiment"):
             if accepted:
                 prior_champions = (
                     db.query(StrategyVersionConfig)
@@ -273,9 +277,10 @@ def evaluate_due_strategy_versions(db):
                 config.official_paper_enabled = False
 
         candidate = None
-        if not accepted and not _has_collecting_candidate(
+        if (cohort_ready and not definition.get("immutable_experiment")
+                and not accepted and not _has_collecting_candidate(
             db, definition["id"]
-        ):
+        )):
             candidate = _create_candidate(db, definition, evaluation, recommendations)
             evaluation.candidate_version = candidate.version
             created_candidates.append(candidate)
@@ -306,15 +311,40 @@ def analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE):
         (item for item in trades if str(item.status).upper() == "CLOSED"),
         key=lambda item: (item.closed_at or item.created_at, item.id),
     )
-    window = closed[-window_size:]
+    cohorts = defaultdict(list)
+    unknown = []
+    for item in closed:
+        key = strategy_trade_cohort(item)
+        if key is None:
+            unknown.append(item)
+        else:
+            cohorts[key].append(item)
+    # Evaluate only one homogeneous, most recently observed verified policy.
+    # Older/unknown history remains visible diagnostically but cannot promote
+    # a new execution policy merely by inheriting the incumbent's sample size.
+    selected_cohort = next(reversed(cohorts), None)
+    if cohorts:
+        selected_cohort = max(cohorts, key=lambda key: (
+            cohorts[key][-1].closed_at or cohorts[key][-1].created_at,
+            cohorts[key][-1].id,
+        ))
+    window = (cohorts[selected_cohort] if selected_cohort else closed)[-window_size:]
     metrics = _trade_metrics(window)
+    metrics.update(
+        cohort_key=selected_cohort,
+        cohort_verified=selected_cohort is not None,
+        cohort_closed_trades=len(cohorts.get(selected_cohort, [])),
+        unknown_cohort_trades=len(unknown),
+        analysis_scope="VERIFIED_POLICY_COHORT" if selected_cohort else "LEGACY_DIAGNOSTIC_ONLY",
+    )
     gates = {
         "sample_size": len(window) >= MINIMUM_CLOSED_TRADES,
+        "verified_policy_cohort": selected_cohort is not None,
         "win_rate": metrics["win_rate"] >= 55.0,
         "profit_factor": metrics["profit_factor"] >= 1.30,
         "cost_adjusted_expectancy": metrics["expectancy_inr"] > 0,
         "targets_exceed_initial_stops": (
-            metrics["target_successes"] > metrics["initial_stop_failures"]
+            metrics["target_successes"] > metrics["pre_t1_losing_stops"]
         ),
         "maximum_drawdown": metrics["max_drawdown_percent"] <= 10.0,
     }
@@ -325,14 +355,34 @@ def analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE):
             "by_timeframe": _group_metrics(window, "entry_timeframe"),
             "by_regime": _group_metrics(window, "regime"),
             "by_side": _group_metrics(window, "side"),
+            "by_policy_cohort": {key: _trade_metrics(items[-window_size:])
+                                 for key, items in cohorts.items()},
+            "unknown_cohort": _trade_metrics(unknown[-window_size:]),
         },
         "gates": gates,
         "promotion_candidate": all(gates.values()),
         "authorizes_live_execution": False,
+        "sample_interpretation": "Thirty closed trades are a diagnostic milestone, not proof of a durable edge or live authorization.",
     }
 
 
+def strategy_trade_cohort(trade):
+    evidence = _json(getattr(trade, "execution_evidence_json", None))
+    fields = (
+        str(getattr(trade, "exit_policy", None) or ""),
+        str(evidence.get("entry_quality_profile") or ""),
+        str(evidence.get("exit_management_profile") or ""),
+        str(evidence.get("sizing_policy") or ""),
+        str(evidence.get("release_version") or ""),
+    )
+    if any(not value or value.upper() in {"UNKNOWN", "LEGACY", "UNVERIFIED"} for value in fields):
+        return None
+    return "|".join(fields)
+
+
 def recommend_candidate_parameters(definition, report):
+    if not report["gates"]["verified_policy_cohort"] or not report["gates"]["sample_size"]:
+        return {"paper_only": True, "await_verified_cohort": True}
     diagnostics = report["diagnostics"]
     healthy_timeframes = _healthy_groups(diagnostics["by_timeframe"])
     healthy_regimes = _healthy_groups(diagnostics["by_regime"])
@@ -341,7 +391,7 @@ def recommend_candidate_parameters(definition, report):
         for name, metrics in diagnostics["by_symbol"].items()
         if metrics["closed_trades"] >= 5
         and metrics["net_pnl_inr"] < 0
-        and metrics["initial_stop_failures"] >= metrics["target_successes"]
+        and metrics["pre_t1_losing_stops"] >= metrics["target_successes"]
     ]
     parameters = {
         "minimum_confidence": float(definition.get("signal_threshold") or 40.0),
@@ -391,7 +441,7 @@ def latest_evaluations(db, definitions):
 
 
 def evaluation_payload(row):
-    current_metrics = _json(row.metrics_json).get("metric_version") == "NET_STOP_V2"
+    current_metrics = _json(row.metrics_json).get("metric_version") == "STOP_CAUSE_COHORT_V3"
     return {
         "id": row.id,
         "strategy_id": row.strategy_id,
@@ -427,7 +477,7 @@ def _trade_metrics(trades):
     closed = len(trades)
     wins = sum(1 for item in trades if float(item.realized_pnl_inr or 0) > 0)
     target_successes = sum(1 for item in trades if item.target1_hit_at is not None)
-    initial_stops = sum(
+    pre_t1_losing_stops = sum(
         1
         for item in trades
         if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
@@ -440,6 +490,11 @@ def _trade_metrics(trades):
         if str(item.exit_reason or "").upper() in {"STOP", "STOP_LOSS"}
         and (item.target1_hit_at is not None or float(item.realized_pnl_inr or 0) >= 0)
     )
+    exit_classes = [classify_exit(item) for item in trades]
+    initial_stops = sum(
+        classification == "INITIAL_STOP" and float(item.realized_pnl_inr or 0) < 0
+        for item, classification in zip(trades, exit_classes)
+    )
     pnl = [float(item.realized_pnl_inr or 0) for item in trades]
     gains = sum(max(value, 0) for value in pnl)
     losses = abs(sum(min(value, 0) for value in pnl))
@@ -449,12 +504,16 @@ def _trade_metrics(trades):
         "wins": wins,
         "losses": closed - wins,
         "win_rate": round(wins / closed * 100, 2) if closed else 0.0,
-        "metric_version": "NET_STOP_V2",
+        "metric_version": "STOP_CAUSE_COHORT_V3",
         "target_successes": target_successes,
         "target2_hits": sum(
             1 for item in trades if str(item.exit_reason or "").upper() == "TARGET2"
         ),
         "initial_stop_failures": initial_stops,
+        "pre_t1_losing_stops": pre_t1_losing_stops,
+        "trailed_stop_pre_t1_exits": exit_classes.count("TRAILED_STOP_PRE_T1"),
+        "protected_stop_after_t1_exits": exit_classes.count("PROTECTED_STOP_AFTER_T1"),
+        "unknown_stop_exits": exit_classes.count("UNKNOWN_STOP"),
         "protected_stop_exits": protected_stops,
         "target_success_rate": round(target_successes / closed * 100, 2)
         if closed
@@ -489,7 +548,7 @@ def _healthy_groups(groups):
         if name != "UNKNOWN"
         and metrics["closed_trades"] >= 5
         and metrics["net_pnl_inr"] > 0
-        and metrics["target_successes"] > metrics["initial_stop_failures"]
+        and metrics["target_successes"] > metrics["pre_t1_losing_stops"]
     )
 
 
@@ -517,7 +576,7 @@ def _candidate_definition(base, config):
             "ACTIVE" if config.status in ACTIVE_CANDIDATE_STATUSES else "PAUSED"
         ),
         "execution_scope": "PAPER_ONLY",
-        "official_execution_enabled": bool(config.official_paper_enabled),
+        "official_execution_enabled": bool(config.official_paper_enabled) and not base.get("immutable_experiment"),
         "learning_status": config.status,
         "learning_parameters": parameters,
         "source_evaluation_id": config.source_evaluation_id,
@@ -614,9 +673,14 @@ def _notify_learning_evaluation(
         if candidate is not None
         else evaluation.candidate_version
     )
+    if evaluation.status == "COLLECTING_COHORT":
+        event_type = "STRATEGY_COHORT_COLLECTING"
+        severity = "INFO"
+        title = f"{definition['name']} is collecting verified policy evidence"
     message = (
-        f"Milestone {evaluation.milestone} using the latest "
-        f"{evaluation.window_size} closed trades: "
+        f"Milestone {evaluation.milestone}; "
+        f"{int(metrics.get('closed_trades') or 0)} closed trades in this "
+        f"{metrics.get('analysis_scope') or 'diagnostic'} review: "
         f"win rate {float(metrics.get('win_rate') or 0):.1f}%, "
         f"targets {int(metrics.get('target_successes') or 0)}, "
         f"initial stops {int(metrics.get('initial_stop_failures') or 0)}, "
@@ -670,7 +734,7 @@ def _beats_current_benchmark(db, config, candidate_metrics):
     if benchmark is None:
         return False
     metrics = _json(benchmark.metrics_json)
-    if metrics.get("metric_version") != "NET_STOP_V2":
+    if metrics.get("metric_version") != "STOP_CAUSE_COHORT_V3" or not metrics.get("cohort_verified"):
         # Preserve the saved report but compare using the corrected metric
         # definition. Never promote against an incompatible cached benchmark.
         return False
@@ -685,7 +749,10 @@ def _beats_current_benchmark(db, config, candidate_metrics):
 
 
 def _json(value):
+    if isinstance(value, dict):
+        return value
     try:
-        return json.loads(value or "{}")
+        parsed = json.loads(value or "{}")
+        return parsed if isinstance(parsed, dict) else {}
     except (TypeError, ValueError):
         return {}

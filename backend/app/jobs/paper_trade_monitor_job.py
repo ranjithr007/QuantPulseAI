@@ -6,6 +6,7 @@ from app.database.sqlserver import SessionLocal
 from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
 from app.paper_trading.exit_lock import lock_open_trade
+from app.paper_trading.exit_evidence import observation_evidence, merge_observations
 from app.repositories.candle_repository import get_final_candles_after
 from app.repositories.candle_repository import get_latest_candle
 from app.repositories.paper_trade_repository import PaperTradeRepository
@@ -119,6 +120,9 @@ def run_paper_trade_monitor_job():
                         **evaluate_paper_trade_exit(trade, candle),
                         "monitor_timeframe": timeframe,
                     }
+                    merge_observations(trade, observation_evidence(trade, candle))
+                    if hasattr(db, "flush"):
+                        db.flush()
                     summary["candles_evaluated"] += 1
                     last_evaluated_at = _candle_checkpoint(candle)
                     last_decision = decision
@@ -324,6 +328,9 @@ def _run_strategy_shadow_monitor(db):
                         continue
                     summary["errors"].append(f"{trade.symbol}: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY")
                 decision = evaluate_paper_trade_exit(trade, candle)
+                merge_observations(trade, observation_evidence(trade, candle))
+                if hasattr(db, "flush"):
+                    db.flush()
                 last_checkpoint = _candle_checkpoint(candle)
                 action = decision["action"]
                 if action == "HOLD":
@@ -530,6 +537,7 @@ def _current_mark_candle(trade, *, collector=None, now=None):
         is_final=False,
         live_mark=True,
         mark_source=mark.get("source") or "CURRENT_MARK_PRICE",
+        source=mark.get("source") or "CURRENT_MARK_PRICE",
     )
 
 

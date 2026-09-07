@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Index, Integer, String, text
+from sqlalchemy import Column, DateTime, Float, Index, Integer, String, Text, text
 
 from app.database.sqlserver import Base
 
@@ -25,6 +25,9 @@ class StrategyShadowTrade(Base):
     entry_price = Column(Float, nullable=False)
     stop_loss = Column(Float, nullable=False)
     initial_stop_loss = Column(Float, nullable=False)
+    trailing_activation_r = Column(Float, nullable=True)
+    execution_evidence_json = Column(Text, nullable=True)
+    exit_evidence_json = Column(Text, nullable=True)
     target1 = Column(Float, nullable=False)
     target2 = Column(Float, nullable=False)
     position_size = Column(Float)

@@ -5,6 +5,7 @@ from app.jobs.paper_trade_execute_job import run_paper_trade_execute_job
 from app.jobs.paper_trade_monitor_job import run_paper_trade_monitor_job
 from app.jobs.risk_job import run_risk_job
 from app.jobs.watchlist_persist_job import run_watchlist_persist_job
+from app.jobs.deterministic_pipeline_job import _degraded, _execution_ready, _failed
 from app.repositories.pipeline_run_repository import PipelineRunRepository
 from app.utils.network_resilience import summarize_network_error
 
@@ -59,14 +60,26 @@ def run_pipeline_cycle_job():
                 except Exception as exc:
                     print(f"Pipeline job ledger unavailable for {name}: {summarize_network_error(exc)}")
             try:
+                if name == "paper_trade_execute" and not _execution_ready(results):
+                    results[name] = {"status": "BLOCKED", "reason": "REQUIRED_PIPELINE_STAGES_INCOMPLETE"}
+                    if job_record is not None:
+                        ledger.finish_job(
+                            ledger_db, job_record.id, status="BLOCKED",
+                            error_category="REQUIRED_STAGES_INCOMPLETE",
+                            output_generation_id=generation_id,
+                        )
+                    continue
                 results[name] = job()
+                failed = _failed(results[name])
+                degraded = not failed and _degraded(results[name])
                 if job_record is not None:
                     ledger.finish_job(
                         ledger_db,
                         job_record.id,
-                        status="COMPLETED",
+                        status="FAILED" if failed else "DEGRADED" if degraded else "COMPLETED",
                         rows_written=_rows_written(results[name]),
                         output_generation_id=generation_id,
+                        error_category="RETURNED_STAGE_FAILURE" if failed else None,
                     )
             except Exception as ex:
                 results[name] = {"status": "FAILED", "error": summarize_network_error(ex)}
@@ -106,7 +119,7 @@ def run_pipeline_cycle_job():
 def _rows_written(result):
     if not isinstance(result, dict):
         return 0
-    for key in ("rows_written", "saved", "inserted", "count"):
+    for key in ("rows_written", "saved_count", "persisted_count", "saved", "inserted", "count"):
         value = result.get(key)
         if isinstance(value, int):
             return value
@@ -114,9 +127,11 @@ def _rows_written(result):
 
 
 def _pipeline_cycle_status(results):
-    statuses = [str(item.get("status") or "").upper() for item in (results or {}).values()]
-    if not statuses or any(status == "FAILED" for status in statuses):
-        if all(status == "FAILED" for status in statuses if status):
+    stages = [item for name, item in (results or {}).items() if name != "ledger_recovery"]
+    if not stages or any(_failed(item) for item in stages):
+        if all(_failed(item) for item in stages):
             return "FAILED"
         return "PARTIAL"
+    if any(_degraded(item) for item in stages):
+        return "DEGRADED"
     return "COMPLETED"

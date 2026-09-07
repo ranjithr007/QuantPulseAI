@@ -81,7 +81,7 @@ def _candidate(definition, plan_id, *, symbol="BTCUSDT"):
         "strategy_version": definition["version"],
         "strategy_decision_snapshot_id": plan_id + 100,
     }
-    return {
+    candidate = {
         "symbol": symbol,
         "side": "LONG",
         "eligible": False,
@@ -105,6 +105,15 @@ def _candidate(definition, plan_id, *, symbol="BTCUSDT"):
         "market_context": {},
         "validation_contract_version": "shadow-test-v1",
     }
+    if definition["id"] == "MARKET_MOVE_ENTRY":
+        candidate["entry_quality"] = {
+            "profile": "MARKET_MOVE_RETEST_V1", "side": "LONG", "planned_entry": 100.0,
+            "atr": 1.0, "ema20": 99.8, "structure_level": 99.5,
+            "tested_rejection": True, "spot_cvd_percent": 2.0,
+            "effective_timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        plan["exit_policy"] = "PAPER_ATR_STRUCTURE_V1"
+    return candidate
 
 
 def test_every_strategy_opens_one_shadow_trade_while_official_lock_is_isolated():

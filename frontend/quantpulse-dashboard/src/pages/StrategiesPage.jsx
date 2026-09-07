@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import clsx from "clsx";
 import ExitPolicyEvidence from "../components/ExitPolicyEvidence";
+import TradeAuditDialog from "../components/TradeAuditDialog";
+import { preTargetLosingStops } from "../utils/tradeAudit";
 import {
   Activity,
   AlertTriangle,
@@ -243,7 +245,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
           <ValueCard label="Profit factor" value={performance.profit_factor == null ? "—" : number(performance.profit_factor, 2)} />
           <ValueCard label="Consolidated winner trades" value={officialPerformance.total_trades || 0} tone="cyan" />
           <ValueCard label="Target successes" value={`${performance.target_successes || 0} · ${formatPercent(performance.target_success_rate || 0, 1)}`} tone="emerald" />
-          <ValueCard label="Pre-T1 losing stops" value={`${performance.initial_stop_failures || 0} · ${formatPercent(performance.initial_stop_failure_rate || 0, 1)}`} tone="rose" />
+          <ValueCard label="Pre-T1 losing stops" value={preTargetLosingStops(performance) ?? "Not recorded"} tone="rose" />
           <ValueCard label="Protected stop exits" value={performance.protected_stop_exits || 0} tone="cyan" />
         </div>
 
@@ -254,7 +256,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
-          Promotion requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades, win rate ≥ {readiness.minimum_win_rate || 55}%, profit factor ≥ {number(readiness.minimum_profit_factor || 1.3, 2)}, positive cost-adjusted expectancy, target successes greater than initial stop failures, and drawdown ≤ {formatPercent(readiness.maximum_drawdown_percent || 10, 0)}. {readiness.remaining_trades || 0} trades remain for the sample gate. This never enables live orders automatically.
+          Promotion requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades in a verified policy cohort, win rate ≥ {readiness.minimum_win_rate || 55}%, profit factor ≥ {number(readiness.minimum_profit_factor || 1.3, 2)}, positive cost-adjusted expectancy, target successes greater than pre-T1 losing stops, and drawdown ≤ {formatPercent(readiness.maximum_drawdown_percent || 10, 0)}. {readiness.remaining_trades || 0} trades remain for the sample gate. This never enables live orders automatically.
         </div>
         <div className="mt-1 text-xs text-slate-500">
           Eligible scans are evaluations, not separate positions. Repeated unchanged signals reuse the matching open plan or position; only one official paper winner may be active per coin.
@@ -286,11 +288,22 @@ function StrategyLearningStatus({ learning }) {
         <StatusBadge label="LIVE DISABLED" tone="slate" />
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <ValueCard label="Targets / pre-T1 losing stops" value={`${metrics.target_successes || 0} / ${metrics.initial_stop_failures || 0}`} tone={(metrics.target_successes || 0) > (metrics.initial_stop_failures || 0) ? "emerald" : "rose"} />
+        <ValueCard label="Targets / pre-T1 losing stops" value={`${metrics.target_successes || 0} / ${preTargetLosingStops(metrics) ?? "Unknown"}`} tone={preTargetLosingStops(metrics) != null && (metrics.target_successes || 0) > preTargetLosingStops(metrics) ? "emerald" : "rose"} />
         <ValueCard label="Window win rate" value={formatPercent(metrics.win_rate || 0, 1)} />
         <ValueCard label="Window expectancy" value={`₹${number(metrics.expectancy_inr || 0, 2)}`} tone={(metrics.expectancy_inr || 0) > 0 ? "emerald" : "rose"} />
         <ValueCard label="Candidate version" value={learning.candidate_version || "No new candidate version"} tone="cyan" />
       </div>
+      {metrics.metric_version === "STOP_CAUSE_COHORT_V3" ? <div className="mt-3 rounded-lg border border-white/10 p-3">
+        <div className="break-words text-xs text-slate-400">{metrics.cohort_verified ? `Verified policy cohort: ${metrics.cohort_key}` : "Legacy diagnostic only: policy cohort is not verified; cannot qualify a new exit policy."}</div>
+        <div className="mt-1 text-xs text-slate-500">{metrics.cohort_closed_trades ?? 0} cohort closes · {metrics.unknown_cohort_trades ?? 0} unknown-policy closes excluded from verified cohort. Thirty closes are an initial checkpoint, not proof of a durable edge.</div>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <ValueCard label="Verified initial-stop losses" value={metrics.initial_stop_failures ?? "Not recorded"} tone="rose" />
+          <ValueCard label="Trailed exits before T1" value={metrics.trailed_stop_pre_t1_exits ?? "Not recorded"} />
+          <ValueCard label="Protected exits after T1" value={metrics.protected_stop_after_t1_exits ?? "Not recorded"} tone="cyan" />
+          <ValueCard label="Unclassified stop exits" value={metrics.unknown_stop_exits ?? "Not recorded"} tone="amber" />
+        </div>
+        {Object.keys(learning.diagnostics?.by_side || {}).length ? <div className="mt-2 overflow-x-auto"><table className="w-full text-left text-xs"><caption className="mb-1 text-left text-slate-500">Same policy cohort · direction breakdown</caption><thead><tr>{["Side", "Closed", "Win rate", "Net P&L", "Targets / pre-T1 losses"].map((label) => <th key={label} className="px-2 py-1 text-slate-500">{label}</th>)}</tr></thead><tbody>{Object.entries(learning.diagnostics.by_side).map(([side, values]) => <tr key={side}><td className="px-2 py-1">{side}</td><td className="px-2 py-1">{values.closed_trades ?? "Unknown"}</td><td className="px-2 py-1">{formatPercent(values.win_rate, 1)}</td><td className="px-2 py-1">₹{number(values.net_pnl_inr, 2)}</td><td className="px-2 py-1">{values.target_successes ?? "Unknown"} / {preTargetLosingStops(values) ?? "Unknown"}</td></tr>)}</tbody></table></div> : null}
+      </div> : null}
       {gateEntries.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {gateEntries.map(([name, passed]) => (
@@ -312,6 +325,7 @@ function StrategyLearningStatus({ learning }) {
 
 function StrategyPaperHistory({ trades, loading = false }) {
   const pagination = usePaginatedRows(trades);
+  const [auditTrade, setAuditTrade] = useState(null);
   return (
     <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
       <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/60 px-4 py-3">
@@ -321,7 +335,7 @@ function StrategyPaperHistory({ trades, loading = false }) {
       <div className="overflow-x-auto">
         <table className="min-w-[1040px] w-full text-left text-xs">
           <thead className="bg-slate-950/40 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            <tr><th className="px-4 py-2.5">Coin</th><th>Side / TF</th><th>Entry</th><th>Stop</th><th>Target 1</th><th>Target 2</th><th>Status</th><th>Exit</th><th>Net P&amp;L</th><th>Opened IST</th></tr>
+            <tr><th className="px-4 py-2.5">Coin</th><th>Side / TF</th><th>Entry</th><th>Stop</th><th>Target 1</th><th>Target 2</th><th>Status</th><th>Exit</th><th>Net P&amp;L</th><th>Opened IST</th><th>Evidence</th></tr>
           </thead>
           <tbody className="divide-y divide-white/5">
             {pagination.visibleRows.map((trade) => (
@@ -336,10 +350,11 @@ function StrategyPaperHistory({ trades, loading = false }) {
                 <td>{price(trade.exit_price)}</td>
                 <td className={numberTone(trade.realized_pnl_inr)}>{trade.status === "OPEN" ? "Open" : `₹${number(trade.realized_pnl_inr, 2)} · ${formatSigned(trade.pnl_percent || 0, 2)}%`}</td>
                 <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(trade.opened_at)}</span></td>
+                <td className="pr-3"><button type="button" className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs" aria-label={`View strategy audit ${trade.symbol} trade ${trade.id}`} onClick={() => setAuditTrade(trade)}>View audit</button></td>
               </tr>
             ))}
-            {loading ? <tr><td colSpan="10" className="px-4 py-8 text-center text-slate-500">Loading recent Strategy Paper trades…</td></tr> : null}
-            {!loading && !trades.length ? <tr><td colSpan="10" className="px-4 py-8 text-center text-slate-500">No Strategy Paper trades recorded yet.</td></tr> : null}
+            {loading ? <tr><td colSpan="11" className="px-4 py-8 text-center text-slate-500">Loading recent Strategy Paper trades…</td></tr> : null}
+            {!loading && !trades.length ? <tr><td colSpan="11" className="px-4 py-8 text-center text-slate-500">No Strategy Paper trades recorded yet.</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -348,6 +363,7 @@ function StrategyPaperHistory({ trades, loading = false }) {
         itemLabel="paper trades"
         ariaLabel="Strategy Paper trade history pagination"
       />
+      {auditTrade ? <TradeAuditDialog trade={auditTrade} ledgerLabel="Isolated Strategy Paper ledger" onClose={() => setAuditTrade(null)} /> : null}
     </div>
   );
 }

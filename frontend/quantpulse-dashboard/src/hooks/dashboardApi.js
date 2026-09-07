@@ -346,7 +346,10 @@ export async function loadPaperTrades({
     signal,
     20000
   );
-  return response || { records: [], total_count: 0, page, page_size: limit, total_pages: 1 };
+  if (!response || response.status === "UNAVAILABLE" || !Array.isArray(response.records)) {
+    throw new Error(response?.detail || "Trade history is unavailable; no page was loaded.");
+  }
+  return response;
 }
 
 export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", validation, signal }) {
@@ -590,17 +593,17 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
     controller.abort();
   }, timeoutMs);
 
+  const abortRequest = () => controller.abort();
   if (signal) {
     if (signal.aborted) {
       controller.abort();
     } else {
-      signal.addEventListener("abort", () => controller.abort(), { once: true });
+      signal.addEventListener("abort", abortRequest, { once: true });
     }
   }
 
-  let response;
   try {
-    response = await fetch(url, {
+    const response = await fetch(url, {
       method,
       credentials: "include",
       headers: {
@@ -610,6 +613,18 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
+
+    if (!response.ok) {
+      const text = await response.text();
+      if (response.status === 401) {
+        window.dispatchEvent(new Event("quantpulse:unauthorized"));
+      }
+      throw new Error(`${url.pathname} returned ${response.status}${text ? ` - ${text.slice(0, 500)}` : ""}`);
+    }
+
+    // Keep timeout/cancellation active until the body is fully read, not merely
+    // until headers arrive. A stalled JSON response must not hang the UI.
+    return await response.json();
   } catch (requestError) {
     if (requestTimedOut && requestError?.name === "AbortError") {
       throw new Error(`${url.pathname} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
@@ -617,17 +632,8 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
     throw requestError;
   } finally {
     window.clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abortRequest);
   }
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    if (response.status === 401) {
-      window.dispatchEvent(new Event("quantpulse:unauthorized"));
-    }
-    throw new Error(`${url.pathname} returned ${response.status}${text ? ` - ${text}` : ""}`);
-  }
-
-  return response.json();
 }
 
 async function pollWalkForwardJob(jobId, signal) {

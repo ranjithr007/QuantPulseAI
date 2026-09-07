@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import ExitPolicyEvidence from "./ExitPolicyEvidence";
-import { useEffect, useState } from "react";
+import PaperTradeHistory from "./PaperTradeHistory";
 import {
   Activity,
   BarChart3,
@@ -28,7 +28,6 @@ import {
 import MetricCard from "./ui/MetricCard";
 import Pill from "./ui/Pill";
 import Phase2ValidationBadge from "./Phase2ValidationBadge";
-import { loadPaperTrades } from "../hooks/dashboardApi";
 import { deriveSelectedEligibilityState } from "../utils/eligibility";
 import {
   candidateExecutorBlockers,
@@ -39,7 +38,6 @@ import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNu
 
 const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
 const STAGED_EXIT_POLICIES = new Set(["PAPER_ATR_STRUCTURE_V1", "PAPER_STAGED_EXIT_V2", "PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
-const TRADE_HISTORY_PAGE_SIZE = 10;
 
 export default function PnLSection({
   realizedPnl,
@@ -198,11 +196,11 @@ export default function PnLSection({
         </div>
 
         <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
-          <MetricCard label="Total unrealized PnL" value={formatSigned(unrealizedPnl)} note="Open PnL" icon={TrendingUp} accent="emerald" />
-          <MetricCard label="Total realized PnL" value={formatSigned(realizedPnl)} note="Closed PnL" icon={TrendingDown} accent="rose" />
-          <MetricCard label="Daily PnL" value={formatSigned(dailyPnl)} note="Closed trades" icon={Activity} accent="cyan" />
-          <MetricCard label="Weekly PnL" value={formatSigned(weeklyPnl)} note="Closed trades" icon={LineChartIcon} accent="amber" />
-          <MetricCard label="Monthly PnL" value={formatSigned(monthlyPnl)} note="Closed trades" icon={BarChart3} accent="violet" />
+          <MetricCard label="Open trade return sum" value={`${formatSigned(unrealizedPnl)}%`} note="Sum of trade returns, not account return" icon={TrendingUp} accent="emerald" />
+          <MetricCard label="Closed trade return sum" value={`${formatSigned(realizedPnl)}%`} note="Sum of trade returns, not account return" icon={TrendingDown} accent="rose" />
+          <MetricCard label="24h trade return sum" value={`${formatSigned(dailyPnl)}%`} note="Rolling 24 hours, not the IST calendar day" icon={Activity} accent="cyan" />
+          <MetricCard label="7d trade return sum" value={`${formatSigned(weeklyPnl)}%`} note="Rolling 7 days, not account return" icon={LineChartIcon} accent="amber" />
+          <MetricCard label="30d trade return sum" value={`${formatSigned(monthlyPnl)}%`} note="Rolling 30 days, not account return" icon={BarChart3} accent="violet" />
           <MetricCard label="Win rate" value={formatPercent(winRate)} note={`${winningTrades} wins / ${losingTrades} losses`} icon={ShieldCheck} accent="emerald" />
         </div>
 
@@ -345,7 +343,7 @@ export default function PnLSection({
           <OpenPositionsTable openPositions={openPositions} />
         </div>
 
-        <TradeHistoryTable tradeHistory={tradeHistory} totalCount={closedTradeCount} />
+        <PaperTradeHistory tradeHistory={tradeHistory} totalCount={closedTradeCount} />
       </div>
     </section>
   );
@@ -550,7 +548,7 @@ function PaperWalletStrip({ wallet, openPositions }) {
       <WalletDatum label="Account equity" value={formatInr(equity)} note={`Includes open PnL ${formatInr(unrealizedPnl)}`} />
       <WalletDatum label="Committed margin" value={formatInr(committed)} note={`${formatPercent(utilization, 1)} utilised`} />
       <WalletDatum label="Available margin" value={formatInr(available)} note="Equity minus committed margin" />
-      <WalletDatum label="Position sizing" value="75% / 85%" note={`${formatInr(150000)} minimum / ${formatInr(170000)} maximum notional`} />
+      <WalletDatum label="New-entry risk budget" value="0.25% / 0.5% equity" note="Confidence 40–59 / 60+; wider stops reduce notional; capital and available-margin caps still apply" />
     </div>
   );
 }
@@ -743,145 +741,6 @@ function exitTimeRemainingLabel(trade) {
   return `${hours}h remaining`;
 }
 
-function TradeHistoryTable({ tradeHistory, totalCount }) {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageRecords, setPageRecords] = useState(() => tradeHistory.slice(0, TRADE_HISTORY_PAGE_SIZE));
-  const [remoteTotal, setRemoteTotal] = useState(totalCount ?? tradeHistory.length);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const latestTradeId = tradeHistory[0]?.id ?? null;
-  const totalItems = remoteTotal ?? totalCount ?? tradeHistory.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / TRADE_HISTORY_PAGE_SIZE));
-  const pageStart = (currentPage - 1) * TRADE_HISTORY_PAGE_SIZE;
-  const visibleTrades = pageRecords;
-  const firstVisibleTrade = totalItems ? pageStart + 1 : 0;
-  const lastVisibleTrade = Math.min(pageStart + visibleTrades.length, totalItems);
-  const visiblePageNumbers = paginationPageNumbers(currentPage, totalPages);
-
-  useEffect(() => {
-    setCurrentPage((page) => Math.min(page, totalPages));
-  }, [totalPages]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    setLoading(true);
-    setError("");
-    loadPaperTrades({
-      status: "CLOSED",
-      page: currentPage,
-      limit: TRADE_HISTORY_PAGE_SIZE,
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (!active) return;
-        setPageRecords(response?.records || []);
-        setRemoteTotal(response?.total_count ?? 0);
-      })
-      .catch((requestError) => {
-        if (active && requestError?.name !== "AbortError") {
-          setError(requestError?.message || "Trade history is temporarily unavailable");
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [currentPage, latestTradeId]);
-
-  return (
-    <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-slate-900/70 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium text-white">Trade history</div>
-          <div className="text-xs text-slate-500">All closed futures paper trades across the account</div>
-        </div>
-        <Pill tone="slate">{totalItems} closed</Pill>
-      </div>
-      {error ? <div role="alert" className="mt-2 rounded-md border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{error}</div> : null}
-      <div className="mt-2.5 overflow-x-auto">
-        <table className="min-w-full divide-y divide-white/5 text-sm">
-          <thead className="bg-slate-950/60 text-[11px] uppercase tracking-[0.16em] text-slate-500">
-            <tr>
-              <th className="px-3 py-2.5 text-left">Symbol</th>
-              <th className="px-3 py-2.5 text-left">Side</th>
-              <th className="px-3 py-2.5 text-left">Entry</th>
-              <th className="px-3 py-2.5 text-left">Exit</th>
-              <th className="px-3 py-2.5 text-left">PnL</th>
-              <th className="px-3 py-2.5 text-left">Result</th>
-              <th className="px-3 py-2.5 text-left">Closed (IST)</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            {visibleTrades.map((trade) => (
-              <tr key={trade.id} className="bg-slate-950/35">
-                <td className="px-3 py-2.5 text-white">{trade.symbol}</td>
-                <td className="px-3 py-2.5">
-                  <Pill tone={trade.side === "LONG" ? "emerald" : "rose"}>{trade.side}</Pill>
-                </td>
-                <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.entry_price)}</td>
-                <td className="px-3 py-2.5 text-slate-300">{formatPrice(trade.exit_price)}</td>
-                <td className={clsx("px-3 py-2.5 font-medium", safeNumber(trade.pnl_percent, 0) >= 0 ? "text-emerald-300" : "text-rose-300")}>
-                  {formatSigned(trade.pnl_percent)}
-                </td>
-                <td className="px-3 py-2.5 text-slate-300">{trade.result || "N/A"}</td>
-                <td className="px-3 py-2.5 text-slate-400">{formatDate(trade.closed_at || trade.created_at)}</td>
-              </tr>
-            ))}
-            {!visibleTrades.length && !loading ? (
-              <tr><td className="px-3 py-3.5 text-slate-400" colSpan={7}>No closed trades available.</td></tr>
-            ) : null}
-            {loading && !visibleTrades.length ? (
-              <tr><td className="px-3 py-3.5 text-slate-400" colSpan={7}>Loading trade history…</td></tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-      {totalItems ? (
-        <div className="mt-3 flex flex-col gap-2 border-t border-white/5 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-slate-500">Showing {firstVisibleTrade}–{lastVisibleTrade} of {totalItems} closed trades</div>
-          <nav className="flex flex-wrap items-center gap-1" aria-label="Trade history pagination">
-            <PaginationButton disabled={currentPage === 1 || loading} label="Previous" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} />
-            {visiblePageNumbers.map((page) => (
-              <PaginationButton key={page} active={page === currentPage} disabled={loading} label={String(page)} onClick={() => setCurrentPage(page)} />
-            ))}
-            <PaginationButton disabled={currentPage === totalPages || loading} label="Next" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} />
-          </nav>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PaginationButton({ active = false, disabled = false, label, onClick }) {
-  return (
-    <button
-      type="button"
-      className={clsx(
-        "min-w-8 rounded-md border px-2.5 py-1.5 text-xs font-medium transition",
-        active
-          ? "border-cyan-400/40 bg-cyan-500/15 text-cyan-200"
-          : "border-white/10 bg-slate-950/40 text-slate-300 hover:border-cyan-400/30 hover:text-white",
-        disabled && "cursor-not-allowed opacity-40 hover:border-white/10 hover:text-slate-300"
-      )}
-      disabled={disabled}
-      aria-current={active ? "page" : undefined}
-      onClick={onClick}
-    >
-      {label}
-    </button>
-  );
-}
-
-function paginationPageNumbers(currentPage, totalPages) {
-  const maximumVisiblePages = 5;
-  const firstPage = Math.max(1, Math.min(currentPage - 2, totalPages - maximumVisiblePages + 1));
-  const lastPage = Math.min(totalPages, firstPage + maximumVisiblePages - 1);
-  return Array.from({ length: lastPage - firstPage + 1 }, (_, index) => firstPage + index);
-}
 
 function averagePnl(trades, positive) {
   const items = trades.filter((trade) => (safeNumber(trade.pnl_percent, 0) > 0) === positive);

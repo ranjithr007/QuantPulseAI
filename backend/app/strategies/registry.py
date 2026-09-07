@@ -14,6 +14,8 @@ CORE_SIGNAL_DECISION_VERSION = "core_signal_strategy_v1"
 MARKET_MOVE_STRATEGY_ID = "MARKET_MOVE"
 MARKET_MOVE_STRATEGY_VERSION = "market_move_v1"
 MARKET_MOVE_DECISION_VERSION = "market_move_strategy_v1"
+MARKET_MOVE_ENTRY_STRATEGY_ID = "MARKET_MOVE_ENTRY"
+MARKET_MOVE_EXIT_STRATEGY_ID = "MARKET_MOVE_EXIT"
 REGIME_TREND_STRATEGY_ID = "REGIME_TREND"
 REGIME_TREND_STRATEGY_VERSION = "regime_trend_v1"
 REGIME_TREND_DECISION_VERSION = "regime_trend_strategy_v1"
@@ -75,6 +77,30 @@ MARKET_MOVE_STRATEGY = {
     "one_active_trade_per_symbol": True,
     "execution_priority": 20,
     "official_execution_enabled": True,
+}
+
+MARKET_MOVE_ENTRY_STRATEGY = {
+    **MARKET_MOVE_STRATEGY,
+    "id": MARKET_MOVE_ENTRY_STRATEGY_ID,
+    "version": "market_move_entry_v1",
+    "decision_version": "market_move_entry_strategy_v1",
+    "name": "Market Move Entry Candidate",
+    "description": "Entry-only paper experiment: tested boundary rejection, directional spot flow and EMA proximity, revalidated at execution. Baseline adaptive exits retained.",
+    "strategy_type": "ENTRY_CANDIDATE",
+    "official_execution_enabled": False,
+    "immutable_experiment": True,
+}
+
+MARKET_MOVE_EXIT_STRATEGY = {
+    **MARKET_MOVE_STRATEGY,
+    "id": MARKET_MOVE_EXIT_STRATEGY_ID,
+    "version": "market_move_exit_v1",
+    "decision_version": "market_move_exit_strategy_v1",
+    "name": "Market Move Exit Candidate",
+    "description": "Exit-only paper experiment: unchanged Market Move entries and initial adaptive exits; continuous trailing starts only after a favorable one-risk-unit move.",
+    "strategy_type": "EXIT_CANDIDATE",
+    "official_execution_enabled": False,
+    "immutable_experiment": True,
 }
 
 REGIME_TREND_STRATEGY = {
@@ -228,6 +254,8 @@ RANGE_REVERSION_STRATEGY = {
 STRATEGY_REGISTRY = {
     CORE_SIGNAL_STRATEGY_ID: CORE_SIGNAL_STRATEGY,
     MARKET_MOVE_STRATEGY_ID: MARKET_MOVE_STRATEGY,
+    MARKET_MOVE_ENTRY_STRATEGY_ID: MARKET_MOVE_ENTRY_STRATEGY,
+    MARKET_MOVE_EXIT_STRATEGY_ID: MARKET_MOVE_EXIT_STRATEGY,
     REGIME_TREND_STRATEGY_ID: REGIME_TREND_STRATEGY,
     REGIME_TREND_ENTRY_STRATEGY_ID: REGIME_TREND_ENTRY_STRATEGY,
     ORDERFLOW_SMC_STRATEGY_ID: ORDERFLOW_SMC_STRATEGY,

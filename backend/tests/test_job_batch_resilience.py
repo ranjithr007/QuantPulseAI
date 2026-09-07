@@ -120,7 +120,7 @@ def test_run_smc_job_continues_after_timeframe_error():
     assert fake_db.close.called
 
 
-def test_pipeline_cycle_job_reports_failed_stage_and_continues():
+def test_pipeline_cycle_job_reports_failed_stage_and_blocks_entry_executor():
     with patch(
         "app.jobs.pipeline_cycle_job.run_watchlist_persist_job",
         return_value={"status": "OK"},
@@ -138,7 +138,7 @@ def test_pipeline_cycle_job_reports_failed_stage_and_continues():
 
     assert result["status"] == "PARTIAL"
     assert result["results"]["risk"]["status"] == "FAILED"
-    assert result["results"]["paper_trade_execute"]["status"] == "OK"
+    assert result["results"]["paper_trade_execute"]["status"] == "BLOCKED"
 
 
 def test_pipeline_cycle_closes_ledger_session_when_finalization_fails():

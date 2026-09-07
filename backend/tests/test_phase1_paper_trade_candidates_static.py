@@ -123,9 +123,10 @@ class Phase1PaperTradeCandidatesStaticTests(unittest.TestCase):
         self.assertIn("def list_trades", source)
         self.assertIn("def all_trades", source)
         self.assertIn(
-            "query.order_by(PaperTrade.created_at.desc(), PaperTrade.id.desc())",
+            'order_time = PaperTrade.closed_at if str(status or "").upper() == "CLOSED" else PaperTrade.created_at',
             source,
         )
+        self.assertIn("query.order_by(order_time.desc(), PaperTrade.id.desc())", source)
 
     def test_paper_trade_has_an_alembic_migration(self):
         migration = (

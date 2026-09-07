@@ -94,10 +94,10 @@ export default function RiskControlsPage({
 
             <div className="mt-3 grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
               <RiskField label="Minimum confidence" value={`${auto.minConfidence}%`}>
-                <div className="text-xs text-slate-500">Governed execution boundary (full size at 60%)</div>
+                <div className="text-xs text-slate-500">Governed execution boundary; higher risk-budget tier from 60%, not guaranteed full notional.</div>
               </RiskField>
-              <RiskField label="Per-trade risk cap" value="Not applied">
-                <div className="text-xs text-slate-500">Paper sizing uses the 75% / 85% capital tiers and governed exits.</div>
+              <RiskField label="New-entry risk budget" value="0.25% / 0.5% equity">
+                <div className="text-xs text-slate-500">Confidence 40–59: 0.25%; 60+: 0.5% of current equity. Stop distance and modeled costs reduce notional. Gaps or extra costs can exceed intended risk.</div>
               </RiskField>
               <RiskField label="Daily loss limit" value="Monitor only">
                 <div className="text-xs text-slate-500">Account P&amp;L is reported but does not block paper entries.</div>
@@ -109,7 +109,7 @@ export default function RiskControlsPage({
                 <NumberInput value={auto.maxLeverage} min={1} max={25} step={1} onChange={(maxLeverage) => setAuto((current) => ({ ...current, maxLeverage }))} />
               </RiskField>
               <RiskField label="INR-M paper capital" value={formatInr(auto.paperCapitalInr || 200000)}>
-                <div className="text-xs text-slate-500">75% minimum tier / 85% maximum tier; {formatInr(auto.maxPositionSize || 170000)} maximum notional</div>
+                <div className="text-xs text-slate-500">75% / 85% capital tiers are upper notional caps, not required size. Risk budget and available margin may reduce the position below {formatInr(auto.maxPositionSize || 170000)}.</div>
               </RiskField>
             </div>
           </div>

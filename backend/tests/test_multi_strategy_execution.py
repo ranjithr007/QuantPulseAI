@@ -32,12 +32,14 @@ def _session():
     return sessionmaker(bind=engine)()
 
 
-def test_every_registered_strategy_competes_for_official_paper_execution():
+def test_registered_strategies_keep_research_experiments_isolated():
     assert STRATEGY_REGISTRY
     assert all(
         definition["status"] == "ACTIVE"
         and definition["execution_scope"] == "PAPER_ONLY"
-        and definition["official_execution_enabled"] is (definition["id"] != "REGIME_TREND_ENTRY")
+        and definition["official_execution_enabled"] is (definition["id"] not in {
+            "REGIME_TREND_ENTRY", "MARKET_MOVE_ENTRY", "MARKET_MOVE_EXIT",
+        })
         and definition["one_active_trade_per_symbol"] is True
         for definition in STRATEGY_REGISTRY.values()
     )
@@ -176,9 +178,9 @@ def _market_move(now, *, carry_ready=False):
                     "ema20": 700.0,
                     "spot_cvd_percent": 2.0,
                     "support": {
-                        "lower": 694.0,
+                        "lower": 698.0,
                         "upper": 700.0,
-                        "center": 697.0,
+                        "center": 699.0,
                         "tests": 3,
                         "distance_percent": -0.71,
                         "latest_rejected": True,
@@ -389,7 +391,9 @@ def test_market_move_can_produce_a_plan_when_core_signal_is_wait():
         assert by_strategy[CORE_SIGNAL_STRATEGY_ID]["action"] == "skipped_not_ready"
         assert by_strategy[CORE_FUSION_STRATEGY_ID]["action"] == "skipped_not_ready"
         assert by_strategy[MARKET_MOVE_STRATEGY_ID]["action"] == "saved"
-        plan = db.query(TradePlan).filter(TradePlan.status == "OPEN").one()
+        plan = db.query(TradePlan).filter(
+            TradePlan.status == "OPEN", TradePlan.strategy_id == MARKET_MOVE_STRATEGY_ID,
+        ).one()
         assert plan.strategy_id == MARKET_MOVE_STRATEGY_ID
         assert plan.side == "LONG"
         assert plan.entry_price == 702.0

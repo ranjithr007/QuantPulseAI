@@ -290,7 +290,9 @@ def _risk_decision_select_columns(db):
 
 def _table_column_names(db, table_name):
     try:
-        inspector = inspect(db.get_bind())
+        # Reuse the transaction's connection: an engine-bound inspector needs
+        # another pool slot while this session may already hold the last one.
+        inspector = inspect(db.connection())
         return [column["name"] for column in inspector.get_columns(table_name)]
     except Exception:
         return [column.name for column in RiskDecision.__table__.columns]

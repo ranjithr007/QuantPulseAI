@@ -5,6 +5,7 @@ from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
 from app.paper_trading.exit_policy import is_staged_exit_policy
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.exit_policy import target2_trail_trigger
+from app.paper_trading.exit_evidence import exit_context
 
 
 def evaluate_paper_trade_exit(trade, candle):
@@ -61,10 +62,7 @@ def _evaluate_staged_exit(trade, candle, high, low):
     target1_complete = getattr(trade, "target1_hit_at", None) is not None
     target_price = trade.target2 if target1_complete else trade.target1
 
-    if getattr(candle, "force_time_exit", False) and _maximum_hold_reached(
-        trade,
-        candle,
-    ):
+    if _maximum_hold_reached(trade, candle):
         return _time_exit_decision(trade, candle)
 
     if trade.side == "LONG":
@@ -219,6 +217,12 @@ def _favorable_price_trailing_stop(trade, candle):
     entry = float(trade.entry_price)
     close = float(close_price)
     initial = float(initial_stop)
+    activation_r = float(getattr(trade, "trailing_activation_r", None) or 0)
+    favorable = close - entry if str(trade.side).upper() == "LONG" else entry - close
+    # Only newly recorded challengers opt in. NULL legacy rows retain immediate
+    # one-for-one trailing; the hard stop/T1 protection remain active throughout.
+    if activation_r > 0 and favorable < abs(entry - initial) * activation_r:
+        return None
     precision = _price_precision(entry)
     if str(trade.side).upper() == "LONG":
         favorable_move = max(0.0, close - entry)
@@ -273,6 +277,7 @@ def _time_exit_decision(trade, candle):
 def _exit_decision(trade, candle, result, exit_price, fill_profile=None):
     fill_profile = dict(fill_profile or {})
     fill_profile["exit_evidence_at"] = getattr(candle, "close_time", None) or candle.candle_time
+    fill_profile["exit_evidence"] = exit_context(trade, candle, fill_profile.get("trigger_type", "UNKNOWN"))
     return {
         "paper_trade_id": trade.id,
         "symbol": trade.symbol,
