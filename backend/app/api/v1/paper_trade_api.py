@@ -1283,6 +1283,7 @@ def _rebase_paper_trade_candidate(candidate, live_mark):
         **candidate,
         "fill_profile": fill_profile,
         "execution_risk": execution_risk,
+        "execution_exit_levels": execution_levels,
         "paper_sizing": paper_sizing,
     }, None
 

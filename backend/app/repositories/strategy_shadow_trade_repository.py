@@ -8,6 +8,7 @@ from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
 from app.paper_trading.exit_policy import build_policy_trade_levels
+from app.paper_trading.exit_policy import approved_adaptive_entry_levels
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.repositories._db_utils import commit_or_rollback, flush_or_rollback
@@ -145,7 +146,7 @@ class StrategyShadowTradeRepository:
         fill = candidate.get("fill_profile") or {}
         entry = float(fill.get("entry_fill_price") or plan["entry_price"])
         fee_bps = float(fill.get("fee_bps") or 7.5)
-        levels = build_policy_trade_levels(
+        levels = approved_adaptive_entry_levels(candidate, entry) or build_policy_trade_levels(
             candidate["side"],
             entry,
             symbol=candidate["symbol"],

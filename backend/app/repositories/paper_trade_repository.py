@@ -10,6 +10,7 @@ from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
 from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
 from app.paper_trading.exit_policy import build_policy_trade_levels
+from app.paper_trading.exit_policy import approved_adaptive_entry_levels, PAPER_ADAPTIVE_EXIT_POLICY
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.paper_trading.evidence_scope import QA_PAPER_SYMBOL_PREFIX
@@ -119,6 +120,8 @@ class PaperTradeRepository:
 
     def ensure_staged_exit_policy(self, db, trade):
         """Apply the official staged policy to an existing open paper trade."""
+        if getattr(trade, "exit_policy", None) == PAPER_ADAPTIVE_EXIT_POLICY:
+            return False
         levels = build_policy_trade_levels(
             trade.side,
             trade.entry_price,
@@ -409,7 +412,7 @@ class PaperTradeRepository:
         fill_profile = candidate.get("fill_profile") or {}
         market_context = candidate.get("market_context") or {}
         entry_price = fill_profile.get("entry_fill_price", trade_plan["entry_price"])
-        policy_levels = build_policy_trade_levels(
+        policy_levels = approved_adaptive_entry_levels(candidate, entry_price) or build_policy_trade_levels(
             candidate["side"],
             entry_price,
             symbol=candidate["symbol"],

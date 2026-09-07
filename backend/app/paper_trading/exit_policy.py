@@ -1,3 +1,5 @@
+import math
+
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 from app.trading.futures_cost_model import target_for_net_risk_reward
 from app.trading.futures_cost_model import trade_cost_profile
@@ -179,6 +181,33 @@ def approval_target_for_policy(exit_policy, target1, target2):
     if is_staged_exit_policy(exit_policy) and target2 is not None:
         return target2
     return target1
+
+
+def approved_adaptive_entry_levels(candidate, entry):
+    """Preserve exact repriced, risk-approved exits at the ledger boundary."""
+    plan = candidate.get("trade_plan") or {}
+    if plan.get("exit_policy") != PAPER_ADAPTIVE_EXIT_POLICY:
+        return None
+    levels = candidate.get("execution_exit_levels") or {}
+    risk = candidate.get("execution_risk") or {}
+    if levels.get("name") != PAPER_ADAPTIVE_EXIT_POLICY or risk.get("decision") != "APPROVE":
+        raise ValueError("Adaptive paper entry requires approved execution exit levels")
+    try:
+        prices = [float(value) for value in (entry, levels["stop_loss"], levels["target1"], levels["target2"])]
+        if not all(math.isfinite(value) and value > 0 for value in prices):
+            raise ValueError("Invalid adaptive prices")
+        entry, stop, t1, t2 = prices
+        side = candidate.get("side")
+        if not ((side == "LONG" and stop < entry < t1 < t2) or (side == "SHORT" and stop > entry > t1 > t2)):
+            raise ValueError("Invalid adaptive direction")
+        for key, value in (("entry_price", entry), ("stop_loss", stop), ("target1", t1), ("target2", t2)):
+            if not math.isclose(float(risk[key]), value, rel_tol=1e-8, abs_tol=1e-10):
+                raise ValueError("Adaptive execution levels do not match approved risk")
+        if not 0 < float(levels["target1_fraction"]) < 1 or not 0 < float(levels["max_hold_hours"]) <= 48:
+            raise ValueError("Invalid adaptive exit timing or fraction")
+    except (KeyError, TypeError, OverflowError) as error:
+        raise ValueError("Incomplete adaptive execution evidence") from error
+    return dict(levels)
 
 
 def is_staged_exit_policy(exit_policy):
