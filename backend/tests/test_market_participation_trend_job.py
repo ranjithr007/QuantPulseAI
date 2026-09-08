@@ -7,11 +7,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database.models.liquidation_heatmaps import LiquidationHeatmap
 from app.database.models.liquidations import Liquidation
+from app.database.models.point_in_time_snapshots import DecisionSnapshot
+from app.database.models.spot_market_candles import SpotMarketCandle
 from app.engines.liquidation_heatmap_engine import LiquidationHeatmapEngine
 from app.jobs.market_participation_trend_job import _derivative_context
 from app.jobs.market_participation_trend_job import _liquidation_context
 from app.jobs.market_participation_trend_job import run_market_participation_trend_job
 from app.repositories.heatmap_repository import HeatmapRepository
+from app.repositories.market_participation_repository import MarketParticipationRepository
 
 
 def _bullish_bars(timeframe):
@@ -109,6 +112,85 @@ def test_worker_calculates_and_persists_separate_trend_for_each_active_symbol():
         "advisory_only": True,
     }
     db.close.assert_called_once_with()
+
+
+def test_recollection_records_fresh_observation_without_retimestamping_closed_candles():
+    engine = create_engine("sqlite:///:memory:")
+    SpotMarketCandle.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine)
+    source_close = datetime(2026, 8, 15, 16, 0)
+    first_collection = source_close.replace(tzinfo=timezone.utc) + timedelta(minutes=2)
+    second_collection = first_collection + timedelta(minutes=5)
+    collector = Mock()
+
+    def final_candles(symbol, timeframe, limit):
+        period = timedelta(hours={"1h": 1, "2h": 2, "4h": 4, "1d": 24}[timeframe])
+        rows = _bullish_bars(timeframe)
+        for index, row in enumerate(rows):
+            row.update(symbol=symbol, open_time=source_close - period * (len(rows) - index),
+                       close_time=source_close - period * (len(rows) - index - 1))
+        return rows
+
+    collector.get_klines.side_effect = final_candles
+    symbol_repository = Mock()
+    symbol_repository.get_active_symbols.return_value = [SimpleNamespace(symbol="BTCUSDT")]
+    fred_collector = Mock()
+    fred_collector.collect.return_value = {"status": "UNAVAILABLE"}
+    derivative_context = Mock(return_value={})
+    liquidation_context = Mock(return_value={})
+    collection_times = iter([first_collection, second_collection])
+
+    def after_collection(zone):
+        # The observation clock is sampled only after all external collection
+        # and the per-symbol derivative/liquidation context have completed.
+        assert zone is timezone.utc
+        assert collector.get_klines.call_count == 8 * derivative_context.call_count
+        assert liquidation_context.call_count == derivative_context.call_count
+        assert fred_collector.collect.call_count == derivative_context.call_count
+        return next(collection_times)
+
+    try:
+        with patch("app.jobs.market_participation_trend_job.SessionLocal", session_factory), patch(
+            "app.jobs.market_participation_trend_job.SpotMarketCollector", return_value=collector,
+        ), patch(
+            "app.jobs.market_participation_trend_job.SymbolRepository", return_value=symbol_repository,
+        ), patch(
+            "app.jobs.market_participation_trend_job.FredMacroCollector", return_value=fred_collector,
+        ), patch(
+            "app.jobs.market_participation_trend_job._derivative_context", derivative_context,
+        ), patch(
+            "app.jobs.market_participation_trend_job._liquidation_context", liquidation_context,
+        ), patch("app.jobs.market_participation_trend_job.datetime") as observation_clock:
+            observation_clock.now.side_effect = after_collection
+            first_run = run_market_participation_trend_job(context=SimpleNamespace(generation_id="scan-one"))
+            assert first_run["status"] == "OK"
+            with session_factory() as db:
+                first = MarketParticipationRepository().latest(db, "BTCUSDT")
+
+            second_run = run_market_participation_trend_job(context=SimpleNamespace(generation_id="scan-two"))
+            assert second_run["status"] == "OK"
+            with session_factory() as db:
+                repository = MarketParticipationRepository()
+                second = repository.latest(db, "BTCUSDT")
+                assert db.query(DecisionSnapshot).count() == 1
+                assert first["id"] == second["id"]
+                assert first["created_at"] == second["created_at"]
+                assert first["effective_timestamp"] == second["effective_timestamp"] == source_close
+                assert first["source_timestamp"] == second["source_timestamp"]
+                assert first["spot"] == second["spot"]
+                assert first["score"] == second["score"]
+                assert first["collected_at"] == first_collection.isoformat()
+                assert second["collected_at"] == second_collection.isoformat()
+                assert first["data_generation_id"] == "scan-one"
+                assert second["data_generation_id"] == "scan-two"
+                # All persisted read routes retain the recorded observation;
+                # none fabricate a fresh clock value while serving a cache.
+                assert repository.latest(db, "BTCUSDT")["collected_at"] == second["collected_at"]
+                assert repository.latest_for_symbols(db, ["BTCUSDT"])["BTCUSDT"]["collected_at"] == second["collected_at"]
+                assert repository.history_through(db, "BTCUSDT")[-1]["collected_at"] == second["collected_at"]
+            assert observation_clock.now.call_count == 2
+    finally:
+        engine.dispose()
 
 
 def test_derivative_context_excludes_stale_funding_and_open_interest():

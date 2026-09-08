@@ -8,3 +8,12 @@ export function exitPolicyEvidence(trade) {
     distancePercent: valid ? Math.abs(entry - stop) / entry * 100 : null,
   };
 }
+
+export function trailingActivationLabel(trade) {
+  // A policy name or current stop cannot establish a historical activation threshold.
+  const recorded = trade?.trailing_activation_r ?? trade?.execution_evidence?.trailing_activation_r;
+  if (recorded == null || typeof recorded === "boolean" || String(recorded).trim() === "") return "Not recorded";
+  const activation = Number(recorded);
+  if (!Number.isFinite(activation) || activation < 0 || activation > 5) return "Not recorded";
+  return activation === 0 ? "Immediate (0R)" : `Delayed until ${activation}R`;
+}

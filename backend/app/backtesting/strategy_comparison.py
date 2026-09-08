@@ -19,6 +19,7 @@ from app.strategies.learning import strategy_definitions
 from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 ENGINE = "recorded_strategy_comparison_v1"
+REPLAY_POLICY_VERSION = "recorded_exit_policy_v2"
 CAPITAL = 200000.0
 TIMEFRAMES = ("1h", "2h", "4h", "1d")
 LIMIT = 60000
@@ -28,7 +29,7 @@ def _number(value):
     try:
         result = float(value)
         return result if math.isfinite(result) else None
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
@@ -43,9 +44,36 @@ def _decision(row, completed_at=None):
         return dict(time=available, timeframe=row.timeframe, decision=row.decision,
                     side=context.get("side"), confidence=_number(row.confidence) or 0,
                     score=abs(_number(context.get("selected_score")) or _number(row.confidence) or 0),
-                    plan=plan, id=row.id)
+                    plan=plan, id=row.id,
+                    trailing_activation_r=context.get("trailing_activation_r"),
+                    execution_evidence=context.get("execution_evidence") or {})
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def _recorded_trailing_activation(candidate):
+    """Use only saved exit metadata; never infer a threshold from today's registry."""
+    plan = candidate["plan"]
+    sources = (plan, candidate, plan.get("execution_evidence") or {}, candidate.get("execution_evidence") or {})
+    if any(not isinstance(source, dict) for source in sources):
+        raise ValueError("Recorded exit metadata must be an object")
+    values = [source["trailing_activation_r"] for source in sources if source.get("trailing_activation_r") is not None]
+    parsed = [_number(value) for value in values]
+    if any(isinstance(value, bool) for value in values) or any(value is None or not 0 <= value <= 5 for value in parsed):
+        raise ValueError("Recorded trailing activation is invalid")
+    if len(set(parsed)) > 1:
+        raise ValueError("Recorded trailing activation is inconsistent")
+    activation = parsed[0] if parsed else None
+    profiles = {source["exit_management_profile"] for source in sources if source.get("exit_management_profile")}
+    if len(profiles) > 1:
+        raise ValueError("Recorded exit management profiles are inconsistent")
+    profile = next(iter(profiles), None)
+    if ((profile == "DELAYED_TRAIL_1R_V1" and activation != 1)
+            or (profile == "IMMEDIATE_TRAIL_V1" and activation != 0)):
+        raise ValueError("Recorded exit profile requires its explicit activation threshold")
+    # A genuinely legacy record retains NULL: the monitor's established legacy
+    # behavior is immediate trailing, not evidence that zero was recorded.
+    return activation, profile
 
 
 def _open(candidate, bar, equity):
@@ -62,6 +90,10 @@ def _open(candidate, bar, equity):
     hours = _number(plan.get("max_hold_hours"))
     if policy not in STAGED_EXIT_POLICIES or fraction is None or not 0 < fraction < 1 or hours is None or hours <= 0:
         return None  # Do not silently substitute today's policy for missing history.
+    try:
+        activation, exit_profile = _recorded_trailing_activation(candidate)
+    except (ValueError, TypeError):
+        return None
     price = float(bar.open_price)
     fill = build_fill_profile(side, price, price * stop / entry, price * t1 / entry,
                               confidence=candidate["confidence"], fee_bps=DEFAULT_FEE_BPS)
@@ -71,6 +103,7 @@ def _open(candidate, bar, equity):
         stop_loss=actual * stop / entry, initial_stop_loss=actual * stop / entry,
         target1=actual * t1 / entry, target2=actual * t2 / entry,
         exit_policy=policy, target1_fraction=fraction, max_hold_hours=hours,
+        trailing_activation_r=activation, exit_management_profile=exit_profile,
         confidence=candidate["confidence"], risk_reward=abs(t1-entry)/abs(entry-stop),
         opened_at=bar.open_time, target1_hit_at=None, remaining=1.0,
         notional=equity * .85, pnl=0.0, timeframe=candidate["timeframe"],
@@ -160,6 +193,8 @@ def replay_version(decisions, bars):
             trades.append(dict(opened_at=active.opened_at.isoformat()+"Z", closed_at=bar.close_time.isoformat()+"Z",
                                side=active.side, timeframe=active.timeframe, entry=active.entry_price,
                                exit=event["exit_price"], reason=reason, target1_hit=active.target1_hit_at is not None,
+                               trailing_activation_r=active.trailing_activation_r,
+                               exit_management_profile=active.exit_management_profile,
                                pnl_inr=round(active.pnl, 2)))
             last_close = bar.close_time
             if reason == "STOP":
@@ -226,7 +261,8 @@ def build_strategy_comparison(db, symbol, days, now=None):
         results.append(dict(strategy_id=strategy_id, version=version, name=name, status=status,
                             excluded_decisions=exclusions[(strategy_id, version)],
                             decisions=len(decisions), eligible_decisions=sum(d["decision"] == "ELIGIBLE" for d in decisions), **metrics))
-    return dict(source=ENGINE, symbol=symbol, start=start.isoformat()+"Z", end=end.isoformat()+"Z",
+    return dict(source=ENGINE, replay_policy_version=REPLAY_POLICY_VERSION,
+                symbol=symbol, start=start.isoformat()+"Z", end=end.isoformat()+"Z",
                 initial_capital_inr=CAPITAL, notional_percent=85, fee_bps_per_side=DEFAULT_FEE_BPS,
                 venue=venue, price_bars=len(bars), timeframe="5m", results=results,
                 price_coverage_percent=round(min(100, len(bars)/(days*288)*100), 2),
@@ -235,6 +271,8 @@ def build_strategy_comparison(db, symbol, days, now=None):
                 limitations=["Recorded decision replay, not regeneration of current strategy rules or an out-of-sample validation.",
                              "Each version has independent INR 200,000 capital and 85% unleveraged virtual notional; one position per coin across timeframes.",
                              "Next-bar entry with simulated slippage; recorded level distances rebased to the new fill. Requires a new recorded decision after exit.",
+                             "Recorded trailing activation is honored. Missing legacy activation retains legacy immediate trailing; it is not recorded 0R evidence. Named experiment profiles require explicit matching activation metadata.",
+                             "Entry structure and fresh-mark entry-quality gates are NOT revalidated at the replay fill. Recorded eligibility is replayed as-is; 5-minute OHLC cannot reconstruct the original fresh scan/mark lifecycle. Missing historical structure evidence is not regenerated.",
                              "Fees and slippage included; funding, INR/USDT exchange-rate changes and shared account risk limits are NOT modeled.",
                              "5-minute OHLC cannot reproduce tick-level trailing stops. Stop-first collisions; stop updates apply next bar.",
                              "Missing exit candles censor the position and stop that version's replay. End-of-window open positions are excluded from closed PNL.",

@@ -96,6 +96,10 @@ export default function StrategiesPage() {
           </button>
         </div>
 
+        <div className="mt-3 rounded-lg border border-cyan-400/15 bg-cyan-500/5 px-3 py-2 text-xs leading-relaxed text-slate-400">
+          A bullish or bearish score is directional evidence, not entry confirmation. The entry-only candidate tests confirmed price structure with immediate trailing; the exit-only candidate keeps baseline entries and tests trailing delayed until 1R. These isolated paper candidates leave incumbent baselines unchanged. Trade audits show recorded policies and structure evidence; missing historical values remain unknown.
+        </div>
+
         {error ? (
           <div role="alert" className="mt-3 flex flex-col gap-2 rounded-lg border border-rose-400/20 bg-rose-500/10 p-3 text-sm text-rose-200 sm:flex-row sm:items-center sm:justify-between">
             <span>{error}{records.length ? " Showing the last successful strategy snapshot." : ""}</span>
@@ -209,7 +213,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
               <StatusBadge label={strategy.strategy_type || "INDIVIDUAL"} tone={strategy.strategy_type === "COMBINED" ? "amber" : "slate"} />
               <StatusBadge label="PAPER ONLY" tone="cyan" />
               <StatusBadge
-                label={strategy.official_execution_enabled ? "OFFICIAL PAPER LANE" : "STRATEGY PAPER ONLY"}
+                label={strategy.read_only ? "READ-ONLY HISTORY" : strategy.official_execution_enabled ? "OFFICIAL PAPER LANE" : "STRATEGY PAPER ONLY"}
                 tone={strategy.official_execution_enabled ? "emerald" : "slate"}
               />
               <StatusBadge
@@ -246,7 +250,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
           <ValueCard label="Consolidated winner trades" value={officialPerformance.total_trades || 0} tone="cyan" />
           <ValueCard label="Target successes" value={`${performance.target_successes || 0} · ${formatPercent(performance.target_success_rate || 0, 1)}`} tone="emerald" />
           <ValueCard label="Pre-T1 losing stops" value={preTargetLosingStops(performance) ?? "Not recorded"} tone="rose" />
-          <ValueCard label="Protected stop exits" value={performance.protected_stop_exits || 0} tone="cyan" />
+          <ValueCard label="Protected stop exits" value={performance.protected_stop_exits || 0} tone="cyan" description="Includes stop exits after T1 and non-losing stop exits before T1. This aggregate is not proof that every stop was protected by a T1 event." />
         </div>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
@@ -508,8 +512,8 @@ function Metric({ label, value, icon: Icon, tone = "cyan" }) {
   return <div className="rounded-lg border border-white/10 bg-slate-950/55 p-3"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-slate-500"><span>{label}</span><Icon className={clsx("h-4 w-4", toneClass(tone))} /></div><div className="mt-2 text-xl font-semibold text-white">{value}</div></div>;
 }
 
-function ValueCard({ label, value, tone = "slate" }) {
-  return <div className="rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2.5"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className={clsx("mt-1 text-sm font-semibold", toneClass(tone))}>{value}</div></div>;
+function ValueCard({ label, value, tone = "slate", description }) {
+  return <div className="rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2.5"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}{description ? <span tabIndex={0} title={description} aria-label={description} className="ml-1 inline-block cursor-help rounded-full border border-slate-500 px-1 normal-case focus:outline-cyan-400">i</span> : null}</div><div className={clsx("mt-1 text-sm font-semibold", toneClass(tone))}>{value}</div></div>;
 }
 
 function StatusBadge({ label, tone = "slate" }) {

@@ -36,7 +36,7 @@ def test_unavailable_or_invalid_equity_cannot_produce_risk_sizing(equity):
 
 def candidate(side="LONG", strategy="MARKET_MOVE"):
     return {"symbol": "ETHUSDT", "side": side,
-            "trade_plan": {"strategy_id": strategy, "strategy_version": "test_v1",
+            "trade_plan": {"strategy_id": strategy, "strategy_version": "market_move_entry_v1" if strategy == "MARKET_MOVE_ENTRY" else "test_v1",
                            "entry_timeframe": "1h", "entry_price": 100,
                            "stop_loss": 98 if side == "LONG" else 102,
                            "exit_policy": "PAPER_ATR_STRUCTURE_V1", "confidence": 64},

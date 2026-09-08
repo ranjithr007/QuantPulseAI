@@ -65,6 +65,8 @@ from app.strategies.registry import CORE_FUSION_STRATEGY_ID
 from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
 from app.strategies.registry import CORE_FUSION_DECISION_VERSION
 from app.strategies.registry import CORE_SIGNAL_STRATEGY_ID
+from app.strategies.registry import CORE_SIGNAL_ENTRY_STRATEGY_ID, CORE_SIGNAL_EXIT_STRATEGY_ID
+from app.strategies.registry import REGIME_TREND_EXIT_STRATEGY_ID
 from app.strategies.registry import CORE_SIGNAL_DECISION_VERSION
 from app.strategies.registry import LIQUIDATION_CARRY_STRATEGY_ID
 from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
@@ -81,11 +83,12 @@ from app.strategies.candidate_builders import build_liquidation_carry_payload
 from app.strategies.candidate_builders import build_orderflow_smc_payload
 from app.strategies.candidate_builders import build_range_reversion_payload
 from app.strategies.candidate_builders import build_regime_trend_payload
-from app.strategies.candidate_builders import build_regime_trend_entry_payload
 from app.strategies.candidate_builders import build_trend_pullback_payload
 from app.strategies.learning import active_candidate_definitions
 from app.strategies.learning import apply_learning_parameters
 from app.strategies.entry_quality import build_market_move_experiment_payload
+from app.strategies.structure_entry import build_structure_entry_payload, rebuild_core_entry_payload
+from app.strategies.exit_experiments import build_exit_experiment_payload
 
 
 router = APIRouter(prefix="/signals", tags=["Signals"])
@@ -2143,7 +2146,6 @@ def _persist_strategy_candidates(db, payload, market_participation):
     )
     market_move_experiments = []
     for experiment_id, entry_only in (
-        (MARKET_MOVE_ENTRY_STRATEGY_ID, True),
         (MARKET_MOVE_EXIT_STRATEGY_ID, False),
     ):
         definition = strategy_definition(experiment_id)
@@ -2160,7 +2162,28 @@ def _persist_strategy_candidates(db, payload, market_participation):
             "snapshot": experiment_snapshot,
         })
     regime_trend_payload = build_regime_trend_payload(payload)
-    regime_entry_payload = build_regime_trend_entry_payload(payload, market_participation)
+    regime_entry_payload = build_structure_entry_payload(
+        regime_trend_payload, market_participation, strategy_definition(REGIME_TREND_ENTRY_STRATEGY_ID),
+        rebuild=lambda gate: build_regime_trend_payload(payload, structure_gate=gate),
+    )
+    for experiment_id, base_payload, rebuild in (
+        (MARKET_MOVE_ENTRY_STRATEGY_ID, market_move_payload,
+         lambda gate: _build_market_move_strategy_payload(payload, market_participation, structure_gate=gate)),
+        (CORE_SIGNAL_ENTRY_STRATEGY_ID, payload,
+         lambda gate: rebuild_core_entry_payload(payload, gate)),
+        (CORE_SIGNAL_EXIT_STRATEGY_ID, payload, None),
+        (REGIME_TREND_EXIT_STRATEGY_ID, regime_trend_payload, None),
+    ):
+        definition = strategy_definition(experiment_id)
+        experiment_payload = (build_structure_entry_payload(
+            base_payload, market_participation, definition, rebuild=rebuild,
+        ) if rebuild else build_exit_experiment_payload(base_payload, definition))
+        experiment_snapshot = _persist_derived_strategy_snapshot(
+            db, experiment_payload, definition, market_participation=market_participation,
+            effective_timestamp=evaluation_timestamp,
+        )
+        market_move_experiments.append({"definition": definition, "payload": experiment_payload,
+                                        "snapshot": experiment_snapshot})
     orderflow_smc_payload = build_orderflow_smc_payload(payload)
     liquidation_carry_payload = build_liquidation_carry_payload(
         payload,
@@ -2394,7 +2417,7 @@ def _persist_derived_strategy_snapshot(
     )
 
 
-def _build_market_move_strategy_payload(core_payload, market_participation):
+def _build_market_move_strategy_payload(core_payload, market_participation, *, structure_gate=None):
     symbol = core_payload["symbol"]
     raw = market_participation or {}
     direction = str(raw.get("direction") or "NEUTRAL").upper()
@@ -2423,8 +2446,9 @@ def _build_market_move_strategy_payload(core_payload, market_participation):
         for item in normalized_timeframes
         if item.get("status") == "OK"
         and float(item.get("score") or 0) * expected_sign > 0
+        and (structure_gate is None or structure_gate(item, side))
     ]
-    selection_pool = aligned or [
+    selection_pool = aligned if structure_gate else aligned or [
         item for item in normalized_timeframes if item.get("status") == "OK"
     ]
     selected = max(

@@ -8,6 +8,8 @@ futures direction?
 from math import isfinite
 from statistics import median
 
+from app.strategies.price_structure import build_price_structure
+
 
 TIMEFRAME_WEIGHTS = {"1h": 0.15, "2h": 0.20, "4h": 0.25, "1d": 0.40}
 EXECUTION_THRESHOLD = 40.0
@@ -141,6 +143,14 @@ def analyze_spot_timeframe(symbol, timeframe, candles):
 
     score = round(_clamp(score, -100, 100), 2)
     score_components["total"] = score
+    price_structure = build_price_structure(bars, timeframe)
+    if price_structure.get("symbol") not in (None, str(symbol).upper()):
+        price_structure["status"] = "UNAVAILABLE"
+        for side in ("long", "short"):
+            price_structure[side].update(
+                confirmed=False, setup_type="NONE", reason="SYMBOL_MISMATCH",
+                level=None, invalidation_level=None, confirmed_at=None,
+            )
     return {
         "symbol": str(symbol).upper(),
         "timeframe": timeframe,
@@ -152,6 +162,7 @@ def analyze_spot_timeframe(symbol, timeframe, candles):
         "spot_price": last_close,
         "atr": _average_true_range(bars[-21:]),
         "atr_source": "FINAL_SPOT_CANDLES",
+        "price_structure": price_structure,
         "ema20": round(ema20, 8),
         "price_change_percent": round(price_change_percent, 4),
         "spot_cvd_quote": round(spot_delta, 2),

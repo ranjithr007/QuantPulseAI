@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
+from datetime import datetime, timezone
 from app.collectors.binances.spot_market_collector import SpotMarketCollector
 from app.collectors.fred_macro_collector import FredMacroCollector
 from app.config import get_settings
@@ -76,6 +77,9 @@ def run_market_participation_trend_job(*, context=None):
                 liquidation=_liquidation_context(db, symbol),
                 external_context=external_context,
             )
+            # Record this completed observation separately from source-candle
+            # time. Cache reads must retain this timestamp, never refresh it.
+            trend["collected_at"] = datetime.now(timezone.utc).isoformat()
             record = repository.save(
                 db,
                 trend,

@@ -105,13 +105,42 @@ def _candidate(definition, plan_id, *, symbol="BTCUSDT"):
         "market_context": {},
         "validation_contract_version": "shadow-test-v1",
     }
-    if definition["id"] == "MARKET_MOVE_ENTRY":
+    if (definition["id"] in {"CORE_SIGNAL_ENTRY", "MARKET_MOVE_ENTRY", "REGIME_TREND_ENTRY"}
+            and definition["version"] == STRATEGY_REGISTRY[definition["id"]]["version"]):
+        observed_at = datetime.now(timezone.utc).isoformat()
+        candidate["entry_quality"] = {
+            "profile": "CONFIRMED_PRICE_STRUCTURE_V1", "symbol": symbol,
+            "side": "LONG", "timeframe": "1h", "planned_entry": 100.0,
+            "atr": 1.0, "ema20": 99.8, "spot_cvd_percent": 2.0,
+            "effective_timestamp": observed_at, "source_timestamp": observed_at,
+            "price_structure": {
+                "profile": "CONFIRMED_PRICE_STRUCTURE_V1", "symbol": symbol,
+                "timeframe": "1h", "status": "READY", "closed_at": observed_at,
+                "close": 100.0, "atr": 1.0, "structure": "BULLISH",
+                "long": {
+                    "confirmed": True, "setup_type": "BREAKOUT_RETEST",
+                    "level": 99.5, "invalidation_level": 99.25,
+                    "confirmed_at": observed_at,
+                    "reason": "CLOSED_BREAKOUT_AND_LATER_RETEST_HELD",
+                },
+                "short": {"confirmed": False, "setup_type": None},
+            },
+        }
+        candidate["trailing_activation_r"] = 0.0
+        candidate["execution_evidence"] = {
+            "entry_quality_profile": "CONFIRMED_PRICE_STRUCTURE_V1",
+            "exit_management_profile": "IMMEDIATE_TRAIL_V1",
+            "experiment_version": definition["version"], "paper_only": True,
+        }
+        plan["entry_quality"] = candidate["entry_quality"]
+    elif definition["id"] == "MARKET_MOVE_ENTRY":
         candidate["entry_quality"] = {
             "profile": "MARKET_MOVE_RETEST_V1", "side": "LONG", "planned_entry": 100.0,
             "atr": 1.0, "ema20": 99.8, "structure_level": 99.5,
             "tested_rejection": True, "spot_cvd_percent": 2.0,
             "effective_timestamp": datetime.now(timezone.utc).isoformat(),
         }
+    if definition["id"] == "MARKET_MOVE_ENTRY":
         plan["exit_policy"] = "PAPER_ATR_STRUCTURE_V1"
     return candidate
 

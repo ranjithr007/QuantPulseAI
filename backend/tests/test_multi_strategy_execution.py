@@ -22,6 +22,10 @@ from app.strategies.registry import MARKET_MOVE_STRATEGY_ID
 from app.strategies.registry import STRATEGY_REGISTRY
 
 
+ENTRY_EXPERIMENT_IDS = {"CORE_SIGNAL_ENTRY", "MARKET_MOVE_ENTRY", "REGIME_TREND_ENTRY"}
+EXIT_EXPERIMENT_IDS = {"CORE_SIGNAL_EXIT", "MARKET_MOVE_EXIT", "REGIME_TREND_EXIT"}
+
+
 def _session():
     engine = create_engine(
         "sqlite://",
@@ -37,12 +41,17 @@ def test_registered_strategies_keep_research_experiments_isolated():
     assert all(
         definition["status"] == "ACTIVE"
         and definition["execution_scope"] == "PAPER_ONLY"
-        and definition["official_execution_enabled"] is (definition["id"] not in {
-            "REGIME_TREND_ENTRY", "MARKET_MOVE_ENTRY", "MARKET_MOVE_EXIT",
-        })
+        and definition["official_execution_enabled"] is (
+            definition["id"] not in ENTRY_EXPERIMENT_IDS | EXIT_EXPERIMENT_IDS
+        )
         and definition["one_active_trade_per_symbol"] is True
         for definition in STRATEGY_REGISTRY.values()
     )
+    assert {
+        definition["id"]
+        for definition in STRATEGY_REGISTRY.values()
+        if definition.get("immutable_experiment") is True
+    } == ENTRY_EXPERIMENT_IDS | EXIT_EXPERIMENT_IDS
 
 
 def test_executor_revalidates_core_signal_once_per_required_symbol_timeframe():
@@ -157,7 +166,40 @@ def _core_payload(now, *, ready=True):
     }
 
 
-def _market_move(now, *, carry_ready=False):
+def _confirmed_structure(now, timeframe, *, confirmed=True):
+    """Fresh analyzer evidence: BNB closed above a reclaimed 699 price level."""
+    return {
+        "profile": "CONFIRMED_PRICE_STRUCTURE_V1",
+        "symbol": "BNBUSDT",
+        "timeframe": timeframe,
+        "status": "READY",
+        "closed_at": now,
+        "close": 702.0,
+        "atr": 5.0,
+        "structure": "BULLISH",
+        "long": {
+            "confirmed": confirmed,
+            "setup_type": "BREAKOUT_RETEST" if confirmed else None,
+            "level": 699.0 if confirmed else None,
+            "invalidation_level": 697.75 if confirmed else None,
+            "confirmed_at": now if confirmed else None,
+            "reason": (
+                "CLOSED_BREAKOUT_AND_LATER_RETEST_HELD"
+                if confirmed else "NO_RECENT_CONFIRMED_BREAKOUT_RETEST_OR_PULLBACK"
+            ),
+        },
+        "short": {
+            "confirmed": False,
+            "setup_type": None,
+            "level": None,
+            "invalidation_level": None,
+            "confirmed_at": None,
+            "reason": "NO_RECENT_CONFIRMED_BREAKOUT_RETEST_OR_PULLBACK",
+        },
+    }
+
+
+def _market_move(now, *, carry_ready=False, structure_confirmed=True):
     payload = {
         "status": "READY",
         "quality_state": "OK",
@@ -169,6 +211,7 @@ def _market_move(now, *, carry_ready=False):
         "spot": {
             "timeframes": [
                 {
+                    "symbol": "BNBUSDT",
                     "timeframe": timeframe,
                     "status": "READY",
                     "direction": "BULLISH",
@@ -196,6 +239,9 @@ def _market_move(now, *, carry_ready=False):
                         "breakout_accepted": False,
                     },
                     "source_timestamp": now,
+                    "price_structure": _confirmed_structure(
+                        now, timeframe, confirmed=structure_confirmed,
+                    ),
                 }
                 for timeframe, score in (
                     ("1h", 52.0),
@@ -269,6 +315,41 @@ def test_individual_and_combined_strategies_create_separate_candidate_plans():
             STRATEGY_REGISTRY
         )
         assert db.query(DecisionSnapshot).count() == len(STRATEGY_REGISTRY)
+    finally:
+        db.close()
+
+
+def test_unconfirmed_structure_blocks_only_entry_experiments_not_their_baselines():
+    db = _session()
+    now = datetime.now(timezone.utc)
+    try:
+        candidates = _persist_strategy_candidates(
+            db,
+            _core_payload(now, ready=True),
+            _market_move(now, carry_ready=True, structure_confirmed=False),
+        )
+        by_strategy = {item["definition"]["id"]: item for item in candidates}
+        assert set(by_strategy) == set(STRATEGY_REGISTRY)
+        for strategy_id in ENTRY_EXPERIMENT_IDS:
+            candidate = by_strategy[strategy_id]
+            assert candidate["snapshot"]["decision"] == "BLOCKED"
+            assert candidate["payload"]["trigger"]["status"] == "WAIT"
+            checks = candidate["payload"]["trigger"]["structure_candidates"]
+            assert {item["timeframe"] for item in checks} == {"1h", "2h", "4h", "1d"}
+            assert all(not item["passed"] for item in checks)
+
+        records = _evaluate_and_persist(
+            db,
+            _core_payload(now, ready=True),
+            _market_move(now, carry_ready=True, structure_confirmed=False),
+        )
+        for record in records:
+            assert record["action"] == (
+                "skipped_not_ready" if record["strategy_id"] in ENTRY_EXPERIMENT_IDS else "saved"
+            )
+        plans = db.query(TradePlan).filter(TradePlan.status == "OPEN").all()
+        assert {plan.strategy_id for plan in plans} == set(STRATEGY_REGISTRY) - ENTRY_EXPERIMENT_IDS
+        assert len({plan.strategy_decision_snapshot_id for plan in plans}) == len(plans)
     finally:
         db.close()
 

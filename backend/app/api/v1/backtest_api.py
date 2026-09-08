@@ -50,8 +50,9 @@ def submit_strategy_comparison(
     days: int = Query(default=7, ge=1, le=30),
 ):
     """Automatically reuse a one-hour cached, worker-executed comparison."""
-    from app.backtesting.strategy_comparison import ENGINE
-    parameters = {"engine": ENGINE, "symbol": symbol, "days": days}
+    from app.backtesting.strategy_comparison import ENGINE, REPLAY_POLICY_VERSION
+    parameters = {"engine": ENGINE, "symbol": symbol, "days": days,
+                  "replay_policy_version": REPLAY_POLICY_VERSION}
     record, created = create_automatic_walk_forward_job(parameters, refresh_after_seconds=3600)
     if created and get_settings().process_role == "all":
         background_tasks.add_task(_run_walk_forward_validation_job, record["job_id"], parameters)

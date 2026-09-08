@@ -1816,8 +1816,14 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
+        cooldown_history = repo.stop_reentry_history(
+            db, strategy_id=strategy_id, strategy_version=strategy_version,
+            symbol=candidate["symbol"], side=candidate["side"],
+            window_start=datetime.utcnow() - timedelta(minutes=PAPER_STOP_REENTRY_COOLDOWN_MINUTES),
+            versioned_history=strategy_history,
+        )
         cooldown = same_side_stop_reentry_cooldown(
-            strategy_history,
+            cooldown_history,
             candidate["symbol"],
             candidate["side"],
         )

@@ -83,6 +83,9 @@ def revalidate_entry_candidate(candidate, mark, *, now=None):
     """
     plan = candidate.get("trade_plan") or {}
     quality = candidate.get("entry_quality") or plan.get("entry_quality") or {}
+    from app.strategies.structure_entry import requires_structure_entry, revalidate_structure_entry
+    if requires_structure_entry(candidate, quality):
+        return revalidate_structure_entry(candidate, mark, now=now)
     required = str(plan.get("strategy_id") or "").upper() == "MARKET_MOVE_ENTRY" or quality.get("profile") == ENTRY_PROFILE
     if not required:
         return {}, None

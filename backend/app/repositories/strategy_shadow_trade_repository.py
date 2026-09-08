@@ -16,17 +16,40 @@ from app.repositories._db_utils import commit_or_rollback, flush_or_rollback
 from app.paper_trading.exit_lock import advance_exit_checkpoint
 from app.paper_trading.exit_evidence import entry_evidence_fields, record_exit_evidence
 from app.paper_trading.evidence_scope import QA_PAPER_SYMBOL_PREFIX
+from app.strategies.registry import strategy_definition
+
+
+def _is_frozen_experiment_revision(strategy_id, strategy_version):
+    """Only numbered frozen revisions share admission, never auto candidates."""
+    definition = strategy_definition(strategy_id) or {}
+    prefix = f"{str(strategy_id or '').lower()}_v"
+    version = str(strategy_version or "")
+    revision = version[len(prefix):] if version.startswith(prefix) else ""
+    return bool(
+        definition.get("immutable_experiment") is True
+        and definition.get("strategy_type") in {"ENTRY_CANDIDATE", "EXIT_CANDIDATE"}
+        and definition.get("execution_scope") == "PAPER_ONLY"
+        and definition.get("official_execution_enabled") is False
+        and revision.isascii() and revision.isdecimal()
+    )
 
 
 class StrategyShadowTradeRepository:
     """Isolated Strategy Paper ledger with its own normalized virtual capital."""
 
     def acquire_book_execution_lock(self, db, strategy_id, strategy_version):
-        """Serialize equity/capacity checks and entry across every coin in a book."""
-        resource = f"quantpulse:strategy-book:{strategy_id}:{strategy_version}"
+        """Serialize admission; frozen revisions share safety, not P&L cohorts."""
+        shared_experiment = _is_frozen_experiment_revision(strategy_id, strategy_version)
+        lock_version = "frozen-experiment" if shared_experiment else strategy_version
+        resource = f"quantpulse:strategy-book:{strategy_id}:{lock_version}"
         dialect = str(db.get_bind().dialect.name).lower()
         if dialect == "sqlite":
             self.ensure_table(db)  # Schema initialization precedes reservation.
+            if shared_experiment:
+                # SQLite has no advisory lock. A zero-row write reserves its
+                # writer transaction without changing trades or nesting BEGIN.
+                # The executor retains this transaction through the final fill.
+                db.execute(text("UPDATE strategy_shadow_trades SET id = id WHERE 1 = 0"))
         if dialect == "postgresql":
             key = int.from_bytes(blake2b(resource.encode(), digest_size=8).digest(), "big", signed=True)
             db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": key})
@@ -181,15 +204,47 @@ class StrategyShadowTradeRepository:
 
     def has_open_trade(self, db, strategy_id, strategy_version, symbol):
         self.ensure_table(db)
-        return (
-            db.query(StrategyShadowTrade)
+        query = (
+            db.query(StrategyShadowTrade.strategy_version)
             .filter(StrategyShadowTrade.strategy_id == strategy_id)
-            .filter(StrategyShadowTrade.strategy_version == strategy_version)
             .filter(StrategyShadowTrade.symbol == str(symbol).upper())
             .filter(StrategyShadowTrade.status == "OPEN")
-            .first()
-            is not None
         )
+        if _is_frozen_experiment_revision(strategy_id, strategy_version):
+            # Numbered revisions share one active position per coin. Keep
+            # historical auto/custom candidate books independently versioned.
+            return any(
+                _is_frozen_experiment_revision(strategy_id, row.strategy_version)
+                for row in query.all()
+            )
+        return query.filter(StrategyShadowTrade.strategy_version == strategy_version).first() is not None
+
+    def stop_reentry_history(
+        self, db, *, strategy_id, strategy_version, symbol, side,
+        window_start, versioned_history,
+    ):
+        """Extend only frozen admission cooldowns across numbered revisions.
+
+        The executor keeps using its original versioned history for valuation,
+        daily loss, capacity, learning and performance evidence.
+        """
+        if not _is_frozen_experiment_revision(strategy_id, strategy_version):
+            return versioned_history
+        self.ensure_table(db)
+        rows = (
+            db.query(StrategyShadowTrade)
+            .filter(StrategyShadowTrade.strategy_id == strategy_id)
+            .filter(StrategyShadowTrade.symbol == str(symbol).upper())
+            .filter(StrategyShadowTrade.side == str(side).upper())
+            .filter(StrategyShadowTrade.status == "CLOSED")
+            .filter(StrategyShadowTrade.exit_reason == "STOP")
+            .filter(StrategyShadowTrade.closed_at >= window_start)
+            .all()
+        )
+        return [
+            row for row in rows
+            if _is_frozen_experiment_revision(strategy_id, row.strategy_version)
+        ]
 
     def has_trade_for_plan(self, db, trade_plan_id):
         self.ensure_table(db)

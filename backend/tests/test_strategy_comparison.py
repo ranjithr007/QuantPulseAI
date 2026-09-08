@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from app.backtesting.strategy_comparison import _decision, _open, replay_version, CAPITAL
+from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
 
 START = datetime(2026, 9, 1, 0, 5)
 
@@ -27,6 +28,7 @@ def bar(offset=0, **overrides):
 
 def test_entry_is_next_bar_and_rebased_to_actual_fill():
     trade = _open(decision(), bar(open_price=200), CAPITAL)
+    assert trade.trailing_activation_r is None
     assert trade.entry_price > 200
     assert trade.stop_loss / trade.entry_price == pytest.approx(.9925)
     assert trade.target2 / trade.entry_price == pytest.approx(1.023)
@@ -93,6 +95,76 @@ def test_snapshot_uses_recording_time_not_just_effective_time():
     assert _decision(row)["time"] == recorded
 
 
+@pytest.mark.parametrize("location", ["plan", "context", "plan_evidence", "context_evidence"])
+def test_recorded_trailing_activation_survives_snapshot_decode(location):
+    snapshot = {"trade_plan": decision()["plan"], "context": {"side": "LONG"}}
+    if location.endswith("_evidence"):
+        target = snapshot["trade_plan" if location.startswith("plan") else "context"].setdefault("execution_evidence", {})
+    else:
+        target = snapshot["trade_plan" if location == "plan" else "context"]
+    target["trailing_activation_r"] = 1
+    row = NS(snapshot_json=json.dumps(snapshot), effective_timestamp=START, source_timestamp=START,
+             created_at=START, timeframe="1h", decision="ELIGIBLE", confidence=65, id=1)
+    assert _open(_decision(row), bar(), CAPITAL).trailing_activation_r == 1
+
+
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+@pytest.mark.parametrize("activation,expected", [(None, "MOVE_STOP"), (0, "MOVE_STOP"), (1, "HOLD")])
+def test_replay_keeps_delayed_trail_inactive_below_one_r_and_legacy_immediate(side, activation, expected):
+    item = decision(side=side)
+    if side == "SHORT":
+        item["plan"].update(stop_loss=100.75, target1=98.5, target2=97.7)
+    item["plan"]["trailing_activation_r"] = activation
+    trade = _open(item, bar(), CAPITAL)
+    assert trade.trailing_activation_r == activation
+    sign = 1 if side == "LONG" else -1
+    risk = abs(trade.entry_price-trade.initial_stop_loss)
+    close = trade.entry_price + sign * risk * .5
+    candle = bar(high_price=max(close, trade.entry_price), low_price=min(close, trade.entry_price), close_price=close)
+    assert evaluate_paper_trade_exit(trade, candle)["action"] == expected
+    close = trade.entry_price + sign * risk * 1.01
+    candle = bar(high_price=max(close, trade.entry_price), low_price=min(close, trade.entry_price), close_price=close)
+    assert evaluate_paper_trade_exit(trade, candle)["action"] == "MOVE_STOP"
+
+
+@pytest.mark.parametrize("activation", [True, -1, 6, "", "oops", float("inf"), float("nan")])
+def test_invalid_recorded_activation_does_not_silently_use_immediate_trailing(activation):
+    item = decision(trailing_activation_r=activation)
+    assert _open(item, bar(), CAPITAL) is None
+
+
+@pytest.mark.parametrize("profile,activation", [("DELAYED_TRAIL_1R_V1", None), ("DELAYED_TRAIL_1R_V1", 0),
+                                               ("IMMEDIATE_TRAIL_V1", None), ("IMMEDIATE_TRAIL_V1", 1)])
+def test_named_exit_experiment_requires_recorded_matching_threshold(profile, activation):
+    item = decision(trailing_activation_r=activation, execution_evidence={"exit_management_profile": profile})
+    assert _open(item, bar(), CAPITAL) is None
+
+
+def test_conflicting_activation_is_not_resolved_by_silent_precedence():
+    item = decision(trailing_activation_r=1)
+    item["plan"]["trailing_activation_r"] = 0
+    assert _open(item, bar(), CAPITAL) is None
+
+
+def test_closed_replay_trade_reports_recorded_activation_without_inventing_legacy_evidence():
+    for activation in (None, 0, 1):
+        profile = None if activation is None else "IMMEDIATE_TRAIL_V1" if activation == 0 else "DELAYED_TRAIL_1R_V1"
+        item = decision(trailing_activation_r=activation, execution_evidence={"exit_management_profile": profile})
+        result = replay_version([item], [bar(high_price=104, close_price=103)])
+        assert result["trades"][0]["trailing_activation_r"] == activation
+        assert result["trades"][0]["exit_management_profile"] == profile
+
+
+def test_delayed_replay_does_not_take_a_pre_activation_trailing_exit():
+    bars = [bar(high_price=100.5, close_price=100.4), bar(5, low_price=99.5)]
+    immediate = replay_version([decision(trailing_activation_r=0)], bars)
+    legacy = replay_version([decision()], bars)
+    delayed = replay_version([decision(trailing_activation_r=1)], bars)
+    assert immediate["stop_exits"] == legacy["stop_exits"] == 1
+    assert delayed["closed_trades"] == 0
+    assert delayed["open_positions"] == 1
+
+
 def test_gap_stop_uses_worse_open_and_hold_window_not_closed_artificially():
     result = replay_version([decision()], [bar(), bar(5, open_price=95, high_price=96, low_price=94, close_price=95)])
     assert result["trades"][0]["exit"] < 95
@@ -136,6 +208,9 @@ def test_database_report_separates_versions_and_rejects_missing_lineage(monkeypa
         assert results[("A", "v1")]["pnl_inr"] == results[("A", "v2")]["pnl_inr"]
         assert results[("B", "v1")]["status"] == "NO_DECISION_HISTORY"
         assert results[("A", "unproven")]["status"] == "NO_REPLAYABLE_DECISIONS"
+        assert report["replay_policy_version"] == module.REPLAY_POLICY_VERSION == "recorded_exit_policy_v2"
+        assert any("Entry structure" in limitation and "NOT revalidated" in limitation for limitation in report["limitations"])
+        assert any("Missing legacy activation" in limitation for limitation in report["limitations"])
         assert not db.new and not db.dirty and not db.deleted
 
 
@@ -167,6 +242,10 @@ def test_api_uses_durable_worker_queue_and_caches_results(monkeypatch, tmp_path)
     assert response.json()["status"] == "QUEUED"
     assert not calls
     queued = walk_forward_jobs.claim_next_walk_forward_job()
+    assert queued["parameters"] == {
+        "engine": strategy_comparison.ENGINE, "symbol": "ETHUSDT", "days": 7,
+        "replay_policy_version": strategy_comparison.REPLAY_POLICY_VERSION,
+    }
     backtest_api._run_walk_forward_validation_job(queued["job_id"], queued["parameters"])
     completed = client.get(f'/backtest/walk-forward/jobs/{queued["job_id"]}').json()
     assert completed["status"] == "COMPLETED"
@@ -174,4 +253,9 @@ def test_api_uses_durable_worker_queue_and_caches_results(monkeypatch, tmp_path)
     cached = client.post("/backtest/strategy-comparison/jobs?symbol=ETHUSDT&days=7").json()
     assert cached["job_id"] == completed["job_id"]
     assert cached["status"] == "COMPLETED"
+    monkeypatch.setattr(strategy_comparison, "REPLAY_POLICY_VERSION", "recorded_exit_policy_test_next")
+    updated = client.post("/backtest/strategy-comparison/jobs?symbol=ETHUSDT&days=7").json()
+    assert updated["job_id"] != cached["job_id"]
+    assert updated["status"] == "QUEUED"
+    assert calls == [("ETHUSDT", 7)]
     assert client.post("/backtest/strategy-comparison/jobs?symbol=ETHUSDT&days=365").status_code == 422

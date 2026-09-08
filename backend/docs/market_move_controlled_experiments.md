@@ -1,4 +1,8 @@
-# Market Move controlled paper experiments
+# Market Move controlled paper experiments (original v1 reference)
+
+Current rollout: see [Structure-entry and delayed-trailing experiments](structure_entry_delayed_trailing.md).
+The entry experiments below describe the historical v1 cohort. New Market Move
+and Regime Trend entry decisions use v2; existing history is not rewritten.
 
 These strategies run in isolated Strategy Paper books. They do not enter the
 consolidated book or enable live execution. The incumbent `MARKET_MOVE` and its

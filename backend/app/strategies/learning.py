@@ -80,6 +80,7 @@ def active_candidate_definitions(db):
         item
         for item in strategy_definitions(db)
         if item.get("strategy_type") == "AUTO_CANDIDATE"
+        and not item.get("immutable_experiment")
     ]
 
 

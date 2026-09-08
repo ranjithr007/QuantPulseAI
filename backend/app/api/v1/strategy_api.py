@@ -23,6 +23,43 @@ from app.strategies.learning import strategy_definitions
 router = APIRouter(prefix="/strategies", tags=["Strategies"])
 
 
+def _display_strategy_definitions(db, normalized):
+    """Keep retired entry ledgers visible without registering executable rules."""
+    retired = {
+        (strategy_id, strategy_id.lower() + "_v1")
+        for strategy_id in ("MARKET_MOVE_ENTRY", "REGIME_TREND_ENTRY")
+        if normalized is None or normalized == strategy_id
+    }
+    definitions = [
+        item for item in strategy_definitions(db, normalized)
+        if (item["id"], item["version"]) not in retired
+    ]
+    if not retired:
+        return definitions
+    existing = (
+        db.query(StrategyShadowTrade.strategy_id, StrategyShadowTrade.strategy_version)
+        .filter(or_(*[
+            and_(StrategyShadowTrade.strategy_id == strategy_id,
+                 StrategyShadowTrade.strategy_version == version)
+            for strategy_id, version in retired
+        ]))
+        .distinct().all()
+    )
+    for strategy_id, version in sorted(existing):
+        base = STRATEGY_REGISTRY[strategy_id]
+        definitions.append({
+            **base, "version": version,
+            "decision_version": strategy_id.lower() + "_strategy_v1",
+            "name": base["name"] + " (v1 history)",
+            "description": "Read-only v1 entry experiment history. Existing positions retain their recorded management; no new entries or promotion.",
+            "strategy_type": "HISTORICAL", "status": "RETIRED",
+            "read_only": True, "historical": True,
+            "paper_execution_enabled": False, "official_execution_enabled": False,
+            "live_execution_enabled": False,
+        })
+    return definitions
+
+
 @router.get("/summary")
 def get_strategy_summary(
     strategy_id: str | None = Query(default=None),
@@ -42,7 +79,7 @@ def get_strategy_summary(
     db = SessionLocal()
     try:
         cutoff = datetime.utcnow() - timedelta(days=since_days)
-        definitions = strategy_definitions(db, normalized)
+        definitions = _display_strategy_definitions(db, normalized)
         strategy_data = _load_strategy_data(
             db,
             definitions,
@@ -66,7 +103,7 @@ def get_strategy_summary(
             "one_active_trade_per_symbol": True,
             "ledger_included": include_ledger,
             "strategy_count": len(records),
-            "comparison": _shadow_comparison(records),
+            "comparison": _shadow_comparison([item for item in records if not item.get("read_only")]),
             "records": records,
         }
     finally:
@@ -91,7 +128,7 @@ def get_strategy_ledger(
 
     db = SessionLocal()
     try:
-        definitions = strategy_definitions(db, normalized)
+        definitions = _display_strategy_definitions(db, normalized)
         strategy_data = _load_strategy_ledger_data(
             db,
             definitions,
@@ -154,6 +191,10 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
         cohort_metrics if cohort_metrics.get("metric_version") == "STOP_CAUSE_COHORT_V3"
         else shadow_performance
     )
+    readiness = _forward_test_readiness(readiness_metrics, require_verified_cohort=True)
+    if definition.get("read_only"):
+        candidates = []
+        readiness.update(status="HISTORICAL_READ_ONLY", promotion_candidate=False)
     return {
         **definition,
         "coverage": {
@@ -191,7 +232,7 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
         ],
         "ledger_loaded": ledger_loaded,
         "official_performance": official_performance,
-        "forward_test_readiness": _forward_test_readiness(readiness_metrics, require_verified_cohort=True),
+        "forward_test_readiness": readiness,
         "learning_evaluation": learning_evaluation,
         "candidates": candidates,
     }
@@ -410,6 +451,11 @@ def _strategy_ledger_record_from_data(definition, strategy_data):
     return {
         "id": definition["id"],
         "version": definition["version"],
+        **({
+            "read_only": True, "historical": True, "strategy_type": "HISTORICAL",
+            "status": "RETIRED", "official_execution_enabled": False,
+            "paper_execution_enabled": False, "live_execution_enabled": False,
+        } if definition.get("read_only") else {}),
         "ledger_loaded": True,
         "strategy_paper_lifetime_performance": performance,
         "strategy_paper_wallet": {

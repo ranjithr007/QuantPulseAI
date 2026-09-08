@@ -11,6 +11,12 @@ CORE_FUSION_DECISION_VERSION = "core_fusion_strategy_v1"
 CORE_SIGNAL_STRATEGY_ID = "CORE_SIGNAL"
 CORE_SIGNAL_STRATEGY_VERSION = "core_signal_v1"
 CORE_SIGNAL_DECISION_VERSION = "core_signal_strategy_v1"
+CORE_SIGNAL_ENTRY_STRATEGY_ID = "CORE_SIGNAL_ENTRY"
+CORE_SIGNAL_ENTRY_STRATEGY_VERSION = "core_signal_entry_v1"
+CORE_SIGNAL_ENTRY_DECISION_VERSION = "core_signal_entry_strategy_v1"
+CORE_SIGNAL_EXIT_STRATEGY_ID = "CORE_SIGNAL_EXIT"
+CORE_SIGNAL_EXIT_STRATEGY_VERSION = "core_signal_exit_v1"
+CORE_SIGNAL_EXIT_DECISION_VERSION = "core_signal_exit_strategy_v1"
 MARKET_MOVE_STRATEGY_ID = "MARKET_MOVE"
 MARKET_MOVE_STRATEGY_VERSION = "market_move_v1"
 MARKET_MOVE_DECISION_VERSION = "market_move_strategy_v1"
@@ -20,6 +26,9 @@ REGIME_TREND_STRATEGY_ID = "REGIME_TREND"
 REGIME_TREND_STRATEGY_VERSION = "regime_trend_v1"
 REGIME_TREND_DECISION_VERSION = "regime_trend_strategy_v1"
 REGIME_TREND_ENTRY_STRATEGY_ID = "REGIME_TREND_ENTRY"
+REGIME_TREND_EXIT_STRATEGY_ID = "REGIME_TREND_EXIT"
+REGIME_TREND_EXIT_STRATEGY_VERSION = "regime_trend_exit_v1"
+REGIME_TREND_EXIT_DECISION_VERSION = "regime_trend_exit_strategy_v1"
 ORDERFLOW_SMC_STRATEGY_ID = "ORDERFLOW_SMC"
 ORDERFLOW_SMC_STRATEGY_VERSION = "orderflow_smc_v1"
 ORDERFLOW_SMC_DECISION_VERSION = "orderflow_smc_strategy_v1"
@@ -57,6 +66,39 @@ CORE_SIGNAL_STRATEGY = {
     "official_execution_enabled": True,
 }
 
+CORE_SIGNAL_ENTRY_STRATEGY = {
+    **CORE_SIGNAL_STRATEGY,
+    "id": CORE_SIGNAL_ENTRY_STRATEGY_ID,
+    "version": CORE_SIGNAL_ENTRY_STRATEGY_VERSION,
+    "decision_version": CORE_SIGNAL_ENTRY_DECISION_VERSION,
+    "name": "Core Signal Entry Candidate",
+    "description": (
+        "Entry-only paper experiment: structure-confirmed breakout/retest or "
+        "intact-trend pullback, revalidated at execution. Baseline exits unchanged."
+    ),
+    "strategy_type": "ENTRY_CANDIDATE",
+    "execution_scope": "PAPER_ONLY",
+    "official_execution_enabled": False,
+    "immutable_experiment": True,
+}
+
+CORE_SIGNAL_EXIT_STRATEGY = {
+    **CORE_SIGNAL_STRATEGY,
+    "id": CORE_SIGNAL_EXIT_STRATEGY_ID,
+    "version": CORE_SIGNAL_EXIT_STRATEGY_VERSION,
+    "decision_version": CORE_SIGNAL_EXIT_DECISION_VERSION,
+    "name": "Core Signal Exit Candidate",
+    "description": (
+        "Exit-only paper experiment: unchanged Core Signal entries, initial "
+        "stops, targets and exit policy; continuous trailing starts only after "
+        "a favorable one-risk-unit move."
+    ),
+    "strategy_type": "EXIT_CANDIDATE",
+    "execution_scope": "PAPER_ONLY",
+    "official_execution_enabled": False,
+    "immutable_experiment": True,
+}
+
 MARKET_MOVE_STRATEGY = {
     "id": MARKET_MOVE_STRATEGY_ID,
     "version": MARKET_MOVE_STRATEGY_VERSION,
@@ -82,11 +124,16 @@ MARKET_MOVE_STRATEGY = {
 MARKET_MOVE_ENTRY_STRATEGY = {
     **MARKET_MOVE_STRATEGY,
     "id": MARKET_MOVE_ENTRY_STRATEGY_ID,
-    "version": "market_move_entry_v1",
-    "decision_version": "market_move_entry_strategy_v1",
+    "version": "market_move_entry_v2",
+    "decision_version": "market_move_entry_strategy_v2",
     "name": "Market Move Entry Candidate",
-    "description": "Entry-only paper experiment: tested boundary rejection, directional spot flow and EMA proximity, revalidated at execution. Baseline adaptive exits retained.",
+    "description": (
+        "Entry-only paper experiment: structure-confirmed breakout/retest or "
+        "intact-trend pullback with directional spot flow, revalidated at "
+        "execution. Baseline adaptive exits unchanged."
+    ),
     "strategy_type": "ENTRY_CANDIDATE",
+    "execution_scope": "PAPER_ONLY",
     "official_execution_enabled": False,
     "immutable_experiment": True,
 }
@@ -99,6 +146,7 @@ MARKET_MOVE_EXIT_STRATEGY = {
     "name": "Market Move Exit Candidate",
     "description": "Exit-only paper experiment: unchanged Market Move entries and initial adaptive exits; continuous trailing starts only after a favorable one-risk-unit move.",
     "strategy_type": "EXIT_CANDIDATE",
+    "execution_scope": "PAPER_ONLY",
     "official_execution_enabled": False,
     "immutable_experiment": True,
 }
@@ -129,12 +177,35 @@ REGIME_TREND_STRATEGY = {
 REGIME_TREND_ENTRY_STRATEGY = {
     **REGIME_TREND_STRATEGY,
     "id": REGIME_TREND_ENTRY_STRATEGY_ID,
-    "version": "regime_trend_entry_v1",
-    "decision_version": "regime_trend_entry_strategy_v1",
+    "version": "regime_trend_entry_v2",
+    "decision_version": "regime_trend_entry_strategy_v2",
     "name": "Regime Trend Entry Candidate",
-    "description": "Trend-only Feature/Regime alignment with tested boundary rejection, EMA and spot CVD confirmation. Original exits retained for entry-only comparison.",
+    "description": (
+        "Entry-only paper experiment: aligned Feature/Regime evidence with a "
+        "structure-confirmed breakout/retest or intact-trend pullback, "
+        "revalidated at execution. Baseline exits unchanged."
+    ),
     "strategy_type": "ENTRY_CANDIDATE",
+    "execution_scope": "PAPER_ONLY",
     "official_execution_enabled": False,
+    "immutable_experiment": True,
+}
+
+REGIME_TREND_EXIT_STRATEGY = {
+    **REGIME_TREND_STRATEGY,
+    "id": REGIME_TREND_EXIT_STRATEGY_ID,
+    "version": REGIME_TREND_EXIT_STRATEGY_VERSION,
+    "decision_version": REGIME_TREND_EXIT_DECISION_VERSION,
+    "name": "Regime Trend Exit Candidate",
+    "description": (
+        "Exit-only paper experiment: unchanged Regime Trend entries, initial "
+        "stops, targets and exit policy; continuous trailing starts only after "
+        "a favorable one-risk-unit move."
+    ),
+    "strategy_type": "EXIT_CANDIDATE",
+    "execution_scope": "PAPER_ONLY",
+    "official_execution_enabled": False,
+    "immutable_experiment": True,
 }
 
 ORDERFLOW_SMC_STRATEGY = {
@@ -253,11 +324,14 @@ RANGE_REVERSION_STRATEGY = {
 
 STRATEGY_REGISTRY = {
     CORE_SIGNAL_STRATEGY_ID: CORE_SIGNAL_STRATEGY,
+    CORE_SIGNAL_ENTRY_STRATEGY_ID: CORE_SIGNAL_ENTRY_STRATEGY,
+    CORE_SIGNAL_EXIT_STRATEGY_ID: CORE_SIGNAL_EXIT_STRATEGY,
     MARKET_MOVE_STRATEGY_ID: MARKET_MOVE_STRATEGY,
     MARKET_MOVE_ENTRY_STRATEGY_ID: MARKET_MOVE_ENTRY_STRATEGY,
     MARKET_MOVE_EXIT_STRATEGY_ID: MARKET_MOVE_EXIT_STRATEGY,
     REGIME_TREND_STRATEGY_ID: REGIME_TREND_STRATEGY,
     REGIME_TREND_ENTRY_STRATEGY_ID: REGIME_TREND_ENTRY_STRATEGY,
+    REGIME_TREND_EXIT_STRATEGY_ID: REGIME_TREND_EXIT_STRATEGY,
     ORDERFLOW_SMC_STRATEGY_ID: ORDERFLOW_SMC_STRATEGY,
     LIQUIDATION_CARRY_STRATEGY_ID: LIQUIDATION_CARRY_STRATEGY,
     CORE_FUSION_STRATEGY_ID: CORE_FUSION_STRATEGY,

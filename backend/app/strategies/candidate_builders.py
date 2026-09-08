@@ -43,12 +43,13 @@ def build_range_reversion_payload(core_payload, market_participation):
     )
 
 
-def build_regime_trend_payload(core_payload):
+def build_regime_trend_payload(core_payload, *, structure_gate=None):
     return _build_component_payload(
         core_payload,
         label="Regime Trend",
         required_components=("feature", "regime"),
         maximum_component_total=49.0,
+        entry_gate=(lambda item: {**item, "structure_entry_allowed": structure_gate(item, _side(item.get("score")))}) if structure_gate else None,
     )
 
 
@@ -484,6 +485,7 @@ def _build_component_payload(
         item
         for item in timeframes
         if item.get("status") == "OK" and _side(item.get("score"))
+        and item.get("structure_entry_allowed") is not False
     ]
     selected = max(actionable, key=_candidate_rank, default=None)
     blocked_reasons = []

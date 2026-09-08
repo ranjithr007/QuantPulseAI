@@ -21,7 +21,7 @@ def _evidence(side="LONG"):
 
 
 def _candidate(side="LONG"):
-    return {"side": side, "trade_plan": {"strategy_id": "MARKET_MOVE_ENTRY", "side": side},
+    return {"side": side, "trade_plan": {"strategy_id": "MARKET_MOVE_ENTRY", "strategy_version": "market_move_entry_v1", "side": side},
             "entry_quality": _evidence(side)}
 
 

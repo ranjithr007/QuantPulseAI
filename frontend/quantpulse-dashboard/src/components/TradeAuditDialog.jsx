@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import ExitPolicyEvidence from "./ExitPolicyEvidence";
 import { formatDate, formatInr, formatPrice } from "../utils/formatters";
 import { EXIT_CLASSIFICATIONS, recordedNumber, tradeExitClassification } from "../utils/tradeAudit";
+import { entryStructureEvidence } from "../utils/entryStructureEvidence";
+import { trailingActivationLabel } from "../utils/exitPolicyEvidence";
 
 const missing = "Not recorded";
 const percentage = (value) => recordedNumber(value) == null ? missing : `${Number(value).toFixed(3)}%`;
@@ -21,6 +23,7 @@ export default function TradeAuditDialog({ trade, onClose, ledgerLabel = "Consol
   const observation = exit.observations || {};
   const sizing = trade.paper_sizing || {};
   const riskSizing = entry.risk_sizing || {};
+  const structure = entryStructureEvidence(trade);
   return (
     <dialog ref={dialogRef} onCancel={onClose} aria-labelledby="trade-audit-title"
       className="fixed inset-0 m-auto max-h-[85vh] w-[min(760px,95vw)] overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-5 text-slate-200 shadow-xl backdrop:bg-slate-950/50">
@@ -34,7 +37,7 @@ export default function TradeAuditDialog({ trade, onClose, ledgerLabel = "Consol
         <AuditDatum label="Exit classification" value={EXIT_CLASSIFICATIONS[tradeExitClassification(trade)]} />
         <AuditDatum label="Opened (IST)" value={date(trade.opened_at || trade.created_at)} />
         <AuditDatum label="Closed (IST)" value={date(trade.closed_at)} />
-        <AuditDatum label="Trailing activation" value={recordedNumber(trade.trailing_activation_r) == null ? missing : `${trade.trailing_activation_r}R`} />
+        <AuditDatum label="Trailing activation" value={trailingActivationLabel(trade)} />
         <ExitPolicyEvidence trade={trade} />
       </AuditGroup>
       <AuditGroup title="Entry execution evidence">
@@ -52,6 +55,17 @@ export default function TradeAuditDialog({ trade, onClose, ledgerLabel = "Consol
         <AuditDatum label="Intended risk budget" value={`${money(riskSizing.risk_budget_inr)} / ${percentage(riskSizing.risk_budget_percent)}`} />
         <AuditDatum label="Estimated loss at stop" value={money(riskSizing.estimated_max_loss_inr)} />
         <p className="col-span-full text-xs text-slate-500">Risk sizing is an estimate, not a guaranteed maximum loss; gaps, slippage and funding can differ from the modeled reserve.</p>
+      </AuditGroup>
+      <AuditGroup title="Recorded entry structure">
+        {!structure.hasStructureEvidence ? <p className="col-span-full text-xs text-amber-300">Structure evidence was not recorded for this trade. Historical and baseline entries are not retroactively classified as structure-confirmed.</p> : null}
+        <AuditDatum label="Entry quality profile" value={structure.profile || missing} />
+        <AuditDatum label="Entry quality gate" value={structure.qualityPassed === true ? "Passed (recorded)" : structure.qualityPassed === false ? "Failed (recorded)" : missing} />
+        <AuditDatum label="Setup type" value={structure.setupType || missing} />
+        <AuditDatum label="Structure timeframe" value={structure.timeframe || missing} />
+        <AuditDatum label="Confirmation candle closed (IST)" value={date(structure.closedAt)} />
+        <AuditDatum label="Structure level" value={price(structure.level)} />
+        <AuditDatum label="Structure invalidation level" value={price(structure.invalidationLevel)} />
+        <p className="col-span-full text-xs text-slate-500">A bullish or bearish score indicates direction, not a confirmed entry. These values reflect evidence saved at execution, not the current chart.</p>
       </AuditGroup>
       <AuditGroup title="Exit execution evidence">
         {!Object.keys(exit).length ? <p className="col-span-full text-xs text-amber-300">Exit trigger evidence unavailable for this historical trade. This loss cannot be assigned to entry quality or trailing from the summary alone.</p> : null}
