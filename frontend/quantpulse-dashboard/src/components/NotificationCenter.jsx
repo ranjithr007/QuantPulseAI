@@ -18,6 +18,7 @@ import {
 } from "../hooks/dashboardApi";
 import { formatTimeInIst } from "../utils/formatters";
 import { notificationHref } from "../utils/notificationLinks";
+import { requestFailureMessage, retryDelay } from "../utils/requestRecovery";
 
 
 const POLL_INTERVAL_MS = 30000;
@@ -29,30 +30,37 @@ export default function NotificationCenter({ getPageHref, view }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [countError, setCountError] = useState("");
+  const shownError = error || countError;
 
   const refreshRecords = useCallback(async (signal) => {
     setLoading(true);
     try {
       const payload = await loadNotifications({ limit: 50, signal });
+      if (signal?.aborted) return null;
       setRecords(Array.isArray(payload?.records) ? payload.records : []);
       setUnreadCount(Number(payload?.unreadCount || 0));
       setError("");
+      return null;
     } catch (requestError) {
-      if (requestError?.name !== "AbortError") {
-        setError("Notifications are temporarily unavailable.");
+      if (!signal?.aborted && requestError?.name !== "AbortError") {
+        setError(requestFailureMessage(requestError, "Notifications"));
       }
+      return requestError;
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, []);
 
   const refreshUnreadCount = useCallback(async (signal) => {
     try {
       const payload = await loadNotificationUnreadCount({ signal });
+      if (signal?.aborted) return;
       setUnreadCount(Number(payload?.unreadCount || 0));
+      setCountError("");
     } catch (requestError) {
-      if (requestError?.name !== "AbortError") {
-        setError("Notifications are temporarily unavailable.");
+      if (!signal?.aborted && requestError?.name !== "AbortError") {
+        setCountError(requestFailureMessage(requestError, "Notification count"));
       }
     }
   }, []);
@@ -101,9 +109,40 @@ export default function NotificationCenter({ getPageHref, view }) {
 
   useEffect(() => {
     if (!open) return undefined;
-    const controller = new AbortController();
-    refreshRecords(controller.signal);
-    return () => controller.abort();
+    let controller;
+    let timer;
+    let stopped = false;
+    let inFlight = false;
+    let failures = 0;
+    const poll = async () => {
+      if (stopped || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      controller = new AbortController();
+      const failure = await refreshRecords(controller.signal);
+      inFlight = false;
+      if (stopped) return;
+      if (controller.signal.aborted) {
+        if (document.visibilityState !== "hidden") timer = window.setTimeout(poll, POLL_INTERVAL_MS);
+        return;
+      }
+      const delay = failure ? retryDelay(failure, ++failures) : POLL_INTERVAL_MS;
+      if (!failure) failures = 0;
+      if (failure && delay != null) setError(`${requestFailureMessage(failure, "Notifications")} Retrying automatically in ${delay / 1000} seconds.`);
+      if (delay != null) timer = window.setTimeout(poll, delay);
+    };
+    const onVisibility = () => {
+      window.clearTimeout(timer);
+      if (document.visibilityState === "hidden") controller?.abort();
+      else poll();
+    };
+    poll();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      controller?.abort();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [open, refreshRecords]);
 
   const markRead = useCallback(async (notification) => {
@@ -162,7 +201,7 @@ export default function NotificationCenter({ getPageHref, view }) {
             <div>
               <div className="text-sm font-semibold text-white">Notifications</div>
               <div className="text-xs text-slate-500">
-                {unreadCount ? `${unreadCount} unread` : "You are up to date"}
+                {shownError ? "Notification refresh unavailable" : unreadCount ? `${unreadCount} unread` : "You are up to date"}
               </div>
             </div>
             <div className="flex items-center gap-1">
@@ -187,11 +226,11 @@ export default function NotificationCenter({ getPageHref, view }) {
           </div>
 
           <div className="max-h-[min(72vh,620px)] overflow-y-auto qp-scrollbar">
-            {loading ? (
+            {shownError && <div role="alert" className="px-4 py-3 text-sm text-amber-300">{shownError}{records.length > 0 ? " Showing previously loaded notifications." : ""}</div>}
+            {loading && !records.length ? (
               <div className="px-4 py-8 text-center text-sm text-slate-500">Loading notifications...</div>
-            ) : error && !records.length ? (
-              <div className="px-4 py-8 text-center text-sm text-amber-300">{error}</div>
-            ) : !records.length ? (
+            ) : shownError && !records.length ? null
+            : !records.length ? (
               <div className="px-4 py-10 text-center">
                 <Bell className="mx-auto h-6 w-6 text-slate-600" />
                 <div className="mt-2 text-sm text-slate-400">No notifications yet</div>

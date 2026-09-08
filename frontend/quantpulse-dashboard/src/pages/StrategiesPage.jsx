@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { loadStrategyLedger, loadStrategySummary } from "../hooks/dashboardApi";
 import { formatPercent, formatSigned, formatTimeInIst } from "../utils/formatters";
+import { requestFailureMessage, retryDelay } from "../utils/requestRecovery";
+import { startVisiblePolling } from "../utils/visiblePolling";
 
 const STRATEGY_GRID_PAGE_SIZE = 5;
 
@@ -26,53 +28,66 @@ export default function StrategiesPage() {
   const [error, setError] = useState("");
   const [ledgerError, setLedgerError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [summaryLoadedAt, setSummaryLoadedAt] = useState(null);
+  const [ledgerLoadedAt, setLedgerLoadedAt] = useState(null);
+  const [now, setNow] = useState(Date.now());
+  const [paused, setPaused] = useState(document.visibilityState === "hidden");
   const records = payload?.records || [];
   const initialLoading = loading && !records.length;
 
   useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    setLoading(true);
-    setLedgerLoading(true);
-    setError("");
-    setLedgerError("");
-
-    async function loadPage() {
+    let failures = 0;
+    return startVisiblePolling(async (signal) => {
+      setLoading(true);
+      setLedgerLoading(true);
+      let section = "summary";
       try {
         const response = await loadStrategySummary({
           includeLedger: false,
-          signal: controller.signal,
+          signal,
         });
-        if (!active) return;
+        if (signal.aborted) return null;
         setPayload((current) => preserveLoadedLedger(response, current));
+        setSummaryLoadedAt(Date.now());
+        setError("");
         setLoading(false);
-
-        try {
-          const ledger = await loadStrategyLedger({ signal: controller.signal });
-          if (active) setPayload((current) => mergeStrategyLedger(current, ledger));
-        } catch (requestError) {
-          if (active && requestError?.name !== "AbortError") {
-            setLedgerError(requestError?.message || "Strategy Paper history is unavailable");
-          }
-        } finally {
-          if (active) setLedgerLoading(false);
-        }
+        section = "ledger";
+        const ledger = await loadStrategyLedger({ signal });
+        if (signal.aborted) return null;
+        setPayload((current) => mergeStrategyLedger(current, ledger));
+        setLedgerLoadedAt(Date.now());
+        setLedgerError("");
+        failures = 0;
+        return 60000;
       } catch (requestError) {
-        if (active && requestError?.name !== "AbortError") {
-          setError(requestError?.message || "Strategy performance is unavailable");
-        }
-        if (active) setLedgerLoading(false);
+        if (signal.aborted) return null;
+        const delay = retryDelay(requestError, ++failures);
+        const message = requestFailureMessage(requestError, section === "summary" ? "Strategy decisions" : "Strategy Paper history");
+        (section === "summary" ? setError : setLedgerError)(message + (delay != null ? ` Retrying automatically in ${delay / 1000} seconds.` : ""));
+        return delay;
       } finally {
-        if (active) setLoading(false);
+        if (!signal.aborted) {
+          setLoading(false);
+          setLedgerLoading(false);
+          setNow(Date.now());
+        }
       }
-    }
-
-    loadPage();
-    return () => {
-      active = false;
-      controller.abort();
-    };
+    });
   }, [refreshKey]);
+
+  useEffect(() => {
+    let timer;
+    const update = () => {
+      window.clearInterval(timer);
+      const hidden = document.visibilityState === "hidden";
+      setPaused(hidden);
+      setNow(Date.now());
+      if (!hidden) timer = window.setInterval(() => setNow(Date.now()), 15000);
+    };
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", update); };
+  }, []);
 
   return (
     <section className="border-b border-white/5">
@@ -88,12 +103,19 @@ export default function StrategiesPage() {
           <button
             type="button"
             onClick={() => setRefreshKey((value) => value + 1)}
-            disabled={loading}
-            aria-busy={loading}
+            disabled={loading || ledgerLoading}
+            aria-busy={loading || ledgerLoading}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-900 px-3 text-sm text-slate-200 hover:border-cyan-400/30 disabled:cursor-wait disabled:opacity-60"
           >
             <RefreshCw className={clsx("h-4 w-4", loading && "animate-spin")} /> {loading ? "Refreshing…" : "Refresh"}
           </button>
+        </div>
+
+        <div role="status" className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          {paused ? "Automatic refresh paused while hidden." : "Automatic refresh every 60 seconds after each completed cycle."}
+          <span className="ml-2">Decisions loaded: {summaryLoadedAt ? formatTimeInIst(summaryLoadedAt) : "Not yet loaded"}{summaryLoadedAt && (error || now - summaryLoadedAt > 120000) ? " · STALE DISPLAY" : ""}.</span>
+          <span className="ml-2">Wallet/history loaded: {ledgerLoadedAt ? formatTimeInIst(ledgerLoadedAt) : "Not yet loaded"}{ledgerLoadedAt && (ledgerError || now - ledgerLoadedAt > 120000) ? " · STALE DISPLAY" : ""}.</span>
+          <span className="mt-1 block">These are page retrieval times, not signal generation times. Check each candidate’s Evaluated IST timestamp for evidence freshness.</span>
         </div>
 
         <div className="mt-3 rounded-lg border border-cyan-400/15 bg-cyan-500/5 px-3 py-2 text-xs leading-relaxed text-slate-400">

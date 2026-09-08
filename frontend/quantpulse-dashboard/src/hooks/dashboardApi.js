@@ -619,7 +619,9 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
       if (response.status === 401) {
         window.dispatchEvent(new Event("quantpulse:unauthorized"));
       }
-      throw new Error(`${url.pathname} returned ${response.status}${text ? ` - ${text.slice(0, 500)}` : ""}`);
+      const failure = new Error(`${url.pathname} returned ${response.status}${text ? ` - ${text.slice(0, 500)}` : ""}`);
+      failure.status = response.status;
+      throw failure;
     }
 
     // Keep timeout/cancellation active until the body is fully read, not merely
@@ -627,7 +629,10 @@ async function requestJson(path, params = {}, signal, timeoutMs = 60000, method 
     return await response.json();
   } catch (requestError) {
     if (requestTimedOut && requestError?.name === "AbortError") {
-      throw new Error(`${url.pathname} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+      const failure = new Error(`${url.pathname} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+      failure.code = "REQUEST_TIMEOUT";
+      failure.timeoutSeconds = Math.round(timeoutMs / 1000);
+      throw failure;
     }
     throw requestError;
   } finally {

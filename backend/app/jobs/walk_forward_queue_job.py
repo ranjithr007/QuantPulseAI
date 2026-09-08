@@ -1,6 +1,7 @@
 """Worker-side scheduler and processor for durable walk-forward validation."""
 
 import json
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy import func
@@ -8,6 +9,7 @@ from sqlalchemy import func
 from app.backtesting.walk_forward_jobs import claim_next_walk_forward_job
 from app.backtesting.walk_forward_jobs import create_automatic_walk_forward_job
 from app.backtesting.walk_forward_jobs import load_walk_forward_job
+from app.backtesting.walk_forward_jobs import purge_expired_walk_forward_jobs
 from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.backtesting.walk_forward_validator import PHASE2_WALK_FORWARD_DAYS
 from app.backtesting.walk_forward_validator import minimum_candles_for_folds
@@ -37,7 +39,21 @@ TIMEFRAME_SECONDS = {
 }
 
 
+_last_retention_at = None
+
+
 def run_walk_forward_queue_job():
+    global _last_retention_at
+    try:
+        return _process_walk_forward_queue()
+    finally:
+        checked_at = time.monotonic()
+        if _last_retention_at is None or checked_at - _last_retention_at >= 3600:
+            _last_retention_at = checked_at
+            purge_expired_walk_forward_jobs()
+
+
+def _process_walk_forward_queue():
     record = claim_next_walk_forward_job()
     scheduled = None
     scheduling_error = None

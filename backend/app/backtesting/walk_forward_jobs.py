@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -50,15 +51,9 @@ def create_walk_forward_job(parameters, *, now=None):
                 raise
             return _record(concurrent), False
         db.refresh(existing)
-        created_record = _record(existing)
-        try:
-            _purge_expired_jobs(db, created_at)
-            commit_or_rollback(db)
-        except SQLAlchemyError:
-            # Retention is best-effort and must never prevent a validation from
-            # being submitted after the job itself has committed successfully.
-            db.rollback()
-        return created_record, True
+        # Submission only persists the job. Retention belongs to the worker:
+        # even best-effort DELETEs can wait on locks before returning to the UI.
+        return _record(existing), True
     finally:
         db.close()
 
@@ -493,6 +488,23 @@ def _stale_job_reason(record, now):
         f"{int(age_seconds)} seconds, likely because the process restarted. "
         "Retry the validation."
     )
+
+
+def purge_expired_walk_forward_jobs(*, now=None):
+    """Bounded worker maintenance, never part of the HTTP submission path."""
+    db = SessionLocal()
+    try:
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SET LOCAL lock_timeout = '1s'"))
+            db.execute(text("SET LOCAL statement_timeout = '5s'"))
+        removed = _purge_expired_jobs(db, _utc_now(now))
+        commit_or_rollback(db)
+        return removed
+    except SQLAlchemyError:
+        db.rollback()
+        return 0
+    finally:
+        db.close()
 
 
 def _purge_expired_jobs(db, now):

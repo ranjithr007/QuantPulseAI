@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadStrategyComparison } from "../hooks/dashboardApi";
+import { requestFailureMessage, retryDelay } from "../utils/requestRecovery";
 
 const money = (value) => value == null ? "—" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value);
 const date = (value) => new Date(value).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
@@ -7,6 +8,7 @@ const date = (value) => new Date(value).toLocaleString("en-IN", { timeZone: "Asi
 export default function StrategyBacktestComparison({ symbol }) {
   const [days, setDays] = useState(7);
   const [job, setJob] = useState(null);
+  const [report, setReport] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState("");
   const [page, setPage] = useState(0);
@@ -14,28 +16,34 @@ export default function StrategyBacktestComparison({ symbol }) {
     if (!symbol) return;
     const controller = new AbortController();
     let timer;
-    setJob(null); setError(""); setSelected(""); setPage(0);
+    let failures = 0;
+    setJob(null); setReport(null); setError(""); setSelected(""); setPage(0);
     async function refresh(jobId) {
       try {
         const result = await loadStrategyComparison({ symbol, days, jobId, signal: controller.signal });
         if (controller.signal.aborted) return;
         setJob(result);
         setError("");
-        if (result.status === "COMPLETED") setPage(0);
+        failures = 0;
+        if (result.status === "COMPLETED") { setReport(result.response); setPage(0); }
         if (result.status === "FAILED") {
-          setError(result.error || "The replay failed. Try a shorter period.");
+          setError("The background replay failed. Automatic refresh will retry in one hour; any previous result below is retained.");
+          timer = setTimeout(() => refresh(), 3600000);
           return;
         }
         timer = setTimeout(() => refresh(result.status === "COMPLETED" ? undefined : result.job_id), result.status === "COMPLETED" ? 3600000 : 5000);
       } catch (failure) {
         if (controller.signal.aborted) return;
-        setError(failure.message);
+        const delay = retryDelay(failure, ++failures);
+        setError(`${requestFailureMessage(failure, "Strategy replay")}${delay == null ? "" : ` Retrying automatically in ${delay / 1000} seconds; any previous result below is retained.`}`);
+        // A timed-out POST may already have queued the job; the server reuses
+        // the scope. Once an ID is known, retry its GET rather than resubmitting.
+        if (delay != null) timer = setTimeout(() => refresh(jobId), delay);
       }
     }
     refresh();
     return () => { controller.abort(); clearTimeout(timer); };
   }, [symbol, days]);
-  const report = job?.response;
   const results = report?.results || [];
   const key = (item) => `${item.strategy_id}:${item.version}`;
   const detail = results.find((item) => key(item) === selected) || results[0];
@@ -53,6 +61,7 @@ export default function StrategyBacktestComparison({ symbol }) {
     {!report && !error && <p role="status" className="mt-3">{job?.status || "Requesting"} — background strategy comparison…</p>}
     {report && <>
       <p className="my-3 text-sm">{date(report.start)} – {date(report.end)} IST · {report.price_bars} verified 5m bars ({report.price_coverage_percent}% price coverage) · {report.venue || "No price venue"}<br />{money(report.initial_capital_inr)} per version · {report.notional_percent}% notional · {report.fee_bps_per_side} bps fee per side</p>
+      {job?.status !== "COMPLETED" && <p role="status" className="my-2 text-sm text-slate-600">Showing the previous completed replay while the automatic refresh is {job?.status?.toLowerCase() || "pending"}.</p>}
       {report.last_price_at && <p className="mb-2 text-xs text-slate-600">Last stored price candle: {date(report.last_price_at)} IST</p>}
       <div className="overflow-x-auto"><table className="w-full text-left text-sm">
         <thead><tr>{["Strategy / version", "Coverage", "Decisions / eligible", "Closed / open", "Win rate", "PNL before funding", "T1 / T2 / stop", "Profit factor", "Realized DD"].map((label) => <th key={label} className="border-b p-2">{label}</th>)}</tr></thead>

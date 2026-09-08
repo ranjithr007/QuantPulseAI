@@ -474,7 +474,7 @@ def test_abandoned_running_job_expires_but_recent_job_does_not(monkeypatch, tmp_
     assert "abandoned while running" in expired["error"]
 
 
-def test_new_submission_purges_only_expired_terminal_jobs(monkeypatch, tmp_path):
+def test_submission_does_not_purge_and_worker_purges_only_expired_terminal_jobs(monkeypatch, tmp_path):
     _client(monkeypatch, tmp_path)
     old = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
     now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
@@ -503,10 +503,44 @@ def test_new_submission_purges_only_expired_terminal_jobs(monkeypatch, tmp_path)
     )
 
     assert created is True
+    # HTTP submission returns without retention queries or DELETE locks.
+    assert walk_forward_jobs.load_walk_forward_job(completed["job_id"]) is not None
+    assert walk_forward_jobs.load_walk_forward_job(failed["job_id"]) is not None
+    assert walk_forward_jobs.purge_expired_walk_forward_jobs(now=now) == 2
     assert walk_forward_jobs.load_walk_forward_job(completed["job_id"]) is None
     assert walk_forward_jobs.load_walk_forward_job(failed["job_id"]) is None
     assert walk_forward_jobs.load_walk_forward_job(running["job_id"])["status"] == "RUNNING"
     assert walk_forward_jobs.load_walk_forward_job(current["job_id"])["status"] == "QUEUED"
+
+
+def test_retention_failure_does_not_prevent_submission(monkeypatch, tmp_path):
+    from sqlalchemy.exc import SQLAlchemyError
+    _client(monkeypatch, tmp_path)
+    calls = []
+
+    def failing_cleanup(*args):
+        calls.append(True)
+        raise SQLAlchemyError("locked")
+
+    monkeypatch.setattr(walk_forward_jobs, "_purge_expired_jobs", failing_cleanup)
+    record, created = walk_forward_jobs.create_walk_forward_job({"symbol": "BNBUSDT"})
+    assert created and record["status"] == "QUEUED"
+    assert calls == []
+    assert walk_forward_jobs.purge_expired_walk_forward_jobs() == 0
+    assert calls == [True]
+    assert walk_forward_jobs.load_walk_forward_job(record["job_id"])["status"] == "QUEUED"
+
+
+def test_worker_retention_runs_at_most_hourly(monkeypatch):
+    calls = []
+    monkeypatch.setattr(walk_forward_queue_job, "_last_retention_at", None)
+    monkeypatch.setattr(walk_forward_queue_job, "_process_walk_forward_queue", lambda: {"status": "IDLE"})
+    monkeypatch.setattr(walk_forward_queue_job, "purge_expired_walk_forward_jobs", lambda: calls.append(True))
+    ticks = iter([100, 101, 3699, 3700])
+    monkeypatch.setattr(walk_forward_queue_job.time, "monotonic", lambda: next(ticks))
+    for _ in range(4):
+        assert run_walk_forward_queue_job()["status"] == "IDLE"
+    assert len(calls) == 2
 
 
 def test_synchronous_walk_forward_is_retired_without_executing(monkeypatch, tmp_path):
