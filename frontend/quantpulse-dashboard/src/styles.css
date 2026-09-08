@@ -228,6 +228,65 @@ select:focus-visible {
   border-color: #e4eaf2;
 }
 
+/* Replay uses a light surface directly: legacy white/slate utilities above
+   are inverted for older dashboard components and must not darken this card. */
+.qp-replay-panel {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.qp-replay-panel select {
+  color: var(--text);
+  background: var(--panel);
+  border-color: #c8d3e1;
+}
+
+.qp-replay-panel .text-slate-600,
+.qp-replay-panel .text-slate-500 {
+  color: #52647a;
+}
+
+.qp-replay-panel .text-blue-700 {
+  color: #1d4ed8;
+  text-underline-offset: 3px;
+}
+
+.qp-replay-panel .text-amber-700 {
+  color: #92400e;
+}
+
+.qp-replay-panel .text-red-700 {
+  color: #b91c1c;
+}
+
+.qp-replay-panel table {
+  border-collapse: collapse;
+}
+
+.qp-replay-panel th {
+  background: var(--panel-2);
+  color: #40516a;
+  white-space: nowrap;
+}
+
+.qp-replay-panel th,
+.qp-replay-panel tr,
+.qp-replay-panel .rounded.border {
+  border-color: var(--line);
+}
+
+.qp-replay-panel tbody tr:hover,
+.qp-replay-panel div.rounded.border {
+  background: var(--panel-2);
+}
+
+.qp-replay-panel button:disabled {
+  color: #64748b;
+  cursor: not-allowed;
+}
+
 .qp-main .rounded-lg.border:not(button):not(input):not(select),
 .qp-metric-card {
   border-color: #e0e7f0;

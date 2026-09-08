@@ -41,10 +41,10 @@ export default function StrategyBacktestComparison({ symbol }) {
   const detail = results.find((item) => key(item) === selected) || results[0];
   const trades = [...(detail?.trades || [])].reverse();
   const pages = Math.max(1, Math.ceil(trades.length / 10));
-  return <section className="my-5 rounded-xl border border-slate-300 bg-white p-4 text-slate-800" aria-label="All strategies backtest">
+  return <section className="qp-replay-panel my-5 rounded-xl border p-4" aria-label="All strategies backtest">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h3 className="text-lg font-semibold">All strategies · {symbol}</h3><p className="text-sm text-slate-600">Recorded decision replay · each strategy/version tested independently across 1h, 2h, 4h and 1d.</p></div>
-      <label className="text-sm">Period <select aria-label="Strategy replay period" className="rounded border border-slate-300 bg-white p-2" value={days} onChange={(event) => { setJob(null); setDays(Number(event.target.value)); }}>
+      <label className="text-sm">Period <select aria-label="Strategy replay period" className="rounded border p-2" value={days} onChange={(event) => { setJob(null); setDays(Number(event.target.value)); }}>
         {[1, 7, 14, 30].map((value) => <option key={value} value={value}>Last {value} day{value > 1 ? "s" : ""}</option>)}
       </select></label>
     </div>
