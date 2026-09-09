@@ -6,11 +6,16 @@ Run from the backend directory (or `/app` in a deployed worker containing it):
 ```sh
 python scripts/check_matched_exit_replay.py --book strategy --days 7 --per-strategy 30
 python scripts/check_matched_exit_replay.py --book consolidated --days 7 --trade-id 411
+python scripts/check_matched_exit_replay.py --book strategy --days 7 --per-strategy 30 --summary-only
 ```
 
 The report goes to stdout. PostgreSQL transactions are read-only with bounded
 query/lock timeouts and released before replay computation. No API, scheduler,
 database schema, orders, strategy settings, or saved learning reports are changed.
+Use `--summary-only` for a compact terminal report: it retains selection coverage,
+paired-trade counts, exclusions, assumptions and policy summaries, and omits only
+the detailed per-trade rows. `trade_details_count` records how many rows were
+omitted, and `trade_details_included` makes the output scope explicit.
 
 Each selected entry is replayed independently with its recorded fill, initial stop,
 targets, partial fraction, holding limit, fee rate and INR notional. Selection is

@@ -4,6 +4,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from app.backtesting.matched_exit_replay import compare_records, replay_trade
+from scripts.check_matched_exit_replay import build_output_payload
 
 START = datetime(2026, 9, 1)
 
@@ -106,3 +107,26 @@ def test_deterministic_report_and_before_funding_label():
     assert a["status"] == "APPROXIMATE_BEFORE_FUNDING"
     assert len(a["summary"]) == 3
     assert a["summary"][0]["paired_trades"] == 1
+
+
+def test_summary_output_keeps_audit_fields_and_omits_only_trade_rows():
+    report = compare_records([trade()], {"TEST": bars()})
+    compact = build_output_payload(report, summary_only=True)
+
+    assert "trades" not in compact
+    assert compact["trade_details_count"] == 1
+    assert compact["trade_details_included"] is False
+    assert compact["paired_trades"] == report["paired_trades"]
+    assert compact["exclusions"] == report["exclusions"]
+    assert compact["assumptions"] == report["assumptions"]
+    assert compact["summary"] == report["summary"]
+    assert len(report["trades"]) == 1  # Presentation must not mutate the canonical report.
+
+
+def test_full_output_retains_trade_rows_and_labels_them():
+    report = compare_records([trade()], {"TEST": bars()})
+    full = build_output_payload(report)
+
+    assert full["trades"] == report["trades"]
+    assert full["trade_details_count"] == 1
+    assert full["trade_details_included"] is True

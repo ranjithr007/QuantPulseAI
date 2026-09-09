@@ -9,6 +9,17 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+def build_output_payload(report, *, summary_only=False):
+    """Return a presentation copy without mutating the replay report."""
+    payload = dict(report)
+    trades = payload.get("trades") or []
+    payload["trade_details_count"] = len(trades)
+    payload["trade_details_included"] = not summary_only
+    if summary_only:
+        payload.pop("trades", None)
+    return payload
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--book", choices=("strategy", "consolidated"), default="strategy")
@@ -16,6 +27,11 @@ def main():
     parser.add_argument("--per-strategy", type=int, choices=range(1, 101), default=30)
     parser.add_argument("--symbol")
     parser.add_argument("--trade-id", type=int)
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Omit per-trade rows while retaining coverage, exclusions, assumptions, and policy summaries.",
+    )
     args = parser.parse_args()
     # Import after parsing: --help works without DB initialization or credentials.
     from sqlalchemy import text
@@ -70,7 +86,7 @@ def main():
     report = compare_records(records, candles)
     report.update(book=args.book, as_of_utc=end.isoformat(), selection="Latest entries per strategy/version, before coverage exclusions; open entries included",
                   venue="BINANCE", requested_per_strategy=args.per_strategy)
-    print(json.dumps(report, indent=2, allow_nan=False))
+    print(json.dumps(build_output_payload(report, summary_only=args.summary_only), indent=2, allow_nan=False))
 
 
 if __name__ == "__main__":
