@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from app.backtesting.matched_exit_replay import compare_records, replay_trade
-from scripts.check_matched_exit_replay import build_output_payload
+from scripts.check_matched_exit_replay import build_output_payload, parse_as_of, select_records
 
 START = datetime(2026, 9, 1)
 
@@ -130,3 +130,81 @@ def test_full_output_retains_trade_rows_and_labels_them():
     assert full["trades"] == report["trades"]
     assert full["trade_details_count"] == 1
     assert full["trade_details_included"] is True
+
+
+def test_cost_decomposition_reconciles_and_gross_does_not_change_with_slippage():
+    record = trade(planned_entry_price=99.9)
+    zero = replay_trade(record, bars(), exit_slippage_bps=0)["IMMEDIATE"]
+    costly = replay_trade(record, bars(), exit_slippage_bps=15)["IMMEDIATE"]
+    zero_costs = zero["cost_decomposition"]
+    costly_costs = costly["cost_decomposition"]
+
+    assert zero_costs["post_fill_gross_return_percent"] == costly_costs["post_fill_gross_return_percent"]
+    assert zero_costs["signal_gross_return_percent"] == costly_costs["signal_gross_return_percent"]
+    assert costly_costs["entry_slippage_cost_percent"] == pytest.approx(.1)
+    assert zero_costs["exit_slippage_cost_percent"] == 0
+    assert costly_costs["exit_slippage_cost_percent"] == pytest.approx(.15)
+    assert costly["return_before_funding_percent"] < zero["return_before_funding_percent"]
+    assert abs(costly_costs["post_fill_reconciliation_error_percent"]) < 1e-8
+    assert abs(costly_costs["signal_reconciliation_error_percent"]) < 1e-8
+
+
+def test_stored_funding_is_path_specific_and_missing_event_is_not_zero():
+    path = bars([106.] * 120)
+    record = trade(max_hold_hours=10, planned_entry_price=100.)
+    event = NS(funding_time=START + timedelta(hours=8), rate=.0001)
+    funded = replay_trade(record, path, funding_events=[event])["IMMEDIATE"]
+    missing = replay_trade(record, path, funding_events=[])["IMMEDIATE"]
+
+    assert funded["cost_decomposition"]["funding_coverage_status"] == "COMPLETE"
+    assert funded["cost_decomposition"]["funding_events_expected"] == 1
+    assert funded["cost_decomposition"]["funding_cost_percent"] == pytest.approx(.0025)
+    assert funded["return_after_funding_percent"] == pytest.approx(
+        funded["return_before_funding_percent"] - .0025
+    )
+    assert missing["cost_decomposition"]["funding_coverage_status"] == "INCOMPLETE"
+    assert missing["cost_decomposition"]["funding_cost_percent"] is None
+    assert missing["return_after_funding_percent"] is None
+
+
+def test_slippage_sensitivity_reprices_net_without_rewriting_gross():
+    report = compare_records(
+        [trade(planned_entry_price=100.)],
+        {"TEST": bars()},
+        slippage_scenarios=(0, 10, 15),
+    )
+    immediate = [row for row in report["slippage_sensitivity"] if row["policy"] == "IMMEDIATE"]
+
+    assert len(immediate) == 3
+    assert len({round(row["average_post_fill_gross_return_percent"], 8) for row in immediate}) == 1
+    assert immediate[0]["average_net_return_before_funding_percent"] > immediate[-1]["average_net_return_before_funding_percent"]
+    assert report["overall_summary"][0]["paired_trades"] == 1
+
+
+def test_report_distinguishes_complete_and_incomplete_funding_coverage():
+    record = trade(max_hold_hours=10, planned_entry_price=100.)
+    path = bars([100.] * 120)
+    event = NS(funding_time=START + timedelta(hours=8), rate=.0001)
+    complete = compare_records([record], {"TEST": path}, {"TEST": [event]})
+    incomplete = compare_records([record], {"TEST": path}, {"TEST": []})
+
+    assert complete["status"] == "RESEARCH_ONLY_AFTER_STORED_FUNDING"
+    assert complete["cost_coverage"]["funding_complete_policy_paths"] == 3
+    assert incomplete["status"] == "RESEARCH_ONLY_PARTIAL_FUNDING_COVERAGE"
+    assert incomplete["cost_coverage"]["funding_complete_policy_paths"] == 0
+    assert incomplete["overall_summary"][0]["average_return_after_funding_percent"] is None
+
+
+def test_mature_selection_is_timestamp_based_and_reproducible():
+    as_of = START + timedelta(hours=48)
+    mature = trade(id=1, opened_at=START - timedelta(hours=1), max_hold_hours=48)
+    immature = trade(id=2, opened_at=START + timedelta(hours=1), max_hold_hours=48)
+    selected, cohort = select_records(
+        [immature, mature], per_strategy=30, as_of=as_of, mature_only=True
+    )
+
+    assert [row.id for row in selected] == [1]
+    assert cohort["source_trades"] == 2
+    assert cohort["immature_trades"] == 1
+    assert cohort["selected_before_path_quality"] == 1
+    assert parse_as_of("2026-09-01T05:30:00+05:30") == START

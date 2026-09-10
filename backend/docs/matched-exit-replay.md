@@ -7,6 +7,8 @@ Run from the backend directory (or `/app` in a deployed worker containing it):
 python scripts/check_matched_exit_replay.py --book strategy --days 7 --per-strategy 30
 python scripts/check_matched_exit_replay.py --book consolidated --days 7 --trade-id 411
 python scripts/check_matched_exit_replay.py --book strategy --days 7 --per-strategy 30 --summary-only
+python scripts/check_matched_exit_replay.py --book strategy --days 14 --per-strategy 100 --mature-only --summary-only
+python scripts/check_matched_exit_replay.py --book strategy --days 14 --per-strategy 100 --mature-only --as-of 2026-09-10T03:15:10Z --summary-only
 ```
 
 The report goes to stdout. PostgreSQL transactions are read-only with bounded
@@ -16,6 +18,33 @@ Use `--summary-only` for a compact terminal report: it retains selection coverag
 paired-trade counts, exclusions, assumptions and policy summaries, and omits only
 the detailed per-trade rows. `trade_details_count` records how many rows were
 omitted, and `trade_details_included` makes the output scope explicit.
+
+## Research V2A cohort and costs
+
+The V2A report is versioned as `matched_exit_sensitivity_v2a`. `--mature-only`
+admits a record only when `opened_at + recorded max_hold_hours <= as_of`, before
+the latest-per-strategy/version cap is applied. This is timestamp eligibility,
+not outcome selection. `--as-of` freezes the UTC boundary for reproducibility.
+The `cohort` object reports source, immature, unknown-maturity, eligible, selected
+and path-complete counts separately.
+
+Every exit leg is decomposed on the recorded entry-notional basis into signal
+gross return, post-fill gross return, modeled entry slippage, modeled exit
+slippage, recorded per-side fees, stored funding cost, and net return. The
+post-fill identity must reconcile to zero apart from rounding. Planned and filled
+prices are paper-model evidence, not actual exchange executions.
+
+The CLI publishes 0/5/10/15bps exit-slippage sensitivity by default. Slippage
+changes net return; it must never change the unslipped post-fill gross return.
+Use `--exit-slippage-bps` to choose the detailed base scenario and
+`--slippage-scenarios` to replace the comparison set.
+
+Stored Binance funding events are matched to regular 00:00/08:00/16:00 UTC
+slots for each alternative holding path. Events after T1 apply only to the
+remaining position fraction. If an expected event is missing, after-funding
+return is `null`, not zero; before-funding results remain available. Exceptional
+venue funding-interval changes are not reconstructed by this version and must be
+treated as a limitation.
 
 Each selected entry is replayed independently with its recorded fill, initial stop,
 targets, partial fraction, holding limit, fee rate and INR notional. Selection is
@@ -37,8 +66,9 @@ entry/deadline-overlap candles use close only and are flagged as ambiguous. A
 deadline inside a candle is approximated by that candle's close (up to 5m late).
 Exit timestamps are candle evidence bounds, not exact crossing timestamps.
 
-Results include fees/slippage but EXCLUDE actual funding: do not call these fully
-net returns. Actual-trade funding cannot be copied to different holding paths.
+Before-funding results include modeled fees/slippage. After-funding results exist
+only for paths with complete stored funding slots; actual-trade funding is never
+copied to a different alternative holding path.
 Profit factor uses equal-notional trade returns; INR means retain recorded sizing.
 Alternative positions may overlap, so this is not an executable account portfolio
 and does not report account drawdown. Giveback includes costs and uses observed
