@@ -2,7 +2,7 @@
 
 Uses final 5m futures OHLC, NOT archived one-second mark ticks. All alternatives
 must have the same complete path through the recorded maximum holding horizon.
-Funding is deliberately unknown rather than copied from an actual shorter trade.
+Funding is matched to stored venue events for each alternative holding path.
 """
 import math
 from collections import Counter, defaultdict
@@ -16,6 +16,7 @@ POLICIES = ("IMMEDIATE", "DELAYED_1R", "PROFIT_PROTECTION")
 STEP = timedelta(minutes=5)
 FUNDING_STEP = timedelta(hours=8)
 FUNDING_MATCH_TOLERANCE = timedelta(minutes=5)
+R_THRESHOLDS = (0.25, 0.5, 1.0)
 
 
 def _positive(value):
@@ -105,6 +106,148 @@ def _path(trade, bars):
     return path
 
 
+def _percentile(values, percentile):
+    """Return a deterministic linearly interpolated percentile."""
+    ordered = sorted(float(value) for value in values if value is not None and math.isfinite(value))
+    if not ordered:
+        return None
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * float(percentile)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _bar_excursions(record, bar):
+    """Return favourable/adverse moves for a validated bar in entry-return units."""
+    sign = 1 if record.side == "LONG" else -1
+    deadline = record.opened_at + timedelta(hours=record.max_hold_hours)
+    overlap = bar.open_time < record.opened_at or bar.close_time > deadline
+    if overlap:
+        high = low = bar.close_price
+    else:
+        high, low = bar.high_price, bar.low_price
+    favourable_price = high if sign == 1 else low
+    adverse_price = low if sign == 1 else high
+    favourable = max(0.0, sign * (favourable_price / record.entry_price - 1))
+    adverse = max(0.0, -sign * (adverse_price / record.entry_price - 1))
+    return favourable, adverse
+
+
+def _full_horizon_excursions(record, path):
+    """Measure frozen-entry geometry over the complete recorded holding horizon."""
+    risk_fraction = abs(record.entry_price - record.initial_stop_loss) / record.entry_price
+    mfe = mae = 0.0
+    mfe_at = None
+    threshold_minutes = {threshold: None for threshold in R_THRESHOLDS}
+    for bar in path:
+        favourable, adverse = _bar_excursions(record, bar)
+        mae = max(mae, adverse)
+        if favourable > mfe:
+            mfe = favourable
+            mfe_at = bar.close_time
+        favourable_r = favourable / risk_fraction
+        elapsed = max(0.0, (bar.close_time - record.opened_at).total_seconds() / 60)
+        for threshold in R_THRESHOLDS:
+            if threshold_minutes[threshold] is None and favourable_r >= threshold:
+                threshold_minutes[threshold] = elapsed
+    return {
+        "mfe_percent": round(mfe * 100, 6),
+        "mae_percent": round(mae * 100, 6),
+        "mfe_r": round(mfe / risk_fraction, 6),
+        "mae_r": round(mae / risk_fraction, 6),
+        "mfe_at": mfe_at.isoformat() if mfe_at is not None else None,
+        "time_to_mfe_minutes": (
+            round(max(0.0, (mfe_at - record.opened_at).total_seconds() / 60), 3)
+            if mfe_at is not None else None
+        ),
+        "time_to_0_25r_minutes": threshold_minutes[0.25],
+        "time_to_0_5r_minutes": threshold_minutes[0.5],
+        "time_to_1r_minutes": threshold_minutes[1.0],
+    }
+
+
+def _exit_taxonomy(events, entry, side):
+    """Classify exits without collapsing every loss into pre-T1 stop."""
+    if not events:
+        return "NO_EXIT"
+    final = events[-1]
+    reason = final["reason"]
+    target1_hit = any(event["reason"] == "TARGET1" for event in events)
+    if reason == "TARGET2":
+        return "TARGET2"
+    if reason == "STOP_AFTER_T1":
+        return "TARGET1_THEN_STOP"
+    if reason == "TIME_EXIT":
+        return "TARGET1_THEN_TIME_EXIT" if target1_hit else "PRE_T1_TIME_EXIT"
+    if reason != "STOP_BEFORE_T1":
+        return reason
+    sign = 1 if side == "LONG" else -1
+    trigger_return = sign * (float(final["trigger"]) / float(entry) - 1)
+    if trigger_return > 1e-9:
+        return "PRE_T1_PROTECTED_PROFIT_STOP"
+    if trigger_return >= -1e-9:
+        return "PRE_T1_BREAKEVEN_STOP"
+    return "INITIAL_OR_ADVERSE_STOP"
+
+
+def _summarize_exit_quality(values):
+    """Summarize entry/exit geometry without using the old 1-win-rate shortcut."""
+    if not values:
+        return {}
+    taxonomies = Counter(value["exit_taxonomy"] for value in values)
+    economics = Counter(value["economic_result"] for value in values)
+    winners = [value for value in values if value["economic_result"] == "WIN"]
+    losers = [value for value in values if value["economic_result"] == "LOSS"]
+    pre_t1_stops = [
+        value for value in values
+        if value["exit_taxonomy"] in {
+            "INITIAL_OR_ADVERSE_STOP",
+            "PRE_T1_BREAKEVEN_STOP",
+            "PRE_T1_PROTECTED_PROFIT_STOP",
+        }
+    ]
+
+    def percentile(items, field, level):
+        value = _percentile((item.get(field) for item in items), level)
+        return round(value, 6) if value is not None else None
+
+    def percentage(numerator, denominator):
+        return round(100 * numerator / denominator, 6) if denominator else None
+
+    recovered = sum(value["recovered_t1_after_pre_t1_stop"] for value in pre_t1_stops)
+    return {
+        "exit_taxonomy_counts": dict(sorted(taxonomies.items())),
+        "economic_result_counts": dict(sorted(economics.items())),
+        "winner_mae_r_p50": percentile(winners, "held_bar_mae_r", 0.50),
+        "winner_mae_r_p75": percentile(winners, "held_bar_mae_r", 0.75),
+        "loser_mfe_r_p50": percentile(losers, "held_bar_mfe_r", 0.50),
+        "loser_mfe_r_p75": percentile(losers, "held_bar_mfe_r", 0.75),
+        "losers_reaching_0_5r_percent": percentage(
+            sum(value["held_bar_mfe_r"] >= 0.5 for value in losers), len(losers)
+        ),
+        "losers_reaching_1r_percent": percentage(
+            sum(value["held_bar_mfe_r"] >= 1.0 for value in losers), len(losers)
+        ),
+        "time_to_held_mfe_minutes_p50": percentile(values, "time_to_held_mfe_minutes", 0.50),
+        "time_to_held_mfe_minutes_p75": percentile(values, "time_to_held_mfe_minutes", 0.75),
+        "giveback_percentage_points_p50": percentile(values, "bar_giveback_percentage_points", 0.50),
+        "giveback_percentage_points_p75": percentile(values, "bar_giveback_percentage_points", 0.75),
+        "pre_t1_stop_count": len(pre_t1_stops),
+        "pre_t1_stops_recovering_to_t1_within_horizon": recovered,
+        "pre_t1_stop_recovery_rate_percent": percentage(recovered, len(pre_t1_stops)),
+        "stop_to_t1_recovery_minutes_p50": percentile(
+            [value for value in pre_t1_stops if value["recovered_t1_after_pre_t1_stop"]],
+            "minutes_from_stop_to_t1_recovery",
+            0.50,
+        ),
+    }
+
+
 def replay_trade(record, bars, *, exit_slippage_bps=10.0,
                  protection_activation_percent=1.0, locked_profit_fraction=.5,
                  funding_reserve_bps=5.0, funding_events=None):
@@ -137,8 +280,10 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
     if fraction is None or not 0 < fraction < 1 or fee_bps is None or not math.isfinite(fee_bps) or not 0 <= fee_bps <= 100:
         raise ValueError("missing_recorded_fraction_or_fees")
     path = _path(record, bars)
+    full_horizon_excursions = _full_horizon_excursions(record, path)
     deadline = record.opened_at + timedelta(hours=record.max_hold_hours)
     sign = 1 if record.side == "LONG" else -1
+    risk_fraction = abs(entry - initial) / entry
     slip, fee = exit_slippage_bps / 10000, fee_bps / 10000
     outcomes = {}
     for policy in POLICIES:
@@ -148,6 +293,8 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
             opened_at=record.opened_at, max_hold_hours=None, exit_policy=record.exit_policy,
             trailing_activation_r=1.0 if policy == "DELAYED_1R" else 0.0)
         remaining, pnl, best, ambiguous = 1.0, 0.0, 0.0, 0
+        held_mfe = held_mae = 0.0
+        held_mfe_at = None
         post_fill_gross = exit_slippage_cost = fee_cost = 0.0
         signal_gross = entry_slippage_cost = 0.0 if planned_entry is not None else None
         events = []
@@ -191,6 +338,11 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
                 ambiguous += 1
             favorable = max(0, sign * (candle.close_price / entry - 1))
             best = max(best, favorable)
+            bar_mfe, bar_mae = _bar_excursions(record, bar)
+            held_mae = max(held_mae, bar_mae)
+            if bar_mfe > held_mfe:
+                held_mfe = bar_mfe
+                held_mfe_at = bar.close_time
             stop_hit = candle.low_price <= trade.stop_loss if sign == 1 else candle.high_price >= trade.stop_loss
             target = t2 if trade.target1_hit_at else t1
             target_hit = candle.high_price >= target if sign == 1 else candle.low_price <= target
@@ -254,6 +406,30 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
             funding_events_matched=funding["matched_events"],
             missing_funding_events=funding["missing_events"],
         )
+        taxonomy = _exit_taxonomy(events, entry, record.side)
+        terminal_at = _naive_utc(datetime.fromisoformat(events[-1]["at"])) if events else None
+        recovered_t1_after_stop = False
+        recovery_minutes = None
+        if taxonomy in {
+            "INITIAL_OR_ADVERSE_STOP",
+            "PRE_T1_BREAKEVEN_STOP",
+            "PRE_T1_PROTECTED_PROFIT_STOP",
+        } and terminal_at is not None:
+            for later_bar in path:
+                if _naive_utc(later_bar.open_time) < terminal_at:
+                    continue
+                later_mfe, _ = _bar_excursions(record, later_bar)
+                target1_return = sign * (t1 / entry - 1)
+                reached = later_mfe >= target1_return
+                if reached:
+                    recovered_t1_after_stop = True
+                    recovery_minutes = max(
+                        0.0,
+                        (_naive_utc(later_bar.close_time) - terminal_at).total_seconds() / 60,
+                    )
+                    break
+        result_basis = net_after_funding if net_after_funding is not None else net_before_funding
+        economic_result = "WIN" if result_basis > 1e-12 else "LOSS" if result_basis < -1e-12 else "BREAKEVEN"
         outcomes[policy] = dict(pnl_before_funding_inr=round(pnl, 4),
             pnl_after_funding_inr=round(record.position_notional_inr * net_after_funding, 4) if net_after_funding is not None else None,
             return_before_funding_percent=round(net_before_funding * 100, 6),
@@ -261,8 +437,22 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
             target1_hit=trade.target1_hit_at is not None, events=events,
             final_stop=trade.stop_loss, ambiguous_bars=ambiguous,
             observed_close_mfe_percent=round(best * 100, 6),
+            held_bar_mfe_percent=round(held_mfe * 100, 6),
+            held_bar_mae_percent=round(held_mae * 100, 6),
+            held_bar_mfe_r=round(held_mfe / risk_fraction, 6),
+            held_bar_mae_r=round(held_mae / risk_fraction, 6),
+            time_to_held_mfe_minutes=(
+                round(max(0.0, (held_mfe_at - record.opened_at).total_seconds() / 60), 3)
+                if held_mfe_at is not None else None
+            ),
+            exit_taxonomy=taxonomy,
+            economic_result=economic_result,
+            recovered_t1_after_pre_t1_stop=recovered_t1_after_stop,
+            minutes_from_stop_to_t1_recovery=(round(recovery_minutes, 3) if recovery_minutes is not None else None),
             giveback_percentage_points=round(best * 100 - net_before_funding * 100, 6),
-            cost_decomposition=decomposition)
+            bar_giveback_percentage_points=round(held_mfe * 100 - net_before_funding * 100, 6),
+            cost_decomposition=decomposition,
+            full_horizon_excursions=full_horizon_excursions)
     return outcomes
 
 
@@ -344,7 +534,8 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
                 average_entry_slippage_cost_percent=average_field("entry_slippage_cost_percent"),
                 average_exit_slippage_cost_percent=average_field("exit_slippage_cost_percent"),
                 average_fee_cost_percent=average_field("fee_cost_percent"),
-                average_funding_cost_percent=average_field("funding_cost_percent")))
+                average_funding_cost_percent=average_field("funding_cost_percent"),
+                exit_quality=_summarize_exit_quality(values)))
     fee_distribution = Counter()
     for record in records:
         fee = getattr(record, "fee_bps", None)
@@ -431,8 +622,9 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
             average_exit_slippage_cost_percent=mean_available("exit_slippage_cost_percent"),
             average_fee_cost_percent=mean_available("fee_cost_percent"),
             average_funding_cost_percent=mean_available("funding_cost_percent"),
+            exit_quality=_summarize_exit_quality(values),
         ))
-    return dict(engine="matched_exit_sensitivity_v2a", status=(
+    return dict(engine="matched_exit_sensitivity_v2b", status=(
             "INSUFFICIENT_DATA" if not rows else
             "RESEARCH_ONLY_AFTER_STORED_FUNDING" if funding_requested and funding_complete == funding_paths else
             "RESEARCH_ONLY_PARTIAL_FUNDING_COVERAGE" if funding_requested else
@@ -461,7 +653,9 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
             "Stop-first collisions; entry/deadline overlapping bars use close only; updates effective next bar.",
             "Original exit does not truncate the alternative path. Full holding horizon required.",
             "Only complete stored 00:00/08:00/16:00 UTC Binance funding paths receive after-funding results; missing events are unknown, not zero.",
-            "Exceptional venue funding-interval changes are not reconstructed in V2A.",
+            "Exceptional venue funding-interval changes are not reconstructed in V2B.",
             "Entry and exit fills are simulated paper evidence, not actual exchange executions.",
+            "Intrabar MFE/MAE use complete 5m candle ranges; ordering inside a candle is unknown and values on an exit candle are bounds, not tick-exact paths.",
+            "Post-stop T1 recovery is hypothetical full-horizon evidence and does not imply that a wider stop would have been profitable.",
             "Conditioned on recorded entries; overlapping alternatives do not form an executable portfolio. Account drawdown is not estimated.",
             "No automatic winner, parameter update, paper order, or live approval."], summary=summary, trades=rows)

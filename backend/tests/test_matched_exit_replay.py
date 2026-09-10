@@ -208,3 +208,33 @@ def test_mature_selection_is_timestamp_based_and_reproducible():
     assert cohort["immature_trades"] == 1
     assert cohort["selected_before_path_quality"] == 1
     assert parse_as_of("2026-09-01T05:30:00+05:30") == START
+
+
+def test_v2b_exit_taxonomy_separates_initial_and_protected_stops():
+    initial_path = bars()
+    initial_path[0].low_price = 96
+    initial_path[2].high_price = 106
+    initial = replay_trade(trade(), initial_path)["IMMEDIATE"]
+
+    protected_path = bars([102., 101., 101.] + [101.] * 9)
+    protected = replay_trade(trade(), protected_path)["PROFIT_PROTECTION"]
+
+    assert initial["exit_taxonomy"] == "INITIAL_OR_ADVERSE_STOP"
+    assert initial["economic_result"] == "LOSS"
+    assert initial["recovered_t1_after_pre_t1_stop"] is True
+    assert initial["full_horizon_excursions"]["mfe_r"] == 2
+    assert protected["exit_taxonomy"] == "PRE_T1_PROTECTED_PROFIT_STOP"
+
+
+def test_v2b_reports_non_degenerate_exit_quality_geometry():
+    stopped_path = bars()
+    stopped_path[0].low_price = 96
+    stopped_path[2].high_price = 106
+    report = compare_records([trade(planned_entry_price=100.)], {"TEST": stopped_path})
+    quality = report["overall_summary"][0]["exit_quality"]
+
+    assert report["engine"] == "matched_exit_sensitivity_v2b"
+    assert quality["exit_taxonomy_counts"] == {"INITIAL_OR_ADVERSE_STOP": 1}
+    assert quality["economic_result_counts"] == {"LOSS": 1}
+    assert quality["loser_mfe_r_p50"] == 0
+    assert quality["pre_t1_stop_recovery_rate_percent"] == 100
