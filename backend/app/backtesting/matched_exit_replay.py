@@ -13,6 +13,33 @@ from app.paper_trading.exit_policy import STAGED_EXIT_POLICIES
 from app.paper_trading.paper_trade_monitor import evaluate_paper_trade_exit
 
 POLICIES = ("IMMEDIATE", "DELAYED_1R", "PROFIT_PROTECTION")
+PROTECTION_CANDIDATE_SPECS = {
+    "CURRENT_PROFIT_PROTECTION": {
+        "trailing_activation_r": 0.0,
+        "protection_activation_percent": 1.0,
+        "disable_one_for_one_trailing": False,
+    },
+    "NO_ONE_FOR_ONE_CURRENT_1PCT": {
+        "trailing_activation_r": 0.0,
+        "protection_activation_percent": 1.0,
+        "disable_one_for_one_trailing": True,
+    },
+    "COST_SAFE_0_5R": {
+        "trailing_activation_r": 0.0,
+        "protection_activation_r": 0.5,
+        "disable_one_for_one_trailing": True,
+    },
+    "COST_SAFE_0_75R": {
+        "trailing_activation_r": 0.0,
+        "protection_activation_r": 0.75,
+        "disable_one_for_one_trailing": True,
+    },
+    "COST_SAFE_1R": {
+        "trailing_activation_r": 0.0,
+        "protection_activation_r": 1.0,
+        "disable_one_for_one_trailing": True,
+    },
+}
 STEP = timedelta(minutes=5)
 FUNDING_STEP = timedelta(hours=8)
 FUNDING_MATCH_TOLERANCE = timedelta(minutes=5)
@@ -283,9 +310,57 @@ def _summarize_exit_quality(values):
     }
 
 
+def _normalized_policy_specs(policy_specs, protection_activation_percent):
+    specs = {
+        "IMMEDIATE": {
+            "trailing_activation_r": 0.0,
+            "disable_one_for_one_trailing": False,
+        },
+        "DELAYED_1R": {
+            "trailing_activation_r": 1.0,
+            "disable_one_for_one_trailing": False,
+        },
+        "PROFIT_PROTECTION": {
+            "trailing_activation_r": 0.0,
+            "protection_activation_percent": float(protection_activation_percent),
+            "disable_one_for_one_trailing": False,
+        },
+    } if policy_specs is None else policy_specs
+    normalized = {}
+    for name, raw in specs.items():
+        if not str(name or "").strip() or not isinstance(raw, dict):
+            raise ValueError("invalid_policy_spec")
+        spec = dict(raw)
+        trailing_r = spec.get("trailing_activation_r", 0.0)
+        disable_trailing = spec.get("disable_one_for_one_trailing", False)
+        activation_percent = spec.get("protection_activation_percent")
+        activation_r = spec.get("protection_activation_r")
+        if (
+            isinstance(trailing_r, bool)
+            or not isinstance(trailing_r, (float, int))
+            or not math.isfinite(trailing_r)
+            or trailing_r < 0
+        ):
+            raise ValueError("invalid_policy_spec")
+        if activation_percent is not None and activation_r is not None:
+            raise ValueError("invalid_policy_spec")
+        if not isinstance(disable_trailing, bool):
+            raise ValueError("invalid_policy_spec")
+        for activation in (activation_percent, activation_r):
+            if activation is not None and not _positive(activation):
+                raise ValueError("invalid_policy_spec")
+        spec["trailing_activation_r"] = float(trailing_r)
+        spec["disable_one_for_one_trailing"] = disable_trailing
+        normalized[str(name)] = spec
+    if not normalized:
+        raise ValueError("invalid_policy_spec")
+    return normalized
+
+
 def replay_trade(record, bars, *, exit_slippage_bps=10.0,
                  protection_activation_percent=1.0, locked_profit_fraction=.5,
-                 funding_reserve_bps=5.0, funding_events=None):
+                 funding_reserve_bps=5.0, funding_events=None,
+                 policy_specs=None):
     """Same actual entry, initial geometry and INR notional in each alternative.
 
     Candidate constants are exploratory, not tuned or approved: activate at 1%
@@ -320,13 +395,14 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
     sign = 1 if record.side == "LONG" else -1
     risk_fraction = abs(entry - initial) / entry
     slip, fee = exit_slippage_bps / 10000, fee_bps / 10000
+    specs = _normalized_policy_specs(policy_specs, protection_activation_percent)
     outcomes = {}
-    for policy in POLICIES:
+    for policy, policy_spec in specs.items():
         trade = SimpleNamespace(id=record.id, symbol=record.symbol, side=record.side,
             entry_price=entry, initial_stop_loss=initial, stop_loss=initial,
             target1=t1, target2=t2, target1_fraction=fraction, target1_hit_at=None,
             opened_at=record.opened_at, max_hold_hours=None, exit_policy=record.exit_policy,
-            trailing_activation_r=1.0 if policy == "DELAYED_1R" else 0.0)
+            trailing_activation_r=policy_spec["trailing_activation_r"])
         remaining, pnl, best, ambiguous = 1.0, 0.0, 0.0, 0
         held_mfe = held_mae = 0.0
         held_mfe_at = None
@@ -411,13 +487,23 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
             elif event["action"] == "CLOSE":
                 settle(t2, remaining, "TARGET2", bar.close_time)
             elif event["action"] == "MOVE_STOP":
-                tighten(event["new_stop_loss"], "ONE_FOR_ONE_TRAILING")
+                if not policy_spec["disable_one_for_one_trailing"]:
+                    tighten(event["new_stop_loss"], "ONE_FOR_ONE_TRAILING")
             if remaining <= 1e-9:
                 break
             if bar.close_time >= deadline - timedelta(milliseconds=1):
                 settle(candle.close_price, remaining, "TIME_EXIT", bar.close_time)
                 break
-            if policy == "PROFIT_PROTECTION" and favorable * 100 >= protection_activation_percent:
+            activation_percent = policy_spec.get("protection_activation_percent")
+            activation_r = policy_spec.get("protection_activation_r")
+            protection_ready = (
+                activation_percent is not None
+                and favorable * 100 >= activation_percent
+            ) or (
+                activation_r is not None
+                and favorable >= risk_fraction * activation_r
+            )
+            if protection_ready:
                 # Exact fee/slippage break-even threshold, plus an explicit
                 # funding reserve. Actual funding remains unmeasured.
                 reserve = funding_reserve_bps / 10000
@@ -511,9 +597,20 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
 
 
 def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
-                    slippage_scenarios=None, **assumptions):
+                    slippage_scenarios=None, policy_specs=None, engine=None,
+                    **assumptions):
     rows, excluded = [], Counter()
     sensitivity = defaultdict(list)
+    specs = _normalized_policy_specs(
+        policy_specs,
+        assumptions.get("protection_activation_percent", 1.0),
+    )
+    policy_names = tuple(specs)
+    report_engine = engine or (
+        "matched_protection_candidates_v2d"
+        if policy_specs is not None
+        else "matched_exit_sensitivity_v2c"
+    )
     base_slippage = float(assumptions.get("exit_slippage_bps", 10.0))
     requested_scenarios = tuple(float(value) for value in (slippage_scenarios or ()))
     scenarios = tuple(dict.fromkeys((base_slippage, *requested_scenarios)))
@@ -529,6 +626,7 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
                 record,
                 bars_by_symbol.get(record.symbol, []),
                 funding_events=funding_events,
+                policy_specs=specs,
                 **assumptions,
             )
         except ValueError as error:
@@ -549,6 +647,7 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
                     record,
                     bars_by_symbol.get(record.symbol, []),
                     funding_events=funding_events,
+                    policy_specs=specs,
                     **scenario_assumptions,
                 )
             for policy, outcome in scenario_outcomes.items():
@@ -558,7 +657,7 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
         groups[(row["strategy_id"], row["strategy_version"])].append(row)
     summary = []
     for (strategy, version), group in groups.items():
-        for policy in POLICIES:
+        for policy in policy_names:
             values = [r["outcomes"][policy] for r in group]
             returns = [v["return_before_funding_percent"] for v in values]
             decompositions = [v["cost_decomposition"] for v in values]
@@ -600,7 +699,7 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
         outcome["cost_decomposition"]["funding_coverage_status"] in ("COMPLETE", "COMPLETE_NO_EVENT")
         for row in rows for outcome in row["outcomes"].values()
     )
-    funding_paths = len(rows) * len(POLICIES)
+    funding_paths = len(rows) * len(policy_names)
     all_decompositions = [
         outcome["cost_decomposition"]
         for row in rows for outcome in row["outcomes"].values()
@@ -635,7 +734,7 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
             funding_complete_paths=len(complete_after_funding),
         ))
     overall_summary = []
-    for policy in POLICIES:
+    for policy in policy_names:
         values = sensitivity.get((base_slippage, policy), [])
         if not values:
             continue
@@ -678,14 +777,15 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
             average_funding_cost_percent=mean_available("funding_cost_percent"),
             exit_quality=_summarize_exit_quality(values),
         ))
-    return dict(engine="matched_exit_sensitivity_v2c", status=(
+    return dict(engine=report_engine, status=(
             "INSUFFICIENT_DATA" if not rows else
             "RESEARCH_ONLY_AFTER_STORED_FUNDING" if funding_requested and funding_complete == funding_paths else
             "RESEARCH_ONLY_PARTIAL_FUNDING_COVERAGE" if funding_requested else
             "APPROXIMATE_BEFORE_FUNDING"),
         promotion_allowed=False, input_trades=len(records), paired_trades=len(rows), exclusions=dict(excluded),
         assumptions={"exit_slippage_bps": 10, "protection_activation_percent": 1,
-                     "locked_profit_fraction": .5, "funding_reserve_bps": 5, **assumptions},
+                     "locked_profit_fraction": .5, "funding_reserve_bps": 5,
+                     "policy_specs": specs, **assumptions},
         cost_coverage={"fee_bps_distribution_selected_inputs": dict(sorted(fee_distribution.items())),
                        "planned_entry_trades": sum(_positive(getattr(record, "planned_entry_price", None)) for record in records),
                        "entry_slippage_snapshot_trades": sum(
@@ -707,9 +807,10 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
             "Stop-first collisions; entry/deadline overlapping bars use close only; updates effective next bar.",
             "Original exit does not truncate the alternative path. Full holding horizon required.",
             "Only complete stored 00:00/08:00/16:00 UTC Binance funding paths receive after-funding results; missing events are unknown, not zero.",
-            "Exceptional venue funding-interval changes are not reconstructed in V2C.",
+            "Exceptional venue funding-interval changes are not reconstructed by this research engine.",
             "Entry and exit fills are simulated paper evidence, not actual exchange executions.",
             "Intrabar MFE/MAE use complete 5m candle ranges; ordering inside a candle is unknown and values on an exit candle are bounds, not tick-exact paths.",
             "Post-stop T1 recovery is hypothetical full-horizon evidence and does not imply that a wider stop would have been profitable.",
+            "Candidate protection thresholds are exploratory, not multiple-testing adjusted, and cannot promote or mutate an execution policy.",
             "Conditioned on recorded entries; overlapping alternatives do not form an executable portfolio. Account drawdown is not estimated.",
             "No automatic winner, parameter update, paper order, or live approval."], summary=summary, trades=rows)

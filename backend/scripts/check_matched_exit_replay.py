@@ -65,6 +65,15 @@ def main():
     parser.add_argument("--per-strategy", type=int, choices=range(1, 101), default=30)
     parser.add_argument("--symbol")
     parser.add_argument("--trade-id", type=int)
+    parser.add_argument(
+        "--study",
+        choices=("exit-quality", "protection-v2d"),
+        default="exit-quality",
+        help=(
+            "Run the V2C attribution report or the V2D matched cost-safe "
+            "protection candidate comparison."
+        ),
+    )
     parser.add_argument("--as-of", help="Frozen UTC ISO timestamp; defaults to current UTC time.")
     parser.add_argument(
         "--mature-only",
@@ -92,7 +101,10 @@ def main():
     from app.database.models.strategy_shadow_trade import StrategyShadowTrade
     from app.database.models.market_candles import MarketCandle
     from app.database.models.funding_rates import FundingRate
-    from app.backtesting.matched_exit_replay import compare_records
+    from app.backtesting.matched_exit_replay import (
+        PROTECTION_CANDIDATE_SPECS,
+        compare_records,
+    )
 
     model = StrategyShadowTrade if args.book == "strategy" else PaperTrade
     end = parse_as_of(args.as_of)
@@ -154,13 +166,23 @@ def main():
         funding_events,
         exit_slippage_bps=args.exit_slippage_bps,
         slippage_scenarios=args.slippage_scenarios,
+        policy_specs=(
+            PROTECTION_CANDIDATE_SPECS
+            if args.study == "protection-v2d"
+            else None
+        ),
+        engine=(
+            "matched_protection_candidates_v2d"
+            if args.study == "protection-v2d"
+            else "matched_exit_sensitivity_v2c"
+        ),
     )
     cohort.update(
         as_of_utc=end.isoformat(),
         window_start_utc=start.isoformat(),
         paired_after_path_quality=report["paired_trades"],
     )
-    report.update(book=args.book, as_of_utc=end.isoformat(),
+    report.update(book=args.book, study=args.study, as_of_utc=end.isoformat(),
                   selection="Latest maturity-eligible entries per strategy/version, before path-quality exclusions" if args.mature_only else "Latest entries per strategy/version, before path-quality exclusions; immature entries may be excluded",
                   venue="BINANCE", requested_per_strategy=args.per_strategy,
                   cohort=cohort)

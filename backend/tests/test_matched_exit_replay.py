@@ -3,7 +3,11 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from app.backtesting.matched_exit_replay import compare_records, replay_trade
+from app.backtesting.matched_exit_replay import (
+    PROTECTION_CANDIDATE_SPECS,
+    compare_records,
+    replay_trade,
+)
 from scripts.check_matched_exit_replay import build_output_payload, parse_as_of, select_records
 
 START = datetime(2026, 9, 1)
@@ -273,3 +277,45 @@ def test_v2c_attributes_the_terminal_stop_source_and_result():
         "recovered_to_t1": 0,
         "recovery_rate_percent": 0,
     }
+
+
+def test_v2d_current_candidate_is_an_exact_v2c_profit_protection_control():
+    path = bars([102., 101.] + [101.] * 10)
+    current = replay_trade(trade(), path)["PROFIT_PROTECTION"]
+    candidate = replay_trade(
+        trade(), path, policy_specs=PROTECTION_CANDIDATE_SPECS
+    )["CURRENT_PROFIT_PROTECTION"]
+
+    assert candidate == current
+
+
+def test_v2d_half_r_candidate_moves_directly_to_a_cost_safe_stop():
+    record = trade(initial_stop_loss=99.25, target1=101.5, target2=102.3)
+    path = bars([100.4, 100.3, 99.6] + [99.6] * 9)
+    outcomes = replay_trade(
+        record, path, policy_specs=PROTECTION_CANDIDATE_SPECS
+    )
+    baseline = outcomes["CURRENT_PROFIT_PROTECTION"]
+    candidate = outcomes["COST_SAFE_0_5R"]
+
+    assert baseline["terminal_stop_source"] == "ONE_FOR_ONE_TRAILING"
+    assert baseline["economic_result"] == "LOSS"
+    assert candidate["terminal_stop_source"] == "COST_SAFE_PROFIT_PROTECTION"
+    assert candidate["economic_result"] == "WIN"
+
+
+def test_v2d_comparison_is_paired_and_research_only():
+    report = compare_records(
+        [trade(planned_entry_price=100.)],
+        {"TEST": bars()},
+        policy_specs=PROTECTION_CANDIDATE_SPECS,
+        engine="matched_protection_candidates_v2d",
+    )
+
+    assert report["engine"] == "matched_protection_candidates_v2d"
+    assert report["promotion_allowed"] is False
+    assert report["paired_trades"] == 1
+    assert len(report["overall_summary"]) == len(PROTECTION_CANDIDATE_SPECS)
+    assert {
+        row["policy"] for row in report["overall_summary"]
+    } == set(PROTECTION_CANDIDATE_SPECS)
