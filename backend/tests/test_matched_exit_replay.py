@@ -233,8 +233,43 @@ def test_v2b_reports_non_degenerate_exit_quality_geometry():
     report = compare_records([trade(planned_entry_price=100.)], {"TEST": stopped_path})
     quality = report["overall_summary"][0]["exit_quality"]
 
-    assert report["engine"] == "matched_exit_sensitivity_v2b"
+    assert report["engine"] == "matched_exit_sensitivity_v2c"
     assert quality["exit_taxonomy_counts"] == {"INITIAL_OR_ADVERSE_STOP": 1}
     assert quality["economic_result_counts"] == {"LOSS": 1}
     assert quality["loser_mfe_r_p50"] == 0
     assert quality["pre_t1_stop_recovery_rate_percent"] == 100
+
+
+def test_v2c_attributes_the_terminal_stop_source_and_result():
+    initial_path = bars()
+    initial_path[0].low_price = 96
+    initial = replay_trade(trade(), initial_path)["IMMEDIATE"]
+
+    trailing = replay_trade(
+        trade(), bars([102., 98.5] + [98.5] * 10)
+    )["IMMEDIATE"]
+    cost_safe = replay_trade(
+        trade(), bars([102., 101.] + [101.] * 10)
+    )["PROFIT_PROTECTION"]
+    post_t1 = replay_trade(
+        trade(), bars([106., 103.] + [103.] * 10)
+    )["IMMEDIATE"]
+
+    assert initial["terminal_stop_source"] == "INITIAL_HARD_STOP"
+    assert trailing["terminal_stop_source"] == "ONE_FOR_ONE_TRAILING"
+    assert cost_safe["terminal_stop_source"] == "COST_SAFE_PROFIT_PROTECTION"
+    assert post_t1["terminal_stop_source"] == "POST_T1_PROTECTION"
+
+    report = compare_records(
+        [trade(planned_entry_price=100.)], {"TEST": initial_path}
+    )
+    quality = report["overall_summary"][0]["exit_quality"]
+    assert quality["terminal_stop_source_counts"] == {"INITIAL_HARD_STOP": 1}
+    assert quality["terminal_stop_source_economic_results"] == {
+        "INITIAL_HARD_STOP": {"LOSS": 1}
+    }
+    assert quality["terminal_stop_source_recovery"]["INITIAL_HARD_STOP"] == {
+        "stops": 1,
+        "recovered_to_t1": 0,
+        "recovery_rate_percent": 0,
+    }

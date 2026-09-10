@@ -201,6 +201,27 @@ def _summarize_exit_quality(values):
         return {}
     taxonomies = Counter(value["exit_taxonomy"] for value in values)
     economics = Counter(value["economic_result"] for value in values)
+    stop_sources = Counter(
+        value["terminal_stop_source"] for value in values
+        if value.get("terminal_stop_source") is not None
+    )
+    stop_source_results = defaultdict(Counter)
+    stop_source_recovery = defaultdict(lambda: {"stops": 0, "recovered_to_t1": 0})
+    for value in values:
+        source = value.get("terminal_stop_source")
+        if source is None:
+            continue
+        stop_source_results[source][value["economic_result"]] += 1
+        if value["exit_taxonomy"] not in {
+            "INITIAL_OR_ADVERSE_STOP",
+            "PRE_T1_BREAKEVEN_STOP",
+            "PRE_T1_PROTECTED_PROFIT_STOP",
+        }:
+            continue
+        stop_source_recovery[source]["stops"] += 1
+        stop_source_recovery[source]["recovered_to_t1"] += int(
+            value["recovered_t1_after_pre_t1_stop"]
+        )
     winners = [value for value in values if value["economic_result"] == "WIN"]
     losers = [value for value in values if value["economic_result"] == "LOSS"]
     pre_t1_stops = [
@@ -223,6 +244,20 @@ def _summarize_exit_quality(values):
     return {
         "exit_taxonomy_counts": dict(sorted(taxonomies.items())),
         "economic_result_counts": dict(sorted(economics.items())),
+        "terminal_stop_source_counts": dict(sorted(stop_sources.items())),
+        "terminal_stop_source_economic_results": {
+            source: dict(sorted(results.items()))
+            for source, results in sorted(stop_source_results.items())
+        },
+        "terminal_stop_source_recovery": {
+            source: {
+                **counts,
+                "recovery_rate_percent": percentage(
+                    counts["recovered_to_t1"], counts["stops"]
+                ),
+            }
+            for source, counts in sorted(stop_source_recovery.items())
+        },
         "winner_mae_r_p50": percentile(winners, "held_bar_mae_r", 0.50),
         "winner_mae_r_p75": percentile(winners, "held_bar_mae_r", 0.75),
         "loser_mfe_r_p50": percentile(losers, "held_bar_mfe_r", 0.50),
@@ -299,8 +334,9 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
         signal_gross = entry_slippage_cost = 0.0 if planned_entry is not None else None
         events = []
         settlements = []
+        stop_source = "INITIAL_HARD_STOP"
 
-        def settle(trigger, amount, reason, stamp):
+        def settle(trigger, amount, reason, stamp, *, terminal_stop_source=None):
             nonlocal remaining, pnl, post_fill_gross, exit_slippage_cost, fee_cost
             nonlocal signal_gross, entry_slippage_cost
             fill = trigger * (1 - sign * slip)
@@ -321,11 +357,18 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
                 entry_slippage_cost += amount * sign * (entry - planned_entry) / entry
             remaining = max(0.0, remaining - amount)
             settlements.append((stamp, amount))
-            events.append(dict(reason=reason, at=stamp.isoformat(), fraction=amount,
-                               trigger=trigger, fill=fill))
+            event = dict(reason=reason, at=stamp.isoformat(), fraction=amount,
+                         trigger=trigger, fill=fill)
+            if terminal_stop_source is not None:
+                event["stop_source"] = terminal_stop_source
+            events.append(event)
 
-        def tighten(stop):
-            trade.stop_loss = max(trade.stop_loss, stop) if sign == 1 else min(trade.stop_loss, stop)
+        def tighten(stop, source):
+            nonlocal stop_source
+            improved = stop > trade.stop_loss if sign == 1 else stop < trade.stop_loss
+            if improved:
+                trade.stop_loss = stop
+                stop_source = source
 
         for bar in path:
             # OHLC ordering is unknown. Current-stop collisions are stop-first.
@@ -350,19 +393,25 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
                 ambiguous += 1
             if stop_hit:
                 trigger = min(trade.stop_loss, candle.open_price) if sign == 1 else max(trade.stop_loss, candle.open_price)
-                settle(trigger, remaining, "STOP_AFTER_T1" if trade.target1_hit_at else "STOP_BEFORE_T1", bar.close_time)
+                settle(
+                    trigger,
+                    remaining,
+                    "STOP_AFTER_T1" if trade.target1_hit_at else "STOP_BEFORE_T1",
+                    bar.close_time,
+                    terminal_stop_source=stop_source,
+                )
                 break
             event = evaluate_paper_trade_exit(trade, candle)
             if event["action"] == "PARTIAL_CLOSE":
                 settle(t1, fraction, "TARGET1", bar.close_time)
                 trade.target1_hit_at = bar.close_time
-                tighten(event["new_stop_loss"])
+                tighten(event["new_stop_loss"], "POST_T1_PROTECTION")
                 if candle.high_price >= t2 if sign == 1 else candle.low_price <= t2:
                     settle(t2, remaining, "TARGET2", bar.close_time)
             elif event["action"] == "CLOSE":
                 settle(t2, remaining, "TARGET2", bar.close_time)
             elif event["action"] == "MOVE_STOP":
-                tighten(event["new_stop_loss"])
+                tighten(event["new_stop_loss"], "ONE_FOR_ONE_TRAILING")
             if remaining <= 1e-9:
                 break
             if bar.close_time >= deadline - timedelta(milliseconds=1):
@@ -377,7 +426,10 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
                 cost_floor = sign * (ratio - 1)
                 protected = max(favorable * locked_profit_fraction, cost_floor)
                 if protected < favorable:  # Do not create a stop past current price.
-                    tighten(entry * (1 + sign * protected))
+                    tighten(
+                        entry * (1 + sign * protected),
+                        "COST_SAFE_PROFIT_PROTECTION",
+                    )
         funding = _funding_for_path(record, settlements, funding_events) if funding_events is not None else dict(
             status="NOT_REQUESTED", expected_events=None, matched_events=None,
             missing_events=[], cost_fraction=None)
@@ -407,6 +459,7 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
             missing_funding_events=funding["missing_events"],
         )
         taxonomy = _exit_taxonomy(events, entry, record.side)
+        terminal_stop_source = events[-1].get("stop_source") if events else None
         terminal_at = _naive_utc(datetime.fromisoformat(events[-1]["at"])) if events else None
         recovered_t1_after_stop = False
         recovery_minutes = None
@@ -446,6 +499,7 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
                 if held_mfe_at is not None else None
             ),
             exit_taxonomy=taxonomy,
+            terminal_stop_source=terminal_stop_source,
             economic_result=economic_result,
             recovered_t1_after_pre_t1_stop=recovered_t1_after_stop,
             minutes_from_stop_to_t1_recovery=(round(recovery_minutes, 3) if recovery_minutes is not None else None),
@@ -624,7 +678,7 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
             average_funding_cost_percent=mean_available("funding_cost_percent"),
             exit_quality=_summarize_exit_quality(values),
         ))
-    return dict(engine="matched_exit_sensitivity_v2b", status=(
+    return dict(engine="matched_exit_sensitivity_v2c", status=(
             "INSUFFICIENT_DATA" if not rows else
             "RESEARCH_ONLY_AFTER_STORED_FUNDING" if funding_requested and funding_complete == funding_paths else
             "RESEARCH_ONLY_PARTIAL_FUNDING_COVERAGE" if funding_requested else
@@ -653,7 +707,7 @@ def compare_records(records, bars_by_symbol, funding_events_by_symbol=None,
             "Stop-first collisions; entry/deadline overlapping bars use close only; updates effective next bar.",
             "Original exit does not truncate the alternative path. Full holding horizon required.",
             "Only complete stored 00:00/08:00/16:00 UTC Binance funding paths receive after-funding results; missing events are unknown, not zero.",
-            "Exceptional venue funding-interval changes are not reconstructed in V2B.",
+            "Exceptional venue funding-interval changes are not reconstructed in V2C.",
             "Entry and exit fills are simulated paper evidence, not actual exchange executions.",
             "Intrabar MFE/MAE use complete 5m candle ranges; ordering inside a candle is unknown and values on an exit candle are bounds, not tick-exact paths.",
             "Post-stop T1 recovery is hypothetical full-horizon evidence and does not imply that a wider stop would have been profitable.",
