@@ -1,0 +1,43 @@
+{
+  "manifest_version": "entry_strategy_prospective_holdout_v2f",
+  "frozen_at": "2026-09-12T04:58:00+00:00",
+  "holdout_start_exclusive": "2026-09-12T04:58:00+00:00",
+  "maturation_hours": 48,
+  "minimum_calendar_days": 7,
+  "minimum_mature_trades_per_candidate": 30,
+  "required_entry_evidence": {
+    "profile": "CONFIRMED_PRICE_STRUCTURE_V1",
+    "passed": true
+  },
+  "outcome_gates": {
+    "minimum_win_rate_percent": 55,
+    "minimum_profit_factor_after_funding": 1.3,
+    "minimum_average_return_after_funding_percent_exclusive": 0,
+    "require_complete_funding_coverage": true,
+    "require_target1_hits_greater_than_pre_t1_losing_stops": true
+  },
+  "candidates": [
+    {
+      "strategy_id": "CORE_SIGNAL_ENTRY",
+      "strategy_version": "core_signal_entry_v1",
+      "label": "Core Signal Entry Candidate"
+    },
+    {
+      "strategy_id": "MARKET_MOVE_ENTRY",
+      "strategy_version": "market_move_entry_v2",
+      "label": "Market Move Entry Candidate"
+    },
+    {
+      "strategy_id": "REGIME_TREND_ENTRY",
+      "strategy_version": "regime_trend_entry_v2",
+      "label": "Regime Trend Entry Candidate"
+    }
+  ],
+  "governance": {
+    "research_only": true,
+    "outcome_blind_until_all_candidates_ready": true,
+    "automatic_promotion": false,
+    "paper_policy_change_authorized": false,
+    "live_policy_change_authorized": false
+  }
+}

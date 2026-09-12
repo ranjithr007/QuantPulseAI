@@ -11,6 +11,13 @@ from app.database.models.risk_decision import RiskDecision
 from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
+from app.backtesting.entry_strategy_holdout_readiness import (
+    build_current_entry_holdout_readiness,
+)
+from app.backtesting.entry_strategy_holdout_outcomes import OUTCOME_VERSION
+from app.backtesting.walk_forward_jobs import (
+    load_latest_walk_forward_job_for_parameters,
+)
 from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
 from app.paper_trading.exit_evidence import classify_exit, read_evidence
@@ -95,6 +102,8 @@ def get_strategy_summary(
             )
             for definition in definitions
         ]
+        entry_holdout = _entry_holdout_readiness_or_unavailable(db)
+        entry_holdout_outcome = _entry_holdout_outcome_job(db, entry_holdout)
         return {
             "source": "strategy_performance_v1",
             "status": "READY",
@@ -104,10 +113,63 @@ def get_strategy_summary(
             "ledger_included": include_ledger,
             "strategy_count": len(records),
             "comparison": _shadow_comparison([item for item in records if not item.get("read_only")]),
+            "entry_strategy_holdout": entry_holdout,
+            "entry_strategy_holdout_outcome": entry_holdout_outcome,
             "records": records,
         }
     finally:
         db.close()
+
+
+def _entry_holdout_readiness_or_unavailable(db):
+    """Keep the strategy page available if supplemental research telemetry fails."""
+
+    try:
+        return build_current_entry_holdout_readiness(db)
+    except Exception as exc:  # The primary strategy ledger must remain available.
+        db.rollback()
+        return {
+            "contract": "entry_strategy_holdout_readiness_v2f",
+            "status": "UNAVAILABLE",
+            "outcome_review_unlocked": False,
+            "cohorts": [],
+            "governance": {
+                "outcome_columns_accessed": False,
+                "automatic_promotion_allowed": False,
+                "paper_policy_changed": False,
+                "live_policy_changed": False,
+            },
+            "error": f"{type(exc).__name__}: entry holdout readiness could not be loaded",
+        }
+
+
+def _entry_holdout_outcome_job(db, readiness):
+    """Read only the durable worker result; the API never executes V2G replay."""
+
+    manifest = readiness.get("manifest") or {}
+    digest = manifest.get("sha256")
+    version = manifest.get("version")
+    if not digest or not version:
+        return {
+            "status": "PENDING_READINESS",
+            "automatic": True,
+            "report": None,
+        }
+    parameters = {
+        "engine": OUTCOME_VERSION,
+        "manifest_version": version,
+        "manifest_sha256": digest,
+    }
+    record = load_latest_walk_forward_job_for_parameters(parameters, session=db)
+    return {
+        "status": (record or {}).get("status") or "PENDING_READINESS",
+        "automatic": True,
+        "job_id": (record or {}).get("job_id"),
+        "created_at": (record or {}).get("created_at"),
+        "completed_at": (record or {}).get("completed_at"),
+        "report": dict(((record or {}).get("response") or {}).get("report") or {}) or None,
+        "error": (record or {}).get("error"),
+    }
 
 
 @router.get("/ledger")

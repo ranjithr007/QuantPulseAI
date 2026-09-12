@@ -25,7 +25,7 @@ try {
     if (path.endsWith("/strategies/summary")) {
       summaries++;
       status = summaryFailure || 200;
-      json = {records:[{...record, description:`Snapshot ${summaries}`}]};
+      json = {records:[{...record, description:`Snapshot ${summaries}`}],entry_strategy_holdout:{status:"COLLECTING_PROSPECTIVE_ENTRIES",maturation_hours:48,minimum_mature_trades_per_candidate:30,cohorts:[{strategy_id:"CORE_SIGNAL_ENTRY",strategy_version:"core_signal_entry_v1",label:"Core Signal Entry Candidate",valid_mature_entry_evidence:7,immature_entries:2,invalid_mature_entry_evidence:0}]},entry_strategy_holdout_outcome:{status:"PENDING_READINESS",automatic:true,report:null}};
     } else if (path.endsWith("/strategies/ledger")) {
       ledgers++;
       status = ledgerFailure || 200;
@@ -50,6 +50,8 @@ try {
     </script>`}));
   await page.goto("http://127.0.0.1:5181/__strategy-refresh");
   await page.getByText("Snapshot 1",{exact:true}).waitFor();
+  await page.getByText("7/30",{exact:true}).waitFor();
+  await page.getByText(/Outcomes remain hidden until every cohort is ready/).waitFor();
   await page.getByText("₹1,87,654.00",{exact:true}).waitFor();
   assert.equal(summaries,1); assert.equal(ledgers,1);
   await page.clock.runFor(60100);

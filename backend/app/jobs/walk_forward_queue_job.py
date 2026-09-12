@@ -9,6 +9,7 @@ from sqlalchemy import func
 from app.backtesting.walk_forward_jobs import claim_next_walk_forward_job
 from app.backtesting.walk_forward_jobs import create_automatic_walk_forward_job
 from app.backtesting.walk_forward_jobs import load_walk_forward_job
+from app.backtesting.walk_forward_jobs import load_latest_walk_forward_job_for_parameters
 from app.backtesting.walk_forward_jobs import purge_expired_walk_forward_jobs
 from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.backtesting.walk_forward_validator import PHASE2_WALK_FORWARD_DAYS
@@ -24,6 +25,8 @@ from app.trading.futures_cost_model import DEFAULT_FEE_BPS
 
 
 AUTOMATIC_MIN_CONFIDENCE = 40.0
+ENTRY_HOLDOUT_READINESS_POLL_SECONDS = 5 * 60
+ENTRY_HOLDOUT_RETRY_SECONDS = 60 * 60
 AUTOMATIC_DECISION_MAX_AGE_SECONDS = 10 * 60
 AUTOMATIC_REFRESH_SECONDS = {
     "1h": 6 * 60 * 60,
@@ -40,6 +43,7 @@ TIMEFRAME_SECONDS = {
 
 
 _last_retention_at = None
+_last_entry_holdout_readiness_at = None
 
 
 def run_walk_forward_queue_job():
@@ -56,10 +60,17 @@ def run_walk_forward_queue_job():
 def _process_walk_forward_queue():
     record = claim_next_walk_forward_job()
     scheduled = None
+    scheduled_kind = None
     scheduling_error = None
     if record is None:
         try:
-            scheduled = _enqueue_next_automatic_walk_forward_job()
+            scheduled = _enqueue_entry_holdout_outcome_job()
+            if scheduled is not None:
+                scheduled_kind = "ENTRY_HOLDOUT_OUTCOME"
+            else:
+                scheduled = _enqueue_next_automatic_walk_forward_job()
+                if scheduled is not None:
+                    scheduled_kind = "WALK_FORWARD"
         except Exception as exc:
             # Automatic validation must never stop the rest of the worker.
             scheduling_error = str(exc)[:500]
@@ -85,7 +96,56 @@ def _process_walk_forward_queue():
         "job_id": record["job_id"],
         "error": (completed or {}).get("error"),
         "automatic": scheduled is not None,
+        "automatic_kind": scheduled_kind,
     }
+
+
+def _enqueue_entry_holdout_outcome_job(*, now=None, force_check=False):
+    """Queue the frozen V2G review once, only after its outcome-blind gate opens."""
+
+    global _last_entry_holdout_readiness_at
+    checked_at = time.monotonic()
+    if (
+        not force_check
+        and _last_entry_holdout_readiness_at is not None
+        and checked_at - _last_entry_holdout_readiness_at
+        < ENTRY_HOLDOUT_READINESS_POLL_SECONDS
+    ):
+        return None
+    _last_entry_holdout_readiness_at = checked_at
+
+    from app.backtesting.entry_strategy_holdout_outcomes import OUTCOME_VERSION
+    from app.backtesting.entry_strategy_holdout_readiness import (
+        build_current_entry_holdout_readiness,
+    )
+
+    db = SessionLocal()
+    try:
+        readiness = build_current_entry_holdout_readiness(db, observed_at=now)
+        db.rollback()
+    finally:
+        db.close()
+    if not readiness.get("outcome_review_unlocked"):
+        return None
+
+    parameters = {
+        "engine": OUTCOME_VERSION,
+        "manifest_version": readiness["manifest"]["version"],
+        "manifest_sha256": readiness["manifest"]["sha256"],
+    }
+    latest = load_latest_walk_forward_job_for_parameters(parameters)
+    latest_report = dict(((latest or {}).get("response") or {}).get("report") or {})
+    if (
+        (latest or {}).get("status") == "COMPLETED"
+        and latest_report.get("status") == "RESEARCH_REVIEW_READY"
+    ):
+        return None
+    record, _created = create_automatic_walk_forward_job(
+        parameters,
+        refresh_after_seconds=ENTRY_HOLDOUT_RETRY_SECONDS,
+        now=now,
+    )
+    return record if record.get("status") in {"QUEUED", "RUNNING"} else None
 
 
 def _enqueue_next_automatic_walk_forward_job(*, now=None):

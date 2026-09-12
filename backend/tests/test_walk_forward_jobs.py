@@ -496,6 +496,13 @@ def test_submission_does_not_purge_and_worker_purges_only_expired_terminal_jobs(
         now=old + timedelta(minutes=10),
     )
     walk_forward_jobs.mark_walk_forward_job_running(running["job_id"], now=old)
+    durable, _ = walk_forward_jobs.create_walk_forward_job(
+        {"engine": "entry_strategy_holdout_outcomes_v2g", "manifest_sha256": "fixed"},
+        now=old + timedelta(minutes=15),
+    )
+    walk_forward_jobs.complete_walk_forward_job(
+        durable["job_id"], {"report": {"status": "RESEARCH_REVIEW_READY"}}, now=old
+    )
 
     current, created = walk_forward_jobs.create_walk_forward_job(
         {"symbol": "SOLUSDT", "timeframe": "1d", "signal": "SHORT"},
@@ -510,6 +517,7 @@ def test_submission_does_not_purge_and_worker_purges_only_expired_terminal_jobs(
     assert walk_forward_jobs.load_walk_forward_job(completed["job_id"]) is None
     assert walk_forward_jobs.load_walk_forward_job(failed["job_id"]) is None
     assert walk_forward_jobs.load_walk_forward_job(running["job_id"])["status"] == "RUNNING"
+    assert walk_forward_jobs.load_walk_forward_job(durable["job_id"])["status"] == "COMPLETED"
     assert walk_forward_jobs.load_walk_forward_job(current["job_id"])["status"] == "QUEUED"
 
 

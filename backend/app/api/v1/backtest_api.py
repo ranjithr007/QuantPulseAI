@@ -516,6 +516,22 @@ def get_walk_forward_validation_job(job_id: str):
 def _run_walk_forward_validation_job(job_id, parameters):
     mark_walk_forward_job_running(job_id)
     try:
+        from app.backtesting.entry_strategy_holdout_outcomes import OUTCOME_VERSION
+        if parameters.get("engine") == OUTCOME_VERSION:
+            from app.backtesting.entry_strategy_holdout_outcomes import (
+                build_entry_holdout_outcome_report,
+            )
+
+            with SessionLocal() as db:
+                report = build_entry_holdout_outcome_report(db)
+            manifest = (report.get("readiness") or {}).get("manifest") or {}
+            if manifest.get("sha256") != parameters.get("manifest_sha256"):
+                raise ValueError("Frozen entry-holdout manifest changed after job submission")
+            complete_walk_forward_job(
+                job_id,
+                {"source": OUTCOME_VERSION, "report": report},
+            )
+            return
         from app.backtesting.strategy_comparison import ENGINE, build_strategy_comparison
         if parameters.get("engine") == ENGINE:
             with SessionLocal() as db:

@@ -134,6 +134,10 @@ export default function StrategiesPage() {
           </div>
         ) : null}
         <ComparisonBanner comparison={payload?.comparison} />
+        <EntryHoldoutBanner
+          holdout={payload?.entry_strategy_holdout}
+          outcome={payload?.entry_strategy_holdout_outcome}
+        />
         <div className="mt-4 space-y-4">
           {initialLoading ? (
             <div className="rounded-xl border border-sky-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
@@ -152,6 +156,99 @@ export default function StrategiesPage() {
           ) : null}
         </div>
       </div>
+    </section>
+  );
+}
+
+function EntryHoldoutBanner({ holdout, outcome }) {
+  if (!holdout) return null;
+  const ready = holdout.status === "OUTCOME_REVIEW_READY";
+  const unavailable = holdout.status === "UNAVAILABLE";
+  const minimum = holdout.minimum_mature_trades_per_candidate || 30;
+  const cohorts = holdout.cohorts || [];
+  const outcomeReport = outcome?.report || null;
+  const outcomeRunning = outcome?.status === "QUEUED" || outcome?.status === "RUNNING";
+  return (
+    <section className="mt-4 rounded-xl border border-sky-200 bg-white p-4 shadow-sm" aria-label="Prospective entry strategy holdout">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">V2F prospective entry holdout</div>
+          <div className="mt-1 text-sm font-semibold text-slate-900">
+            {unavailable
+              ? "Readiness telemetry is temporarily unavailable"
+              : ready
+                ? "All frozen entry-strategy samples are ready for governed outcome review"
+                : `Collecting ${minimum} mature post-cutoff trades for every frozen entry strategy`}
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            Outcomes remain hidden until every cohort is ready. A trade matures after {holdout.maturation_hours || 48} hours; this monitor cannot change paper or live execution rules.
+          </p>
+        </div>
+        <StatusBadge
+          label={holdout.status || "COLLECTING"}
+          tone={ready ? "emerald" : unavailable || holdout.status === "INVALID_ENTRY_EVIDENCE" ? "rose" : "amber"}
+        />
+      </div>
+      {cohorts.length ? (
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          {cohorts.map((cohort) => {
+            const count = cohort.valid_mature_entry_evidence || 0;
+            const percent = Math.min(100, Math.round((count / minimum) * 100));
+            return (
+              <div key={`${cohort.strategy_id}:${cohort.strategy_version}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="truncate text-xs font-semibold text-slate-800">{cohort.label}</div>
+                  <span className="text-xs font-semibold text-slate-600">{count}/{minimum}</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200" aria-label={`${cohort.label} ${percent}% complete`}>
+                  <div className="h-full rounded-full bg-cyan-500" style={{ width: `${percent}%` }} />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                  <span>{cohort.immature_entries || 0} awaiting maturity</span>
+                  <span>{cohort.invalid_mature_entry_evidence || 0} invalid evidence</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {ready || outcomeRunning || outcomeReport || outcome?.status === "FAILED" ? (
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-slate-800">Automatic V2G outcome review</div>
+            <StatusBadge
+              label={outcomeReport?.status || outcome?.status || "PENDING"}
+              tone={outcomeReport?.status === "RESEARCH_REVIEW_READY" ? "emerald" : outcome?.status === "FAILED" ? "rose" : "amber"}
+            />
+          </div>
+          {outcomeRunning ? (
+            <p className="mt-1 text-xs text-slate-500">The worker is evaluating the frozen sample. The web request does not run this replay.</p>
+          ) : null}
+          {outcome?.status === "FAILED" ? (
+            <p className="mt-1 text-xs text-rose-700">The automatic review failed and will be retried after its governed delay. {outcome.error || "No worker error was recorded."}</p>
+          ) : null}
+          {outcomeReport?.evaluations?.length ? (
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              {outcomeReport.evaluations.map((evaluation) => (
+                <div key={evaluation.strategy_version_cohort} className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-semibold text-slate-800">{evaluation.label}</span>
+                    <StatusBadge label={evaluation.decision} tone={evaluation.decision === "RESEARCH_PASS" ? "emerald" : "rose"} />
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                    <span>Win rate</span><span className="text-right">{formatPercent(evaluation.win_rate_after_funding_percent || 0, 1)}</span>
+                    <span>Net/trade</span><span className="text-right">{formatSigned(evaluation.average_return_after_funding_percent || 0, 3)}%</span>
+                    <span>Profit factor</span><span className="text-right">{evaluation.profit_factor_interpretation === "INFINITE_NO_LOSING_TRADES" ? "∞" : evaluation.profit_factor_after_funding == null ? "—" : number(evaluation.profit_factor_after_funding, 2)}</span>
+                    <span>T1 / pre-T1 loss</span><span className="text-right">{evaluation.target1_hits || 0} / {evaluation.pre_t1_losing_stops || 0}</span>
+                  </div>
+                  {evaluation.failures?.length ? <p className="mt-2 text-[11px] leading-relaxed text-rose-700">{evaluation.failures.join(" · ")}</p> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <p className="mt-2 text-[11px] text-slate-500">Research results require human review and never modify a strategy or enable live execution automatically.</p>
+        </div>
+      ) : null}
     </section>
   );
 }

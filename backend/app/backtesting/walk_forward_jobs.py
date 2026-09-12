@@ -19,6 +19,7 @@ QUEUED_STALE_AFTER_SECONDS = 120
 RUNNING_STALE_AFTER_SECONDS = 20 * 60
 JOB_RETENTION_DAYS = 14
 JOB_RETENTION_BATCH_SIZE = 100
+DURABLE_RESEARCH_ENGINES = ("entry_strategy_holdout_outcomes_v2g",)
 
 
 def create_walk_forward_job(parameters, *, now=None):
@@ -138,6 +139,25 @@ def load_latest_walk_forward_job(symbol, timeframe, signal):
         return None
     finally:
         db.close()
+
+
+def load_latest_walk_forward_job_for_parameters(parameters, *, session=None):
+    """Return the newest durable job for one exact canonical parameter set."""
+
+    canonical = _json(parameters)
+    db = session or SessionLocal()
+    owns_session = session is None
+    try:
+        record = (
+            db.query(WalkForwardJob)
+            .filter(WalkForwardJob.parameters_json == canonical)
+            .order_by(WalkForwardJob.created_at.desc(), WalkForwardJob.job_id.desc())
+            .first()
+        )
+        return _record(record) if record is not None else None
+    finally:
+        if owns_session:
+            db.close()
 
 
 def summarize_completed_walk_forward_jobs(
@@ -516,6 +536,14 @@ def _purge_expired_jobs(db, now):
             .filter(WalkForwardJob.status.in_(["COMPLETED", "FAILED"]))
             .filter(WalkForwardJob.completed_at.isnot(None))
             .filter(WalkForwardJob.completed_at < cutoff)
+            .filter(
+                *[
+                    ~WalkForwardJob.parameters_json.contains(
+                        f'"engine": {json.dumps(engine)}'
+                    )
+                    for engine in DURABLE_RESEARCH_ENGINES
+                ]
+            )
             .order_by(WalkForwardJob.completed_at.asc(), WalkForwardJob.job_id.asc())
             .limit(JOB_RETENTION_BATCH_SIZE)
             .all()
