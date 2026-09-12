@@ -1,8 +1,13 @@
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace as NS
 
 import pytest
 
+from app.backtesting.matched_entry_quality import (
+    CURRENT_EXIT_CONTROL_SPECS,
+    build_entry_quality_report,
+)
 from app.backtesting.matched_exit_replay import (
     PROTECTION_CANDIDATE_SPECS,
     compare_records,
@@ -17,7 +22,9 @@ def trade(**changes):
     data = dict(id=1, symbol="TEST", side="LONG", strategy_id="TEST", strategy_version="v1",
         opened_at=START, entry_price=100., initial_stop_loss=97., target1=106., target2=109.,
         target1_fraction=.75, position_notional_inr=10000., max_hold_hours=1,
-        exit_policy="PAPER_ATR_STRUCTURE_V1", fee_bps=7.5)
+        exit_policy="PAPER_ATR_STRUCTURE_V1", fee_bps=7.5, confidence=52.,
+        entry_timeframe="1h", regime="RANGE", risk_reward=2.,
+        execution_evidence_json=None)
     return NS(**{**data, **changes})
 
 
@@ -319,3 +326,83 @@ def test_v2d_comparison_is_paired_and_research_only():
     assert {
         row["policy"] for row in report["overall_summary"]
     } == set(PROTECTION_CANDIDATE_SPECS)
+
+
+def test_v2e_full_horizon_marks_adverse_first_and_same_bar_ambiguity():
+    adverse_first_path = bars()
+    adverse_first_path[0].low_price = 99
+    adverse_first_path[1].high_price = 102
+    adverse_first = replay_trade(
+        trade(), adverse_first_path,
+        policy_specs=CURRENT_EXIT_CONTROL_SPECS,
+    )["RECORDED_CURRENT_EXIT"]["full_horizon_excursions"]
+
+    ambiguous_path = bars()
+    ambiguous_path[0].low_price = 99
+    ambiguous_path[0].high_price = 102
+    ambiguous = replay_trade(
+        trade(), ambiguous_path,
+        policy_specs=CURRENT_EXIT_CONTROL_SPECS,
+    )["RECORDED_CURRENT_EXIT"]["full_horizon_excursions"]
+
+    assert adverse_first["first_0_25r_excursion"] == "ADVERSE_FIRST"
+    assert adverse_first["time_to_adverse_0_25r_minutes"] == 5
+    assert adverse_first["time_to_0_25r_minutes"] == 10
+    assert ambiguous["first_0_25r_excursion"] == "SAME_5M_BAR_AMBIGUOUS"
+
+
+def test_v2e_reports_recorded_entry_cohorts_without_promoting_or_filtering():
+    record = trade(
+        planned_entry_price=99.95,
+        execution_evidence_json=json.dumps({
+            "entry_quality_profile": "CONFIRMED_PRICE_STRUCTURE_V1",
+            "entry_quality_passed": True,
+            "setup_type": "PULLBACK",
+            "price_structure": "BULLISH",
+            "entry_drift_atr": 0.2,
+            "execution_mark_age_seconds": 8,
+        }),
+    )
+    base = compare_records(
+        [record], {"TEST": bars()},
+        policy_specs=CURRENT_EXIT_CONTROL_SPECS,
+        engine="matched_entry_quality_exit_control_v1",
+    )
+    report = build_entry_quality_report(base, [record])
+
+    assert report["engine"] == "matched_entry_quality_v2e"
+    assert report["promotion_allowed"] is False
+    assert report["control_policy"] == "RECORDED_CURRENT_EXIT"
+    assert report["entry_evidence_coverage"]["entry_quality_result"] == 1
+    assert report["overall_entry_quality"]["trades"] == 1
+    assert report["overall_entry_quality"]["minimum_sample_reached"] is False
+    assert report["entry_cohorts"]["entry_quality_status"][0]["cohort"] == "PASS"
+    assert report["trades"][0]["entry_drift_atr_band"] == "LE_0_25R"
+    assert "summary" not in report
+
+
+def test_v2e_control_honors_each_trades_recorded_trailing_activation():
+    path = bars([100.5, 99.5] + [99.5] * 10)
+    delayed_record = trade(
+        trailing_activation_r=1.0,
+        initial_stop_loss=99.25,
+        target1=101.5,
+        target2=102.3,
+    )
+    recorded = replay_trade(
+        delayed_record, path, policy_specs=CURRENT_EXIT_CONTROL_SPECS
+    )["RECORDED_CURRENT_EXIT"]
+    forced_immediate = replay_trade(
+        delayed_record,
+        path,
+        policy_specs={
+            "FORCED_IMMEDIATE": {
+                "trailing_activation_r": 0.0,
+                "protection_activation_percent": 1.0,
+                "disable_one_for_one_trailing": False,
+            }
+        },
+    )["FORCED_IMMEDIATE"]
+
+    assert recorded["terminal_stop_source"] is None
+    assert forced_immediate["terminal_stop_source"] == "ONE_FOR_ONE_TRAILING"

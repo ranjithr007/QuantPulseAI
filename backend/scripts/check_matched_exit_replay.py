@@ -67,11 +67,12 @@ def main():
     parser.add_argument("--trade-id", type=int)
     parser.add_argument(
         "--study",
-        choices=("exit-quality", "protection-v2d"),
+        choices=("exit-quality", "protection-v2d", "entry-quality-v2e"),
         default="exit-quality",
         help=(
             "Run the V2C attribution report or the V2D matched cost-safe "
-            "protection candidate comparison."
+            "protection candidate comparison, or diagnose V2E entry quality "
+            "under one frozen current-exit control."
         ),
     )
     parser.add_argument("--as-of", help="Frozen UTC ISO timestamp; defaults to current UTC time.")
@@ -105,6 +106,10 @@ def main():
         PROTECTION_CANDIDATE_SPECS,
         compare_records,
     )
+    from app.backtesting.matched_entry_quality import (
+        CURRENT_EXIT_CONTROL_SPECS,
+        build_entry_quality_report,
+    )
 
     model = StrategyShadowTrade if args.book == "strategy" else PaperTrade
     end = parse_as_of(args.as_of)
@@ -112,7 +117,9 @@ def main():
     fields = ("id", "symbol", "side", "strategy_id", "strategy_version", "opened_at",
               "entry_price", "initial_stop_loss", "target1", "target2", "target1_fraction",
               "position_notional_inr", "max_hold_hours", "exit_policy", "fee_bps",
-              "planned_entry_price", "entry_slippage_percent")
+              "planned_entry_price", "entry_slippage_percent", "confidence",
+              "entry_timeframe", "regime", "risk_reward", "execution_evidence_json",
+              "trailing_activation_r")
     with SessionLocal() as db:
         if db.bind.dialect.name == "postgresql":
             db.execute(text("SET TRANSACTION READ ONLY"))
@@ -166,17 +173,19 @@ def main():
         funding_events,
         exit_slippage_bps=args.exit_slippage_bps,
         slippage_scenarios=args.slippage_scenarios,
-        policy_specs=(
-            PROTECTION_CANDIDATE_SPECS
-            if args.study == "protection-v2d"
-            else None
-        ),
+        policy_specs=(PROTECTION_CANDIDATE_SPECS if args.study == "protection-v2d"
+                      else CURRENT_EXIT_CONTROL_SPECS if args.study == "entry-quality-v2e"
+                      else None),
         engine=(
             "matched_protection_candidates_v2d"
             if args.study == "protection-v2d"
+            else "matched_entry_quality_exit_control_v1"
+            if args.study == "entry-quality-v2e"
             else "matched_exit_sensitivity_v2c"
         ),
     )
+    if args.study == "entry-quality-v2e":
+        report = build_entry_quality_report(report, records)
     cohort.update(
         as_of_utc=end.isoformat(),
         window_start_utc=start.isoformat(),

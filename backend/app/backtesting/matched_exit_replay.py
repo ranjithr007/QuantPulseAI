@@ -170,7 +170,8 @@ def _full_horizon_excursions(record, path):
     risk_fraction = abs(record.entry_price - record.initial_stop_loss) / record.entry_price
     mfe = mae = 0.0
     mfe_at = None
-    threshold_minutes = {threshold: None for threshold in R_THRESHOLDS}
+    favourable_minutes = {threshold: None for threshold in R_THRESHOLDS}
+    adverse_minutes = {threshold: None for threshold in R_THRESHOLDS}
     for bar in path:
         favourable, adverse = _bar_excursions(record, bar)
         mae = max(mae, adverse)
@@ -178,10 +179,27 @@ def _full_horizon_excursions(record, path):
             mfe = favourable
             mfe_at = bar.close_time
         favourable_r = favourable / risk_fraction
+        adverse_r = adverse / risk_fraction
         elapsed = max(0.0, (bar.close_time - record.opened_at).total_seconds() / 60)
         for threshold in R_THRESHOLDS:
-            if threshold_minutes[threshold] is None and favourable_r >= threshold:
-                threshold_minutes[threshold] = elapsed
+            if favourable_minutes[threshold] is None and favourable_r >= threshold:
+                favourable_minutes[threshold] = elapsed
+            if adverse_minutes[threshold] is None and adverse_r >= threshold:
+                adverse_minutes[threshold] = elapsed
+
+    def first_excursion(threshold):
+        favourable = favourable_minutes[threshold]
+        adverse = adverse_minutes[threshold]
+        if favourable is None and adverse is None:
+            return "NEITHER"
+        if adverse is None or (favourable is not None and favourable < adverse):
+            return "FAVOURABLE_FIRST"
+        if favourable is None or adverse < favourable:
+            return "ADVERSE_FIRST"
+        # Five-minute OHLC cannot resolve ordering when both thresholds occur
+        # inside the same bar. Keep that ambiguity explicit.
+        return "SAME_5M_BAR_AMBIGUOUS"
+
     return {
         "mfe_percent": round(mfe * 100, 6),
         "mae_percent": round(mae * 100, 6),
@@ -192,9 +210,14 @@ def _full_horizon_excursions(record, path):
             round(max(0.0, (mfe_at - record.opened_at).total_seconds() / 60), 3)
             if mfe_at is not None else None
         ),
-        "time_to_0_25r_minutes": threshold_minutes[0.25],
-        "time_to_0_5r_minutes": threshold_minutes[0.5],
-        "time_to_1r_minutes": threshold_minutes[1.0],
+        "time_to_0_25r_minutes": favourable_minutes[0.25],
+        "time_to_0_5r_minutes": favourable_minutes[0.5],
+        "time_to_1r_minutes": favourable_minutes[1.0],
+        "time_to_adverse_0_25r_minutes": adverse_minutes[0.25],
+        "time_to_adverse_0_5r_minutes": adverse_minutes[0.5],
+        "time_to_adverse_1r_minutes": adverse_minutes[1.0],
+        "first_0_25r_excursion": first_excursion(0.25),
+        "first_0_5r_excursion": first_excursion(0.5),
     }
 
 
@@ -333,6 +356,7 @@ def _normalized_policy_specs(policy_specs, protection_activation_percent):
         spec = dict(raw)
         trailing_r = spec.get("trailing_activation_r", 0.0)
         disable_trailing = spec.get("disable_one_for_one_trailing", False)
+        recorded_trailing = spec.get("use_recorded_trailing_activation", False)
         activation_percent = spec.get("protection_activation_percent")
         activation_r = spec.get("protection_activation_r")
         if (
@@ -344,13 +368,14 @@ def _normalized_policy_specs(policy_specs, protection_activation_percent):
             raise ValueError("invalid_policy_spec")
         if activation_percent is not None and activation_r is not None:
             raise ValueError("invalid_policy_spec")
-        if not isinstance(disable_trailing, bool):
+        if not isinstance(disable_trailing, bool) or not isinstance(recorded_trailing, bool):
             raise ValueError("invalid_policy_spec")
         for activation in (activation_percent, activation_r):
             if activation is not None and not _positive(activation):
                 raise ValueError("invalid_policy_spec")
         spec["trailing_activation_r"] = float(trailing_r)
         spec["disable_one_for_one_trailing"] = disable_trailing
+        spec["use_recorded_trailing_activation"] = recorded_trailing
         normalized[str(name)] = spec
     if not normalized:
         raise ValueError("invalid_policy_spec")
@@ -398,11 +423,23 @@ def replay_trade(record, bars, *, exit_slippage_bps=10.0,
     specs = _normalized_policy_specs(policy_specs, protection_activation_percent)
     outcomes = {}
     for policy, policy_spec in specs.items():
+        trailing_activation_r = policy_spec["trailing_activation_r"]
+        if policy_spec.get("use_recorded_trailing_activation"):
+            recorded_activation = getattr(record, "trailing_activation_r", None)
+            if recorded_activation is not None:
+                if (
+                    isinstance(recorded_activation, bool)
+                    or not isinstance(recorded_activation, (float, int))
+                    or not math.isfinite(recorded_activation)
+                    or not 0 <= recorded_activation <= 5
+                ):
+                    raise ValueError("invalid_recorded_trailing_activation")
+                trailing_activation_r = float(recorded_activation)
         trade = SimpleNamespace(id=record.id, symbol=record.symbol, side=record.side,
             entry_price=entry, initial_stop_loss=initial, stop_loss=initial,
             target1=t1, target2=t2, target1_fraction=fraction, target1_hit_at=None,
             opened_at=record.opened_at, max_hold_hours=None, exit_policy=record.exit_policy,
-            trailing_activation_r=policy_spec["trailing_activation_r"])
+            trailing_activation_r=trailing_activation_r)
         remaining, pnl, best, ambiguous = 1.0, 0.0, 0.0, 0
         held_mfe = held_mae = 0.0
         held_mfe_at = None
