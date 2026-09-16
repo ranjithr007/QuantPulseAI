@@ -62,17 +62,23 @@ async def lifespan(app: FastAPI):
 
     print("QuantPulse Starting")
 
-    ensure_paper_execution_schema(db_engine)
+    # Production schema/index changes are applied by the migration process. Doing
+    # introspection and DDL here can hold the event loop behind a database lock
+    # long enough for Railway's startup healthcheck to expire before /health is
+    # served. Keep the idempotent repair helpers for local development only.
+    if settings.environment != "production":
+        ensure_paper_execution_schema(db_engine)
 
-    if settings.environment == "development":
-        ensure_automation_settings_schema(db_engine)
+        if settings.environment == "development":
+            ensure_automation_settings_schema(db_engine)
 
-    ensure_trade_thesis_lineage_schema(db_engine)
+        ensure_trade_thesis_lineage_schema(db_engine)
 
-    # A terminated worker cannot finish its RUNNING ledger rows. Repair them
-    # before the supervisor evaluates health, otherwise the stale row can cause
-    # an endless restart loop before the next scheduled pipeline gets a chance.
-    recover_abandoned_pipeline_runs()
+        # A terminated worker cannot finish its RUNNING ledger rows. Repair them
+        # before the supervisor evaluates health in local/dev runs.
+        recover_abandoned_pipeline_runs()
+    else:
+        print("Production startup: schema repair and ledger recovery delegated to migrations")
 
     if USING_SQLITE_FALLBACK:
         bootstrap_sqlite_demo_data(db_engine)
