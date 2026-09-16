@@ -4,7 +4,7 @@ from pathlib import Path
 import importlib.util
 
 
-revision = "pg_20260914_operational_readiness"
+revision = "pg_20260914_operational_ready"
 down_revision = "pg_20260907_exit_evidence"
 branch_labels = None
 depends_on = None
