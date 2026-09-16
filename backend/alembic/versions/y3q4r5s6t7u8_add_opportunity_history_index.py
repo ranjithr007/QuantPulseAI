@@ -22,6 +22,13 @@ def upgrade():
     inspector = sa.inspect(bind)
     if not inspector.has_table("decision_snapshots"):
         return
+    columns = {item["name"] for item in inspector.get_columns("decision_snapshots")}
+    required_columns = {"decision_version", "created_at", "id"}
+    if not required_columns.issubset(columns):
+        # Older installations may predate the opportunity-history fields. The
+        # application remains compatible; apply the index once the columns are
+        # introduced by their owning migration.
+        return
     indexes = {
         item["name"]
         for item in inspector.get_indexes("decision_snapshots")
