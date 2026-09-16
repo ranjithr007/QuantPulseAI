@@ -79,6 +79,31 @@ def test_readiness_reports_missing_and_failed_required_stages():
     assert readiness["failed_stages"] == ["feature"]
 
 
+def test_readiness_does_not_mislabel_in_progress_or_degraded_stages_as_failed():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[PipelineRun.__table__, JobRun.__table__])
+    session = sessionmaker(bind=engine)()
+    repo = PipelineRunRepository()
+    pipeline, _ = repo.start_pipeline(session, "gen-statuses")
+    for stage, status in (("market", "RUNNING"), ("feature", "DEGRADED"), ("risk", "BLOCKED")):
+        job, _ = repo.start_job(
+            session,
+            pipeline.id,
+            stage,
+            idempotency_key=f"gen-statuses:{stage}",
+        )
+        if status != "RUNNING":
+            repo.finish_job(session, job.id, status=status)
+
+    readiness = repo.readiness(session, pipeline.id, ("market", "feature", "risk"))
+
+    assert readiness["ready"] is False
+    assert readiness["running_stages"] == ["market"]
+    assert readiness["degraded_stages"] == ["feature"]
+    assert readiness["blocked_stages"] == ["risk"]
+    assert readiness["failed_stages"] == []
+
+
 def test_stale_running_recovery_preserves_completed_and_recent_records():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[PipelineRun.__table__, JobRun.__table__])

@@ -86,7 +86,8 @@ def test_approve_open_trade_plans_continues_after_one_trade_error():
     assert summary["approved"] == 0
     assert summary["rejected"] == 2
     assert summary["failed"] == 1
-    assert len(summary["errors"]) == 2
+    assert len(summary["errors"]) == 1
+    assert summary["rejections"] == ["ETHUSDT SHORT: bad setup"]
 
     trade_plan_repo.get_open_trades.assert_called_once_with(db)
     engine.analyze_trade_plan.assert_called()
@@ -125,6 +126,137 @@ def test_approve_open_trade_plans_excludes_legacy_entry_timeframes():
     engine.analyze_trade_plan.assert_not_called()
 
 
+def test_approve_open_trade_plans_reuses_fresh_identical_decision():
+    now = datetime(2026, 8, 17, 12, 0, 0)
+    trade = SimpleNamespace(
+        id=10,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_timeframe="1h",
+        entry_price=100.0,
+        stop_loss=98.0,
+        target1=104.0,
+        target2=106.0,
+        confidence=80.0,
+        thesis_id=1,
+        strategy_id="CORE_SIGNAL",
+        strategy_version="v1",
+        strategy_decision_snapshot_id=7,
+    )
+    latest = SimpleNamespace(
+        trade_plan_id=10,
+        symbol="BTCUSDT",
+        signal="LONG",
+        decision="APPROVE",
+        entry_price=100.0,
+        stop_loss=98.0,
+        target1=104.0,
+        target2=106.0,
+        risk_reward=2.0,
+        position_size=500.0,
+        risk_percent=1.0,
+        confidence=80.0,
+        strategy_id="CORE_SIGNAL",
+        strategy_version="v1",
+        strategy_decision_snapshot_id=7,
+        created_at=now - timedelta(minutes=1),
+    )
+    trade_plan_repo = Mock()
+    trade_plan_repo.get_open_trades.return_value = [trade]
+    risk_repo = Mock()
+    risk_repo.latest_for_trade_plans.return_value = {10: latest}
+    engine = Mock()
+    engine.analyze_trade_plan.return_value = {
+        "decision": "APPROVE",
+        "reason": "Trade plan passed risk checks",
+        "entry": 100.0,
+        "stop_loss": 98.0,
+        "targets": {"t1": 104.0, "t2": 106.0},
+        "risk_reward": 2.0,
+        "position_size": 500.0,
+        "risk_percent": 1.0,
+        "confidence": 80.0,
+    }
+    job = RiskJob(
+        config=RiskJobConfig(risk_decision_refresh_seconds=600),
+        risk_repo=risk_repo,
+        trade_plan_repo=trade_plan_repo,
+        engine=engine,
+    )
+
+    with patch.object(job, "_utc_now", return_value=now):
+        summary = job._approve_trade_plans(SimpleNamespace(commit=Mock()))
+
+    assert summary["processed"] == 1
+    assert summary["persisted"] == 0
+    assert summary["duplicates"] == 1
+    assert summary["approved"] == 1
+    risk_repo.save.assert_not_called()
+    risk_repo.latest_for_trade_plans.assert_called_once()
+
+
+def test_approve_open_trade_plans_persists_changed_fresh_decision():
+    now = datetime(2026, 8, 17, 12, 0, 0)
+    trade = SimpleNamespace(
+        id=10,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_timeframe="1h",
+        entry_price=100.0,
+        stop_loss=98.0,
+        target1=104.0,
+        target2=106.0,
+        confidence=80.0,
+        thesis_id=1,
+    )
+    latest = SimpleNamespace(
+        trade_plan_id=10,
+        symbol="BTCUSDT",
+        signal="LONG",
+        decision="REJECT",
+        entry_price=100.0,
+        stop_loss=98.0,
+        target1=104.0,
+        target2=106.0,
+        risk_reward=2.0,
+        position_size=None,
+        risk_percent=1.0,
+        confidence=80.0,
+        created_at=now - timedelta(minutes=1),
+    )
+    trade_plan_repo = Mock()
+    trade_plan_repo.get_open_trades.return_value = [trade]
+    risk_repo = Mock()
+    risk_repo.latest_for_trade_plans.return_value = {10: latest}
+    engine = Mock()
+    engine.analyze_trade_plan.return_value = {
+        "decision": "APPROVE",
+        "reason": "Trade plan passed risk checks",
+        "entry": 100.0,
+        "stop_loss": 98.0,
+        "targets": {"t1": 104.0, "t2": 106.0},
+        "risk_reward": 2.0,
+        "position_size": 500.0,
+        "risk_percent": 1.0,
+        "confidence": 80.0,
+    }
+    db = SimpleNamespace(commit=Mock())
+    job = RiskJob(
+        config=RiskJobConfig(risk_decision_refresh_seconds=600),
+        risk_repo=risk_repo,
+        trade_plan_repo=trade_plan_repo,
+        engine=engine,
+    )
+
+    with patch.object(job, "_utc_now", return_value=now):
+        summary = job._approve_trade_plans(db)
+
+    assert summary["persisted"] == 1
+    assert summary["duplicates"] == 0
+    risk_repo.save.assert_called_once()
+    db.commit.assert_called_once()
+
+
 def test_risk_job_uses_persisted_configured_max_risk_percent():
     settings = SimpleNamespace(max_risk_per_trade=1.5)
     query = Mock()
@@ -145,7 +277,7 @@ def test_risk_job_uses_persisted_configured_max_risk_percent():
 def test_duplicate_risk_decision_is_suppressed_inside_refresh_window():
     now = datetime(2026, 8, 17, 12, 0, 0)
     risk_repo = Mock()
-    risk_repo.latest_for_symbol.return_value = SimpleNamespace(
+    risk_repo.latest_master_for_symbol.return_value = SimpleNamespace(
         thesis_id=42,
         signal="LONG",
         created_at=now - timedelta(minutes=9),
@@ -168,7 +300,7 @@ def test_duplicate_risk_decision_is_suppressed_inside_refresh_window():
 def test_stale_duplicate_risk_decision_is_refreshed_before_api_expiry():
     now = datetime(2026, 8, 17, 12, 0, 0)
     risk_repo = Mock()
-    risk_repo.latest_for_symbol.return_value = SimpleNamespace(
+    risk_repo.latest_master_for_symbol.return_value = SimpleNamespace(
         thesis_id=42,
         signal="LONG",
         created_at=now - timedelta(minutes=10),
@@ -190,7 +322,7 @@ def test_stale_duplicate_risk_decision_is_refreshed_before_api_expiry():
 
 def test_missing_risk_decision_timestamp_is_not_suppressed_forever():
     risk_repo = Mock()
-    risk_repo.latest_for_symbol.return_value = SimpleNamespace(
+    risk_repo.latest_master_for_symbol.return_value = SimpleNamespace(
         thesis_id=42,
         signal="LONG",
         created_at=None,
@@ -235,7 +367,7 @@ def test_run_risk_job_continues_after_one_signal_error():
     risk_repo = Mock()
 
     # Required by RiskJob._already_processed().
-    risk_repo.latest_for_symbol.return_value = None
+    risk_repo.latest_master_for_symbol.return_value = None
 
     trade_plan_repo = Mock()
 
@@ -355,4 +487,40 @@ def test_risk_job_reports_partial_trade_plan_errors_as_degraded():
     assert summary["status"] == "DEGRADED"
     assert summary["trade_plans"]["approved"] == 1
     assert summary["trade_plans"]["rejected"] == 1
+    fake_db.close.assert_called_once()
+
+
+def test_risk_job_keeps_normal_trade_plan_rejections_completed():
+    fake_db = Mock()
+    master_repo = Mock()
+    master_repo.get_latest_signals.return_value = []
+    trade_plan_summary = {
+        "processed": 2,
+        "persisted": 2,
+        "approved": 1,
+        "rejected": 1,
+        "failed": 0,
+        "rejections": ["ETHUSDT SHORT: risk validation failed"],
+        "errors": [],
+    }
+    job = RiskJob(
+        session_factory=Mock(return_value=fake_db),
+        master_repo=master_repo,
+        risk_repo=Mock(),
+        trade_plan_repo=Mock(),
+        engine=Mock(),
+    )
+
+    with patch.object(
+        job,
+        "_approve_trade_plans",
+        return_value=trade_plan_summary,
+    ):
+        summary = job.run()
+
+    assert summary["status"] == "COMPLETED"
+    assert summary["trade_plans"]["rejected"] == 1
+    assert summary["trade_plans"]["rejections"] == [
+        "ETHUSDT SHORT: risk validation failed"
+    ]
     fake_db.close.assert_called_once()

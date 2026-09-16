@@ -13,6 +13,7 @@ from app.api.v1.paper_trade_api import execute_paper_trade_candidates_for_symbol
 from app.api.v1.paper_trade_api import _official_timeframe_records
 from app.api.v1.paper_trade_api import _paper_trade_payload
 from app.api.v1.paper_trade_api import _phase2_executor_blockers
+from app.api.v1.paper_trade_api import _phase2_global_executor_blockers
 from app.api.v1.paper_trade_api import _phase2_executor_ready_candidates
 from app.api.v1.paper_trade_api import _phase2_lifecycle_state
 from app.database.models.funding_rates import FundingRate
@@ -49,6 +50,15 @@ def _enabled_automation_settings():
     }
 
 
+def _promotable_strategy_evidence():
+    return {
+        (TREND_PULLBACK_STRATEGY_ID, TREND_PULLBACK_STRATEGY_VERSION): {
+            "status": "PROMOTABLE",
+            "official_execution_allowed": True,
+        }
+    }
+
+
 def test_open_position_payload_supplies_target2_from_official_exit_policy():
     trade = PaperTrade(
         id=7,
@@ -69,6 +79,33 @@ def test_open_position_payload_supplies_target2_from_official_exit_policy():
     assert payload["exit_policy"] == "PAPER_STAGED_EXIT_V2"
     assert payload["max_hold_hours"] == 48
     assert payload["exit_levels_source"] == "POLICY_FALLBACK"
+
+
+def test_compact_paper_trade_payload_keeps_classification_without_audit_blobs():
+    trade = PaperTrade(
+        id=71,
+        symbol="ETHUSDT",
+        side="LONG",
+        entry_price=100.0,
+        stop_loss=99.0,
+        initial_stop_loss=99.0,
+        entry_timeframe="1h",
+        status="CLOSED",
+        exit_reason="STOP",
+        result="LOSS",
+        pnl_percent=-1.0,
+        execution_evidence_json='{"decision":"approved"}',
+        exit_evidence_json='{"classification":"INITIAL_STOP"}',
+    )
+
+    payload = _paper_trade_payload(trade, include_evidence=False)
+
+    assert payload["id"] == 71
+    assert payload["exit_classification"] == "INITIAL_STOP"
+    assert payload["exit_classification_source"] == "RECORDED_TRIGGER"
+    assert payload["audit_evidence_included"] is False
+    assert "execution_evidence" not in payload
+    assert "exit_evidence" not in payload
 
 
 def test_open_position_payload_labels_capacity_adjusted_sizing():
@@ -101,6 +138,17 @@ def test_open_position_payload_labels_capacity_adjusted_sizing():
 
 class Phase1PaperTradeLifecycleTests(unittest.TestCase):
     def setUp(self):
+        exit_protection_patcher = patch(
+            "app.api.v1.paper_trade_api.exit_protection_snapshot",
+            return_value={
+                "policy": "FAST_EXIT_HEARTBEAT_V1",
+                "ready": True,
+                "status": "READY",
+                "reason": None,
+            },
+        )
+        exit_protection_patcher.start()
+        self.addCleanup(exit_protection_patcher.stop)
         self.engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -296,6 +344,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             db.commit()
 
         with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(
+            "app.api.v1.paper_trade_api._official_strategy_evidence",
+            return_value=_promotable_strategy_evidence(),
+        ), patch(
             "app.api.v1.paper_trade_api.get_automation_settings",
             return_value=object(),
         ), patch(
@@ -494,6 +545,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             db.commit()
 
         with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(
+            "app.api.v1.paper_trade_api._official_strategy_evidence",
+            return_value=_promotable_strategy_evidence(),
+        ), patch(
             "app.api.v1.paper_trade_api.get_automation_settings",
             return_value=object(),
         ), patch(
@@ -596,6 +650,9 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             db.commit()
 
         with patch("app.api.v1.paper_trade_api.SessionLocal", self.Session), patch(
+            "app.api.v1.paper_trade_api._official_strategy_evidence",
+            return_value=_promotable_strategy_evidence(),
+        ), patch(
             "app.api.v1.paper_trade_api.get_automation_settings",
             return_value=object(),
         ), patch(
@@ -923,6 +980,52 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             blockers["Strategy is not enabled for official paper execution"],
         )
         self.assertNotIn("Legacy incomplete blocker", blockers)
+
+    def test_lifecycle_separates_global_execution_safety_from_candidate_blocks(self):
+        candidates = [
+            {
+                "blocked_reasons": [],
+                "arbitration": {
+                    "executor_blockers": [
+                        "Strategy failed its evidence gate",
+                        "Portfolio drawdown safety limit reached",
+                    ],
+                    "executor_blocker_scopes": {
+                        "candidate": ["Strategy failed its evidence gate"],
+                        "global": ["Portfolio drawdown safety limit reached"],
+                    },
+                },
+            },
+            {
+                "blocked_reasons": [],
+                "arbitration": {
+                    "executor_blockers": ["Portfolio drawdown safety limit reached"],
+                    "executor_blocker_scopes": {
+                        "candidate": [],
+                        "global": ["Portfolio drawdown safety limit reached"],
+                    },
+                },
+            },
+        ]
+
+        candidate_blockers = _phase2_executor_blockers(candidates)
+        global_blockers = _phase2_global_executor_blockers(candidates)
+
+        self.assertEqual({"Strategy failed its evidence gate": 1}, candidate_blockers)
+        self.assertEqual({"Portfolio drawdown safety limit reached": 1}, global_blockers)
+
+    def test_lifecycle_reports_global_safety_pause_before_candidate_repair(self):
+        status, next_action = _phase2_lifecycle_state(
+            {"coverage": {"status": "COMPLETE"}},
+            plans=[SimpleNamespace(id=1)],
+            approved_candidates=[{"symbol": "BTCUSDT"}],
+            eligible_candidates=[],
+            open_trades=[],
+            global_executor_blockers={"Portfolio drawdown safety limit reached": 1},
+        )
+
+        self.assertEqual("EXECUTOR_BLOCKED", status)
+        self.assertIn("global execution-safety", next_action)
 
 
 if __name__ == "__main__":

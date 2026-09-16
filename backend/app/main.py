@@ -44,6 +44,8 @@ from app.config import get_settings
 from app.database.bootstrap import bootstrap_sqlite_demo_data
 from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.database.sqlserver import engine as db_engine
+from app.database.paper_execution_schema import ensure_paper_execution_schema
+from app.database.pipeline_startup_recovery import recover_abandoned_pipeline_runs
 from app.observability.http_operations import SlidingWindowRateLimiter
 from app.observability.http_operations import build_http_logger
 from app.repositories.automation_settings_repository import ensure_automation_settings_schema
@@ -60,10 +62,17 @@ async def lifespan(app: FastAPI):
 
     print("QuantPulse Starting")
 
+    ensure_paper_execution_schema(db_engine)
+
     if settings.environment == "development":
         ensure_automation_settings_schema(db_engine)
 
     ensure_trade_thesis_lineage_schema(db_engine)
+
+    # A terminated worker cannot finish its RUNNING ledger rows. Repair them
+    # before the supervisor evaluates health, otherwise the stale row can cause
+    # an endless restart loop before the next scheduled pipeline gets a chance.
+    recover_abandoned_pipeline_runs()
 
     if USING_SQLITE_FALLBACK:
         bootstrap_sqlite_demo_data(db_engine)

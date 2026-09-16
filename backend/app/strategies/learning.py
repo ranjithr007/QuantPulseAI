@@ -13,6 +13,8 @@ from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
 from app.paper_trading.exit_evidence import classify_exit
+from app.paper_trading.operational_exit_quality import is_operationally_contaminated_exit
+from app.paper_trading.operational_exit_quality import recorded_exit_evidence_quality
 from app.repositories.notification_repository import NotificationRepository
 from app.strategies.registry import STRATEGY_REGISTRY
 
@@ -21,6 +23,7 @@ MINIMUM_CLOSED_TRADES = 30
 REEVALUATION_STEP = 10
 EVALUATION_WINDOW_SIZE = 30
 ACTIVE_CANDIDATE_STATUSES = {"COLLECTING", "PAPER_CHAMPION"}
+STRATEGY_LEARNING_EVIDENCE_POLICY = "CLEAN_OPERATIONAL_EXIT_EVIDENCE_V2"
 
 
 def strategy_definitions(db, strategy_id=None):
@@ -221,7 +224,10 @@ def evaluate_due_strategy_versions(db):
             )
             .all()
         )
-        milestone = evaluation_milestone(len(trades))
+        clean_trades = [
+            trade for trade in trades if not is_operationally_contaminated_exit(trade)
+        ]
+        milestone = evaluation_milestone(len(clean_trades))
         if milestone is None or _evaluation_exists(db, definition, milestone):
             continue
         report = analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE)
@@ -240,7 +246,7 @@ def evaluate_due_strategy_versions(db):
             strategy_version=definition["version"],
             milestone=milestone,
             window_size=EVALUATION_WINDOW_SIZE,
-            closed_trade_count=len(trades),
+            closed_trade_count=len(clean_trades),
             status=(
                 "COLLECTING_COHORT"
                 if not cohort_ready
@@ -249,7 +255,11 @@ def evaluate_due_strategy_versions(db):
                 else "CHANGES_REQUIRED"
             ),
             metrics_json=json.dumps(
-                {**report["metrics"], "gates": report["gates"]},
+                {
+                    **report["metrics"],
+                    "gates": report["gates"],
+                    "evidence_snapshot_persisted": True,
+                },
                 sort_keys=True,
             ),
             diagnostics_json=json.dumps(report["diagnostics"], sort_keys=True),
@@ -308,10 +318,16 @@ def evaluate_due_strategy_versions(db):
 
 
 def analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE):
-    closed = sorted(
+    observed_closed = sorted(
         (item for item in trades if str(item.status).upper() == "CLOSED"),
         key=lambda item: (item.closed_at or item.created_at, item.id),
     )
+    operationally_contaminated = [
+        item for item in observed_closed if is_operationally_contaminated_exit(item)
+    ]
+    closed = [
+        item for item in observed_closed if not is_operationally_contaminated_exit(item)
+    ]
     cohorts = defaultdict(list)
     unknown = []
     for item in closed:
@@ -336,6 +352,10 @@ def analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE):
         cohort_verified=selected_cohort is not None,
         cohort_closed_trades=len(cohorts.get(selected_cohort, [])),
         unknown_cohort_trades=len(unknown),
+        total_observed_closed_trades=len(observed_closed),
+        excluded_operationally_contaminated_trades=len(operationally_contaminated),
+        evidence_scope="CLEAN_OPERATIONAL_EVIDENCE_ONLY",
+        evidence_policy=STRATEGY_LEARNING_EVIDENCE_POLICY,
         analysis_scope="VERIFIED_POLICY_COHORT" if selected_cohort else "LEGACY_DIAGNOSTIC_ONLY",
     )
     gates = {
@@ -344,6 +364,10 @@ def analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE):
         "win_rate": metrics["win_rate"] >= 55.0,
         "profit_factor": metrics["profit_factor"] >= 1.30,
         "cost_adjusted_expectancy": metrics["expectancy_inr"] > 0,
+        "timely_recorded_exit_evidence_complete": (
+            metrics["timely_exit_evidence_trades"] == metrics["closed_trades"]
+            and metrics["closed_trades"] > 0
+        ),
         "targets_exceed_initial_stops": (
             metrics["target_successes"] > metrics["pre_t1_losing_stops"]
         ),
@@ -359,11 +383,14 @@ def analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE):
             "by_policy_cohort": {key: _trade_metrics(items[-window_size:])
                                  for key, items in cohorts.items()},
             "unknown_cohort": _trade_metrics(unknown[-window_size:]),
+            "operationally_contaminated": _trade_metrics(
+                operationally_contaminated[-window_size:]
+            ),
         },
         "gates": gates,
         "promotion_candidate": all(gates.values()),
         "authorizes_live_execution": False,
-        "sample_interpretation": "Thirty closed trades are a diagnostic milestone, not proof of a durable edge or live authorization.",
+        "sample_interpretation": "Thirty clean closed trades are a diagnostic milestone, not proof of a durable edge or live authorization. Deadline-breached exits are retained for audit but excluded from promotion evidence.",
     }
 
 
@@ -417,32 +444,78 @@ def evaluation_milestone(closed_trade_count):
 
 
 def latest_evaluations(db, definitions):
+    definitions_by_key = {
+        (definition["id"], definition["version"]): definition
+        for definition in definitions
+    }
+    if not definitions_by_key:
+        return {}
+
     result = {}
-    for definition in definitions:
+    try:
+        rows = (
+            db.query(StrategyLearningEvaluation)
+            .filter(
+                StrategyLearningEvaluation.strategy_id.in_(
+                    sorted({key[0] for key in definitions_by_key})
+                )
+            )
+            .order_by(
+                StrategyLearningEvaluation.strategy_id.asc(),
+                StrategyLearningEvaluation.strategy_version.asc(),
+                StrategyLearningEvaluation.milestone.desc(),
+                StrategyLearningEvaluation.id.desc(),
+            )
+            .all()
+        )
+    except SQLAlchemyError:
+        db.rollback()
+        return {}
+
+    latest_rows = {}
+    for row in rows:
+        key = (row.strategy_id, row.strategy_version)
+        if key in definitions_by_key and key not in latest_rows:
+            latest_rows[key] = row
+
+    recalculation_rows = []
+    for key, definition in definitions_by_key.items():
+        row = latest_rows.get(key)
+        if row is None:
+            continue
+        payload = evaluation_payload(row)
+        if not payload["evidence_policy_current"]:
+            recalculation_rows.append((key, definition, row, payload))
+        else:
+            result[key] = payload
+
+    if recalculation_rows:
         try:
-            row = (
-                db.query(StrategyLearningEvaluation)
-                .filter(StrategyLearningEvaluation.strategy_id == definition["id"])
-                .filter(
-                    StrategyLearningEvaluation.strategy_version
-                    == definition["version"]
-                )
-                .order_by(
-                    StrategyLearningEvaluation.milestone.desc(),
-                    StrategyLearningEvaluation.id.desc(),
-                )
-                .first()
+            recalculation_trades = _load_recalculation_trades(
+                db,
+                {item[0] for item in recalculation_rows},
             )
         except SQLAlchemyError:
             db.rollback()
             return {}
-        if row is not None:
-            result[(definition["id"], definition["version"])] = evaluation_payload(row)
+        for key, definition, row, payload in recalculation_rows:
+            result[key] = _recalculated_clean_evaluation_payload(
+                db,
+                definition,
+                row,
+                payload,
+                trades=recalculation_trades.get(key, []),
+            )
     return result
 
 
 def evaluation_payload(row):
-    current_metrics = _json(row.metrics_json).get("metric_version") == "STOP_CAUSE_COHORT_V3"
+    metrics = _json(row.metrics_json)
+    current_metrics = metrics.get("metric_version") == "STOP_CAUSE_COHORT_V3"
+    evidence_policy_current = (
+        metrics.get("evidence_policy") == STRATEGY_LEARNING_EVIDENCE_POLICY
+        and metrics.get("evidence_snapshot_persisted") is True
+    )
     return {
         "id": row.id,
         "strategy_id": row.strategy_id,
@@ -450,12 +523,91 @@ def evaluation_payload(row):
         "milestone": row.milestone,
         "window_size": row.window_size,
         "closed_trade_count": row.closed_trade_count,
-        "status": row.status if current_metrics else "LEGACY_METRICS_REVIEW_REQUIRED",
-        "metrics": _json(row.metrics_json),
+        "status": (
+            row.status
+            if current_metrics and evidence_policy_current
+            else "CLEAN_EVIDENCE_RECALCULATION_REQUIRED"
+            if current_metrics
+            else "LEGACY_METRICS_REVIEW_REQUIRED"
+        ),
+        "metrics": metrics,
         "diagnostics": _json(row.diagnostics_json),
         "recommended_changes": _json(row.recommended_changes_json),
         "candidate_version": row.candidate_version,
         "created_at": row.created_at,
+        "authorizes_live_execution": False,
+        "evidence_policy_current": evidence_policy_current,
+    }
+
+
+def _load_recalculation_trades(db, strategy_keys):
+    strategy_ids = sorted({key[0] for key in strategy_keys})
+    strategy_versions = sorted({key[1] for key in strategy_keys})
+    rows = (
+        db.query(StrategyShadowTrade)
+        .filter(StrategyShadowTrade.strategy_id.in_(strategy_ids))
+        .filter(StrategyShadowTrade.strategy_version.in_(strategy_versions))
+        .filter(StrategyShadowTrade.status == "CLOSED")
+        .filter(StrategyShadowTrade.symbol.notlike("QA%"))
+        .order_by(
+            StrategyShadowTrade.closed_at.asc(),
+            StrategyShadowTrade.id.asc(),
+        )
+        .all()
+    )
+    grouped = defaultdict(list)
+    for trade in rows:
+        key = (trade.strategy_id, trade.strategy_version)
+        if key in strategy_keys:
+            grouped[key].append(trade)
+    return grouped
+
+
+def _recalculated_clean_evaluation_payload(
+    db,
+    definition,
+    row,
+    historical_payload,
+    *,
+    trades=None,
+):
+    """Expose current clean metrics without rewriting an immutable old snapshot."""
+
+    if trades is None:
+        trades = (
+            db.query(StrategyShadowTrade)
+            .filter(StrategyShadowTrade.strategy_id == definition["id"])
+            .filter(StrategyShadowTrade.strategy_version == definition["version"])
+            .filter(StrategyShadowTrade.status == "CLOSED")
+            .filter(StrategyShadowTrade.symbol.notlike("QA%"))
+            .order_by(
+                StrategyShadowTrade.closed_at.asc(),
+                StrategyShadowTrade.id.asc(),
+            )
+            .all()
+        )
+    report = analyze_strategy_trades(trades, window_size=EVALUATION_WINDOW_SIZE)
+    metrics = {
+        **report["metrics"],
+        "gates": {
+            **report["gates"],
+            "persisted_clean_evidence_snapshot": False,
+        },
+        "evidence_snapshot_persisted": False,
+    }
+    return {
+        **historical_payload,
+        "status": "CLEAN_EVIDENCE_RECALCULATED_PREVIEW",
+        "metrics": metrics,
+        "diagnostics": report["diagnostics"],
+        "recommended_changes": {
+            "paper_only": True,
+            "await_persisted_clean_milestone": True,
+        },
+        "historical_candidate_version": historical_payload.get("candidate_version"),
+        "candidate_version": None,
+        "evidence_policy_current": True,
+        "recalculated_from_immutable_evaluation_id": row.id,
         "authorizes_live_execution": False,
     }
 
@@ -492,6 +644,9 @@ def _trade_metrics(trades):
         and (item.target1_hit_at is not None or float(item.realized_pnl_inr or 0) >= 0)
     )
     exit_classes = [classify_exit(item) for item in trades]
+    exit_quality = [recorded_exit_evidence_quality(item) for item in trades]
+    verified_exit_evidence = sum(item["recorded"] for item in exit_quality)
+    timely_exit_evidence = sum(item["timely"] for item in exit_quality)
     initial_stops = sum(
         classification == "INITIAL_STOP" and float(item.realized_pnl_inr or 0) < 0
         for item, classification in zip(trades, exit_classes)
@@ -515,6 +670,14 @@ def _trade_metrics(trades):
         "trailed_stop_pre_t1_exits": exit_classes.count("TRAILED_STOP_PRE_T1"),
         "protected_stop_after_t1_exits": exit_classes.count("PROTECTED_STOP_AFTER_T1"),
         "unknown_stop_exits": exit_classes.count("UNKNOWN_STOP"),
+        "verified_exit_evidence_trades": verified_exit_evidence,
+        "missing_exit_evidence_trades": closed - verified_exit_evidence,
+        "timely_exit_evidence_trades": timely_exit_evidence,
+        "stale_or_untimed_exit_evidence_trades": closed - timely_exit_evidence,
+        "exit_evidence_coverage_percent": round(
+            timely_exit_evidence / closed * 100,
+            2,
+        ) if closed else 0.0,
         "protected_stop_exits": protected_stops,
         "target_success_rate": round(target_successes / closed * 100, 2)
         if closed

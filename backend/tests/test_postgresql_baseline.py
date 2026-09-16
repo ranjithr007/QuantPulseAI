@@ -109,6 +109,7 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
         "pg_20260903_participation_latest_index.py",
         "pg_20260904_strategy_learning.py",
         "pg_20260907_exit_evidence.py",
+        "pg_20260914_operational_readiness.py",
     ]
     content = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260809_baseline.py").read_text(encoding="utf-8")
     assert 'revision = "pg_20260809_baseline"' in content
@@ -210,3 +211,8 @@ def test_postgresql_lineage_has_locked_baseline_and_forward_migrations():
     assert 'down_revision = "pg_20260904_strategy_learning"' in exit_evidence
     assert 'revision = "pg_20260907_exit_evidence"' in exit_evidence
     assert "add_paper_execution_evidence.py" in exit_evidence
+
+    operational = (PROJECT_ROOT / "backend" / "alembic_postgresql" / "versions" / "pg_20260914_operational_readiness.py").read_text(encoding="utf-8")
+    assert 'down_revision = "pg_20260907_exit_evidence"' in operational
+    assert 'revision = "pg_20260914_operational_readiness"' in operational
+    assert "add_fast_exit_heartbeat.py" in operational

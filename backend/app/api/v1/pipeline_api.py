@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Query
 
 from app.api.v1.paper_trade_api import build_paper_trade_candidates
+from app.api.v1.paper_trade_api import _phase2_executor_blockers
+from app.api.v1.paper_trade_api import _phase2_executor_ready_candidates
+from app.api.v1.paper_trade_api import _phase2_global_executor_blockers
 from app.api.v1.signals_api import build_signal_watchlist_payload
 from app.backtesting.walk_forward_validator import PHASE2_OFFICIAL_TIMEFRAMES
 from app.database.models.risk_decision import RiskDecision
 from app.database.sqlserver import SessionLocal
+from app.paper_trading.exit_protection_health import exit_protection_snapshot
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
 from app.observability.performance_budget import LatencyBudget
@@ -56,12 +60,16 @@ def get_pipeline_status(
             db,
             stale_after_seconds=stale_after_seconds,
             trades=open_trade_plans,
+            exit_protection=exit_protection_snapshot(),
         )
         eligible_candidates = [
             item
             for item in candidates
             if item["eligible"]
         ]
+        executor_ready_candidates = _phase2_executor_ready_candidates(candidates)
+        candidate_blockers = _phase2_executor_blockers(candidates)
+        global_execution_blockers = _phase2_global_executor_blockers(candidates)
         paper_performance = paper_repo.performance_summary(
             db,
             entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
@@ -73,6 +81,9 @@ def get_pipeline_status(
             "paper_candidates": _paper_candidate_stage(
                 candidates,
                 eligible_candidates,
+                executor_ready_candidates,
+                candidate_blockers,
+                global_execution_blockers,
             ),
             "paper_trades": _paper_trade_stage(paper_performance),
             "performance": paper_performance,
@@ -262,13 +273,32 @@ def _latest_risk_payload(risk):
     }
 
 
-def _paper_candidate_stage(candidates, eligible_candidates):
+def _paper_candidate_stage(
+    candidates,
+    eligible_candidates,
+    executor_ready_candidates=None,
+    candidate_blockers=None,
+    global_execution_blockers=None,
+):
+    executor_ready_candidates = list(executor_ready_candidates or [])
     return {
         "count": len(candidates),
         "eligible_count": len(eligible_candidates),
         "blocked_count": len(candidates) - len(eligible_candidates),
         "has_eligible": bool(eligible_candidates),
+        "executor_ready_count": len(executor_ready_candidates),
+        "has_executor_ready": bool(executor_ready_candidates),
+        "candidate_blockers": _blocker_counts(candidate_blockers),
+        "global_execution_blockers": _blocker_counts(
+            global_execution_blockers
+        ),
     }
+
+
+def _blocker_counts(blockers):
+    if hasattr(blockers, "most_common"):
+        return dict(blockers.most_common())
+    return dict(blockers or {})
 
 
 def _paper_trade_stage(performance):
@@ -300,6 +330,14 @@ def _pipeline_blockers(stages):
 
     if not stages["paper_candidates"]["has_eligible"]:
         blockers.append("No eligible paper-trade candidates")
+    elif not stages["paper_candidates"].get("has_executor_ready", False):
+        global_blockers = stages["paper_candidates"].get(
+            "global_execution_blockers"
+        ) or {}
+        if global_blockers:
+            blockers.extend(global_blockers)
+        else:
+            blockers.append("No executor-ready paper-trade candidates")
 
     if not stages["paper_trades"]["has_open"]:
         blockers.append("No OPEN paper trades")

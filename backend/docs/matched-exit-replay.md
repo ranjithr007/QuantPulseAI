@@ -14,6 +14,9 @@ python scripts/check_matched_exit_replay.py --book strategy --days 14 --per-stra
 The report goes to stdout. PostgreSQL transactions are read-only with bounded
 query/lock timeouts and released before replay computation. No API, scheduler,
 database schema, orders, strategy settings, or saved learning reports are changed.
+The command fails closed if canonical storage is unavailable instead of silently
+researching the emergency SQLite fallback. `--allow-sqlite` is required when an
+intentional development SQLite evidence set should be used.
 Use `--summary-only` for a compact terminal report: it retains selection coverage,
 paired-trade counts, exclusions, assumptions and policy summaries, and omits only
 the detailed per-trade rows. `trade_details_count` records how many rows were

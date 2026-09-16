@@ -68,3 +68,10 @@ Index(
     DecisionSnapshot.effective_timestamp,
     DecisionSnapshot.id,
 )
+
+Index(
+    "ix_decision_snapshots_opportunity_history",
+    DecisionSnapshot.decision_version,
+    DecisionSnapshot.created_at,
+    DecisionSnapshot.id,
+)

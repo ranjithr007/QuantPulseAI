@@ -714,3 +714,49 @@ def test_candidate_arbitration_exposes_automation_blocker():
     assert record["arbitration"]["executor_blockers"] == [
         "Paper-trade automation is disabled"
     ]
+
+
+def test_candidate_arbitration_exposes_global_safety_scope_without_marking_a_winner():
+    candidate = {
+        "symbol": "BTCUSDT",
+        "side": "LONG",
+        "eligible": True,
+        "blocked_reasons": [],
+        "risk_decision": {"confidence": 65},
+        "paper_sizing": {"leverage": 2, "position_notional_inr": 100_000},
+        "trade_plan": {
+            "id": 1,
+            "strategy_id": CORE_SIGNAL_STRATEGY_ID,
+            "confidence": 65,
+            "risk_reward": 2.1,
+            "entry_timeframe": "1h",
+            "created_at": datetime.now(timezone.utc),
+        },
+    }
+    automation = {
+        "enabled": True,
+        "locked": False,
+        "emergencyStop": False,
+        "allowedSymbols": ["BTCUSDT"],
+        "minConfidence": 40,
+        "direction": "BOTH",
+        "executionMode": "PAPER",
+        "liveExecutionEnabled": False,
+        "maxLeverage": 5,
+        "maxPositionSize": 200_000,
+    }
+
+    record = _annotate_candidate_arbitration(
+        [candidate],
+        automation,
+        global_executor_blockers=["Portfolio drawdown safety limit reached"],
+    )[0]
+
+    assert record["arbitration"]["selected_for_official_execution"] is False
+    assert record["arbitration"]["executor_blockers"] == [
+        "Portfolio drawdown safety limit reached"
+    ]
+    assert record["arbitration"]["executor_blocker_scopes"] == {
+        "candidate": [],
+        "global": ["Portfolio drawdown safety limit reached"],
+    }

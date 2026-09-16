@@ -10,7 +10,7 @@ export const EXIT_CLASSIFICATIONS = {
 
 export function tradeExitClassification(trade) {
   // A STOP result, profit, or current stop alone cannot prove the exit subtype.
-  const key = trade?.exit_evidence?.classification;
+  const key = trade?.exit_evidence?.classification ?? trade?.exit_classification;
   return Object.hasOwn(EXIT_CLASSIFICATIONS, key) ? key : "UNKNOWN";
 }
 

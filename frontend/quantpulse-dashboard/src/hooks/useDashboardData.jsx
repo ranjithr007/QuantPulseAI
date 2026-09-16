@@ -5,6 +5,11 @@ import {
   loadIntelligenceBundle,
   loadLiveMarketSnapshot,
   loadLiveMarketStatus,
+  loadOpenPaperPositions,
+  loadPaperAccountSummary,
+  loadPaperTradeHistory,
+  loadPaperTradeMeasurement,
+  loadPaperTradePerformance,
   loadSignalBatch,
   pageNeedsSignalBatch,
   startLiveMarketListener,
@@ -40,6 +45,8 @@ function createInitialDashboardData() {
     accountRisk: null,
     paperWallet: null,
     ledgerScope: null,
+    paperTradeMeasurement: null,
+    paperTradeMeasurementError: "",
     openTrades: [],
     closedTrades: [],
     selected: {
@@ -164,16 +171,29 @@ function normalizeWatchlistPayload(watchlist) {
 
 function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
   const paperTradeBundle = overviewByKey.paperTradeBundle || {};
-  const officialOpenTrades = scopePaperTrades(paperTradeBundle.openTrades?.records);
-  const officialClosedTrades = scopePaperTrades(paperTradeBundle.closedTrades?.records);
+  const openPositionsPayload = overviewByKey.paperTradeOpenPositions;
+  const historyPayload = overviewByKey.paperTradeHistory;
+  const performancePayload = overviewByKey.paperTradePerformance;
+  const officialOpenTrades = scopePaperTrades(
+    openPositionsPayload?.records ?? paperTradeBundle.openTrades?.records
+  );
+  const officialClosedTrades = scopePaperTrades(
+    historyPayload?.records ?? paperTradeBundle.closedTrades?.records
+  );
+  const performanceRecord = performancePayload?.performance
+    ? {
+        ...performancePayload.performance,
+        breakdown: performancePayload.breakdown,
+        equity_curve: performancePayload.equity_curve,
+      }
+    : paperTradeBundle.performance;
   const officialPerformance = buildScopedPaperPerformance(
-    paperTradeBundle.performance,
+    performanceRecord,
     officialOpenTrades,
     officialClosedTrades
   );
-  const hasPaperTradePayload = Boolean(
-    paperTradeBundle.openTrades || paperTradeBundle.closedTrades
-  );
+  const hasOpenTradePayload = Boolean(openPositionsPayload || paperTradeBundle.openTrades);
+  const hasClosedTradePayload = Boolean(historyPayload || paperTradeBundle.closedTrades);
   const signalBatch = overviewByKey.signalBatch?.records_by_symbol || {};
   return {
     ...current,
@@ -197,8 +217,8 @@ function mergeDashboardBatches(current, { overviewByKey }, symbols, view) {
           symbol_filter: paperTradeBundle.symbol_filter ?? null,
         }
       : current.ledgerScope,
-    openTrades: hasPaperTradePayload ? officialOpenTrades : current.openTrades,
-    closedTrades: hasPaperTradePayload ? officialClosedTrades : current.closedTrades,
+    openTrades: hasOpenTradePayload ? officialOpenTrades : current.openTrades,
+    closedTrades: hasClosedTradePayload ? officialClosedTrades : current.closedTrades,
     selected: {
       ...current.selected,
       signal:
@@ -388,10 +408,16 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     const connect = async () => {
       if (closed) return;
 
-      try {
-        await startLiveMarketListener({ symbols });
-      } catch {
-        // Keep going; websocket and snapshot fallbacks can still recover.
+      // Production starts the listener with the API process and the WebSocket
+      // route starts it on demand. Calling the mutating /live/start endpoint
+      // from a public browser would correctly receive 401 in production.
+      // Keep the explicit start fallback for local development only.
+      if (!import.meta.env.PROD) {
+        try {
+          await startLiveMarketListener({ symbols });
+        } catch {
+          // Keep going; websocket and snapshot fallbacks can still recover.
+        }
       }
 
       if (closed) return;
@@ -532,7 +558,7 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
 
         setLiveStatus(status || {});
 
-        if (!status?.running) {
+        if (!status?.running && !import.meta.env.PROD) {
           const started = await startLiveMarketListener({ symbols, signal: controller.signal });
           if (cancelled) return;
           if (started) {
@@ -624,6 +650,141 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
               .catch((exception) => {
                 requestErrors.push(
                   `Signals: ${requestErrorMessage(exception, "request failed")}`
+                );
+              })
+          );
+        }
+
+        if (activePage === "pnl") {
+          requests.push(
+            loadPaperTradeMeasurement({ signal: controller.signal })
+              .then((payload) => {
+                if (cancelled) return;
+                setData((current) => ({
+                  ...current,
+                  paperTradeMeasurement: payload || null,
+                  paperTradeMeasurementError: "",
+                  lastRefresh: new Date(),
+                }));
+              })
+              .catch((exception) => {
+                if (cancelled || exception?.name === "AbortError") return;
+                setData((current) => ({
+                  ...current,
+                  paperTradeMeasurement: null,
+                  paperTradeMeasurementError: requestErrorMessage(
+                    exception,
+                    "Exit-data quality could not be loaded"
+                  ),
+                }));
+              })
+          );
+
+          requests.push(
+            loadOpenPaperPositions({ signal: controller.signal })
+              .then((payload) => {
+                if (cancelled || !payload) return;
+                setData((current) => {
+                  const openTrades = scopePaperTrades(payload.records);
+                  return {
+                    ...current,
+                    openTrades,
+                    performance:
+                      buildScopedPaperPerformance(
+                        current.performance,
+                        openTrades,
+                        current.closedTrades
+                      ) || current.performance,
+                    lastRefresh: new Date(),
+                  };
+                });
+                hasLoadedRef.current = true;
+                setLoading(false);
+              })
+              .catch((exception) => {
+                requestErrors.push(
+                  `Open positions: ${requestErrorMessage(exception, "request failed")}`
+                );
+              })
+          );
+
+          requests.push(
+            loadPaperTradeHistory({ page: 1, limit: 10, signal: controller.signal })
+              .then((payload) => {
+                if (cancelled || !payload) return;
+                setData((current) => {
+                  const closedTrades = scopePaperTrades(payload.records);
+                  return {
+                    ...current,
+                    closedTrades,
+                    performance:
+                      buildScopedPaperPerformance(
+                        current.performance,
+                        current.openTrades,
+                        closedTrades
+                      ) || current.performance,
+                    lastRefresh: new Date(),
+                  };
+                });
+                hasLoadedRef.current = true;
+                setLoading(false);
+              })
+              .catch((exception) => {
+                requestErrors.push(
+                  `Trade history: ${requestErrorMessage(exception, "request failed")}`
+                );
+              })
+          );
+
+          requests.push(
+            loadPaperTradePerformance({ signal: controller.signal })
+              .then((payload) => {
+                if (cancelled || !payload) return;
+                setData((current) => ({
+                  ...current,
+                  performance:
+                    buildScopedPaperPerformance(
+                      payload.performance,
+                      current.openTrades,
+                      current.closedTrades
+                    ) || current.performance,
+                  lastRefresh: new Date(),
+                }));
+                hasLoadedRef.current = true;
+                setLoading(false);
+              })
+              .catch((exception) => {
+                requestErrors.push(
+                  `Trade performance: ${requestErrorMessage(exception, "request failed")}`
+                );
+              })
+          );
+
+          const corePnlRequests = [...requests];
+          requests.push(
+            Promise.allSettled(corePnlRequests)
+              .then(() => {
+                if (cancelled) return null;
+                return loadPaperAccountSummary({ signal: controller.signal });
+              })
+              .then((payload) => {
+                if (cancelled || !payload) return;
+                setData((current) => ({
+                  ...current,
+                  accountRisk: payload.accountRisk || current.accountRisk,
+                  paperWallet: payload.paperWallet || current.paperWallet,
+                  ledgerScope: {
+                    ...payload.ledgerScope,
+                    symbol_filter: payload.symbol_filter ?? null,
+                  },
+                  lastRefresh: new Date(),
+                }));
+                hasLoadedRef.current = true;
+                setLoading(false);
+              })
+              .catch((exception) => {
+                requestErrors.push(
+                  `Wallet summary: ${requestErrorMessage(exception, "request failed")}`
                 );
               })
           );
@@ -739,6 +900,15 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const accountRisk = data.accountRisk || null;
   const paperWallet = data.paperWallet || null;
   const ledgerScope = data.ledgerScope || null;
+  const headlineMeasurement = data.paperTradeMeasurement?.report?.overall || null;
+  const cleanPerformance = data.paperTradeMeasurement?.report?.evidence_overall || null;
+  const confidenceCalibration = data.paperTradeMeasurement?.report?.confidence_calibration || null;
+  const returnDecomposition = data.paperTradeMeasurement?.report?.return_decomposition || null;
+  const measurementEvaluation = data.paperTradeMeasurement?.report?.evaluation || null;
+  const measurementDataQuality = data.paperTradeMeasurement?.report?.data_quality || null;
+  const exitClassificationCohorts = data.paperTradeMeasurement?.report?.cohorts?.exit_classification || [];
+  const operationalExitQuality = data.paperTradeMeasurement?.report?.operational_exit_quality || null;
+  const operationalExitQualityError = data.paperTradeMeasurementError || "";
   const openTrades = data.openTrades || [];
   const closedTrades = data.closedTrades || [];
 
@@ -884,9 +1054,26 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
       })),
     [candleSeries]
   );
-  const equitySeries = useMemo(() => buildEquityCurve(closedTrades), [closedTrades]);
-  const pnlBySymbol = useMemo(() => buildGroupPnL(closedTrades, "symbol"), [closedTrades]);
-  const pnlBySide = useMemo(() => buildGroupPnL(closedTrades, "side"), [closedTrades]);
+  const exactEquitySeries = performance.equity_curve?.points;
+  const equitySeries = useMemo(
+    () => Array.isArray(exactEquitySeries) ? exactEquitySeries : buildEquityCurve(closedTrades),
+    [closedTrades, exactEquitySeries]
+  );
+  const equityCurveMeta = performance.equity_curve || null;
+  const exactPnlBySymbol = performance.breakdown?.by_symbol;
+  const exactPnlBySide = performance.breakdown?.by_side;
+  const pnlBySymbol = useMemo(
+    () => Array.isArray(exactPnlBySymbol) ? exactPnlBySymbol : buildGroupPnL(closedTrades, "symbol"),
+    [closedTrades, exactPnlBySymbol]
+  );
+  const pnlBySide = useMemo(
+    () => Array.isArray(exactPnlBySide) ? exactPnlBySide : buildGroupPnL(closedTrades, "side"),
+    [closedTrades, exactPnlBySide]
+  );
+  const pnlBreakdownScope = Array.isArray(exactPnlBySymbol) && Array.isArray(exactPnlBySide)
+    ? "ALL_CLOSED_TRADES"
+    : "LOADED_SAMPLE";
+  const pnlCohorts = performance.breakdown || null;
   const tradeHistory = useMemo(() => {
     return [...closedTrades].sort((a, b) => dateValue(b.closed_at || b.created_at) - dateValue(a.closed_at || a.created_at));
   }, [closedTrades]);
@@ -914,11 +1101,17 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
   const monthlyPnl = performance.monthly_pnl_percent ?? sumWithinDays(closedTrades, 30);
   const realizedPnl = performance.total_pnl_percent ?? sumPnl(closedTrades);
   const unrealizedPnl = sumPnl(openPositions, "unrealized_pnl_percent");
-  const maxDrawdown = calculateMaxDrawdown(equitySeries);
+  const maxDrawdown = performance.equity_curve?.max_drawdown_percent ?? calculateMaxDrawdown(equitySeries);
   const winningTrades = performance.wins ?? closedTrades.filter((trade) => safeNumber(trade.pnl_percent, 0) > 0).length;
   const losingTrades = performance.losses ?? closedTrades.filter((trade) => safeNumber(trade.pnl_percent, 0) < 0).length;
   const closedTradeCount = performance.closed_trades ?? closedTrades.length;
   const winRate = performance.win_rate ?? (closedTradeCount ? (winningTrades / closedTradeCount) * 100 : 0);
+  const averageProfit = performance.average_win_pnl_percent ?? averageSignedPnl(closedTrades, true);
+  const averageLoss = performance.average_loss_pnl_percent ?? averageSignedPnl(closedTrades, false);
+  const averagePnlScope = performance.average_win_pnl_percent != null || performance.average_loss_pnl_percent != null
+    ? "ALL_CLOSED_TRADES"
+    : "LOADED_SAMPLE";
+  const performanceHealth = performance.edge_health || null;
 
   return {
     setTick,
@@ -935,14 +1128,26 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     openTrades,
     paperWallet,
     ledgerScope,
+    headlineMeasurement,
+    cleanPerformance,
+    confidenceCalibration,
+    returnDecomposition,
+    measurementEvaluation,
+    measurementDataQuality,
+    exitClassificationCohorts,
+    operationalExitQuality,
+    operationalExitQualityError,
     candleSeries,
     volumeSeries,
     selectedRisk,
     selectedPaperTradeCandidate,
     paperTradeCandidates: selectedPaperTradeCandidates,
     equitySeries,
+    equityCurveMeta,
     pnlBySymbol,
     pnlBySide,
+    pnlBreakdownScope,
+    pnlCohorts,
     tradeHistory,
     closedTradeCount,
     openPositions,
@@ -955,7 +1160,18 @@ export default function useDashboardData({ activePage, view, filters, auto, symb
     winningTrades,
     losingTrades,
     winRate,
+    averageProfit,
+    averageLoss,
+    averagePnlScope,
+    performanceHealth,
   };
+}
+
+function averageSignedPnl(trades, positive) {
+  const values = (trades || [])
+    .map((trade) => Number(trade?.pnl_percent))
+    .filter((value) => Number.isFinite(value) && (positive ? value > 0 : value < 0));
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
 function pageNeedsSelectedBundle(activePage) {

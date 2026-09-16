@@ -7,6 +7,8 @@ from app.jobs.opportunity_coverage_recovery_job import _bounded_missing
 from app.jobs.opportunity_coverage_recovery_job import _bootstrap_missing
 from app.jobs.opportunity_coverage_recovery_job import _gap_signature
 from app.jobs.opportunity_coverage_recovery_job import run_opportunity_coverage_recovery_job
+from app.api.v1.signals_api import _persist_phase2_opportunity_snapshot
+from app.api.v1.paper_trade_api import _phase2_opportunity_coverage
 
 
 NOW = datetime(2026, 8, 15, 15, 30)
@@ -196,3 +198,73 @@ def test_recovery_runs_after_watchlist_persistence_in_worker_pipeline():
     assert names.index("opportunity_coverage_recovery") == names.index("watchlist_persist") + 1
     assert names.index("opportunity_coverage_recovery") < names.index("risk")
     assert "opportunity_coverage_recovery" in ALWAYS_RUN_SAFETY_STAGES
+
+
+def test_recovery_preserves_requested_hour_instead_of_selected_candle_slot():
+    db = Mock()
+    selected_candle = datetime(2026, 8, 15, 12, 0)
+    requested_slot = datetime(2026, 8, 15, 13, 0)
+    payload = {
+        "symbol": "BTCUSDT",
+        "mode": "intraday",
+        "timeframes_used": ["1h", "2h", "4h", "1d"],
+        "timeframes": [],
+        "trigger": {"status": "WAIT", "conditions": []},
+        "confirmation": {},
+    }
+    record = SimpleNamespace(
+        id=7,
+        decision_version="phase2_opportunity_ledger_v1",
+        effective_timestamp=requested_slot,
+    )
+
+    with patch(
+        "app.api.v1.signals_api._selected_timeframe_record",
+        return_value={"timeframe": "2h", "candle_time": selected_candle},
+    ), patch(
+        "app.api.v1.signals_api.build_decision_snapshot",
+        return_value={},
+    ) as build, patch(
+        "app.api.v1.signals_api._persist_decision_snapshot_safe",
+        return_value=record,
+    ):
+        result = _persist_phase2_opportunity_snapshot(
+            db,
+            payload,
+            effective_timestamp=requested_slot,
+        )
+
+    assert build.call_args.kwargs["source_timestamp"] == selected_candle
+    assert build.call_args.kwargs["effective_timestamp"] == requested_slot
+    assert result["effective_timestamp"] == requested_slot
+
+
+def test_hourly_coverage_counts_valid_non_1h_entry_selection():
+    latest_slot = (
+        (datetime.utcnow() - timedelta(minutes=15))
+        .replace(minute=0, second=0, microsecond=0)
+        - timedelta(hours=1)
+    )
+    records = [
+        SimpleNamespace(
+            symbol="BTCUSDT",
+            timeframe="2h",
+            effective_timestamp=latest_slot,
+        ),
+        SimpleNamespace(
+            symbol="ETHUSDT",
+            timeframe="4h",
+            effective_timestamp=latest_slot,
+        ),
+    ]
+
+    coverage = _phase2_opportunity_coverage(
+        records,
+        ["BTCUSDT", "ETHUSDT"],
+        scheduler_grace_minutes=15,
+    )
+
+    assert coverage["scope"] == "ACTIVE_FUTURES_SYMBOLS_X_CLOSED_1H_CANDLES"
+    assert coverage["status"] == "COMPLETE"
+    assert coverage["recorded_evaluations"] == 2
+    assert coverage["missing_evaluations"] == 0

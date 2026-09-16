@@ -192,14 +192,26 @@ function DashboardApp({ username, onLogout }) {
     openTrades,
     paperWallet,
     ledgerScope,
+    headlineMeasurement,
+    cleanPerformance,
+    confidenceCalibration,
+    returnDecomposition,
+    measurementEvaluation,
+    measurementDataQuality,
+    exitClassificationCohorts,
+    operationalExitQuality,
+    operationalExitQualityError,
     candleSeries,
     volumeSeries,
     selectedRisk,
     selectedPaperTradeCandidate,
     paperTradeCandidates,
     equitySeries,
+    equityCurveMeta,
     pnlBySymbol,
     pnlBySide,
+    pnlBreakdownScope,
+    pnlCohorts,
     tradeHistory,
     closedTradeCount,
     openPositions,
@@ -212,6 +224,10 @@ function DashboardApp({ username, onLogout }) {
     winningTrades,
     losingTrades,
     winRate,
+    averageProfit,
+    averageLoss,
+    averagePnlScope,
+    performanceHealth,
   } = useDashboardData({
     activePage,
     view,
@@ -368,12 +384,24 @@ function DashboardApp({ username, onLogout }) {
       openTrades={openTrades}
       paperWallet={paperWallet}
       ledgerScope={ledgerScope}
+      headlineMeasurement={headlineMeasurement}
+      cleanPerformance={cleanPerformance}
+      confidenceCalibration={confidenceCalibration}
+      returnDecomposition={returnDecomposition}
+      measurementEvaluation={measurementEvaluation}
+      measurementDataQuality={measurementDataQuality}
+      exitClassificationCohorts={exitClassificationCohorts}
+      operationalExitQuality={operationalExitQuality}
+      operationalExitQualityError={operationalExitQualityError}
       candleSeries={candleSeries}
       volumeSeries={volumeSeries}
       selectedRisk={selectedRisk}
       equitySeries={equitySeries}
+      equityCurveMeta={equityCurveMeta}
       pnlBySymbol={pnlBySymbol}
       pnlBySide={pnlBySide}
+      pnlBreakdownScope={pnlBreakdownScope}
+      pnlCohorts={pnlCohorts}
       tradeHistory={tradeHistory}
       closedTradeCount={closedTradeCount}
       openPositions={openPositions}
@@ -386,6 +414,10 @@ function DashboardApp({ username, onLogout }) {
       winningTrades={winningTrades}
       losingTrades={losingTrades}
       winRate={winRate}
+      averageProfit={averageProfit}
+      averageLoss={averageLoss}
+      averagePnlScope={averagePnlScope}
+      performanceHealth={performanceHealth}
       username={username}
       onLogout={onLogout}
     />
@@ -421,14 +453,26 @@ function DashboardLayout({
   openTrades,
   paperWallet,
   ledgerScope,
+  headlineMeasurement,
+  cleanPerformance,
+  confidenceCalibration,
+  returnDecomposition,
+  measurementEvaluation,
+  measurementDataQuality,
+  exitClassificationCohorts,
+  operationalExitQuality,
+  operationalExitQualityError,
   candleSeries,
   volumeSeries,
   selectedRisk,
   selectedPaperTradeCandidate,
   paperTradeCandidates,
   equitySeries,
+  equityCurveMeta,
   pnlBySymbol,
   pnlBySide,
+  pnlBreakdownScope,
+  pnlCohorts,
   tradeHistory,
   closedTradeCount,
   openPositions,
@@ -441,6 +485,10 @@ function DashboardLayout({
   winningTrades,
   losingTrades,
   winRate,
+  averageProfit,
+  averageLoss,
+  averagePnlScope,
+  performanceHealth,
 }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -647,16 +695,32 @@ function DashboardLayout({
                   weeklyPnl={weeklyPnl}
                   monthlyPnl={monthlyPnl}
                   maxDrawdown={maxDrawdown}
+                  equityCurveMeta={equityCurveMeta}
                   winningTrades={winningTrades}
                   losingTrades={losingTrades}
                   winRate={winRate}
+                  averageProfit={averageProfit}
+                  averageLoss={averageLoss}
+                  averagePnlScope={averagePnlScope}
+                  performanceHealth={performanceHealth}
                   tradeHistory={tradeHistory}
                   closedTradeCount={closedTradeCount}
                   openPositions={openPositions}
                   paperWallet={paperWallet}
                   ledgerScope={ledgerScope}
+                  headlineMeasurement={headlineMeasurement}
+                  cleanPerformance={cleanPerformance}
+                  confidenceCalibration={confidenceCalibration}
+                  returnDecomposition={returnDecomposition}
+                  measurementEvaluation={measurementEvaluation}
+                  measurementDataQuality={measurementDataQuality}
+                  exitClassificationCohorts={exitClassificationCohorts}
+                  operationalExitQuality={operationalExitQuality}
+                  operationalExitQualityError={operationalExitQualityError}
                   pnlBySymbol={pnlBySymbol}
                   pnlBySide={pnlBySide}
+                  pnlBreakdownScope={pnlBreakdownScope}
+                  pnlCohorts={pnlCohorts}
                   equitySeries={equitySeries}
                   selectedDetail={selectedDetail}
                   autoDecision={autoDecision}

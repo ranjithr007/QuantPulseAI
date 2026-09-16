@@ -1,4 +1,4 @@
-import { formatTimeInIst, timestampMillis } from "../utils/formatters";
+import { formatTimeInIst, timestampMillis } from "../utils/formatters.js";
 
 export function buildSignalRow(symbol, signal, watchlist) {
   const side = signalType(signal);
@@ -290,8 +290,9 @@ export function normalizeCandles(response) {
 export function buildEquityCurve(trades) {
   let equity = 0;
 
-  return trades
+  const points = [...trades]
     .filter((trade) => trade.status === "CLOSED")
+    .sort((a, b) => timestampMillis(a.closed_at || a.created_at) - timestampMillis(b.closed_at || b.created_at))
     .map((trade, index) => {
       equity += safeNumber(trade.pnl_percent, 0);
       return {
@@ -300,6 +301,7 @@ export function buildEquityCurve(trades) {
         equity: Number(equity.toFixed(2)),
       };
     });
+  return [{ index: 0, label: "Start", equity: 0 }, ...points];
 }
 
 export function buildGroupPnL(trades, key) {
@@ -318,7 +320,7 @@ export function buildGroupPnL(trades, key) {
 }
 
 export function calculateMaxDrawdown(series) {
-  let peak = -Infinity;
+  let peak = 0;
   let drawdown = 0;
 
   series.forEach((point) => {

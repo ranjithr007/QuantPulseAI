@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 from datetime import datetime
 from datetime import timezone
@@ -182,6 +183,76 @@ def test_market_job_fails_when_all_sources_return_no_candles():
     assert result["rows_written"] == 0
     assert result["results"][0]["error"] == "NO_CANDLES_FROM_AVAILABLE_SOURCES"
     save_candle.assert_not_called()
+
+
+def test_market_job_fetches_due_combinations_concurrently_with_bounded_calls():
+    fake_db = make_fake_db()
+    symbol = SimpleNamespace(symbol="BTCUSDT")
+    barrier = threading.Barrier(2, timeout=2)
+
+    class ConcurrentCollector:
+        def __init__(self):
+            self.active = 0
+            self.maximum_active = 0
+            self.lock = threading.Lock()
+
+        def get_candles(self, symbol, interval, **_kwargs):
+            with self.lock:
+                self.active += 1
+                self.maximum_active = max(self.maximum_active, self.active)
+            try:
+                barrier.wait()
+                return [
+                    {
+                        "symbol": symbol,
+                        "timeframe": interval,
+                        "open_time_ms": 1_000,
+                        "open": 1.0,
+                        "high": 2.0,
+                        "low": 0.5,
+                        "close": 1.5,
+                        "volume": 10.0,
+                    }
+                ]
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    collector = ConcurrentCollector()
+    fallback = Mock()
+
+    with patch("app.jobs.market_job.SessionLocal", return_value=fake_db), patch(
+        "app.jobs.market_job.SymbolRepository.get_active_symbols",
+        return_value=[symbol],
+    ), patch("app.jobs.market_job.TIMEFRAMES", ["1h", "2h"]), patch(
+        "app.jobs.market_job.MarketRepository.get_collection_cursor",
+        return_value=None,
+    ), patch(
+        "app.jobs.market_job.MarketRepository.save_candle",
+        return_value=True,
+    ), patch(
+        "app.jobs.market_job.CandleCollector",
+        return_value=collector,
+    ) as binance_factory, patch(
+        "app.jobs.market_job.BybitCandleCollector",
+        return_value=fallback,
+    ) as bybit_factory:
+        result = run_market_job()
+
+    assert result["status"] == "COMPLETED"
+    assert result["processed_combinations"] == 2
+    assert result["fetch_workers"] == 8
+    assert collector.maximum_active == 2
+    assert fake_db.rollback.called
+    fallback.get_candles.assert_not_called()
+    binance_factory.assert_called_once_with(
+        timeout_seconds=5,
+        max_attempts=1,
+    )
+    bybit_factory.assert_called_once_with(
+        timeout_seconds=5,
+        max_attempts=1,
+    )
 
 
 def make_fake_db():

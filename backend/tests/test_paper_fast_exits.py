@@ -41,6 +41,27 @@ def test_stream_retains_crossing_tick_and_deduplicates_out_of_order_frames():
     assert [m["mark_price"] for m in feed.take(["BTCUSDT"], now)["BTCUSDT"]] == [100]
 
 
+def test_stream_latest_does_not_consume_pending_exit_ticks():
+    feed = PaperExitPrices()
+    now = datetime.now(timezone.utc)
+    feed.ingest([tick(100, now)], now)
+
+    assert feed.latest(["btcusdt"], now)["BTCUSDT"]["mark_price"] == 100
+    assert [item["mark_price"] for item in feed.take(["BTCUSDT"], now)["BTCUSDT"]] == [100]
+
+
+def test_stream_health_requires_a_fresh_valid_message():
+    feed = PaperExitPrices()
+    now = datetime.now(timezone.utc)
+
+    assert feed.health(now)["ready"] is False
+    feed.ingest([tick(100, now)], now)
+    assert feed.health(now)["ready"] is True
+    stale = feed.health(now + timedelta(seconds=5.1))
+    assert stale["ready"] is False
+    assert "stale" in stale["reason"]
+
+
 @pytest.mark.parametrize("price,offset", [("nan", 0), ("inf", 0), (0, 0), (-1, 0), (100, -10), (100, 10)])
 def test_stream_rejects_invalid_stale_and_future_quotes(price, offset):
     feed = PaperExitPrices()
@@ -120,6 +141,16 @@ def test_stale_feed_keeps_honest_open_state_and_alerts_without_spam(runtime):
     with factory() as db:
         assert db.get(PaperTrade, key).status == "OPEN"
         assert db.query(AppNotification).count() == 1
+
+
+def test_empty_book_cannot_report_ready_without_live_stream(runtime):
+    _, feed = runtime
+
+    result = job.run_paper_trade_fast_exit_job()
+
+    assert result["status"] == "DEGRADED"
+    assert result["price_stream"]["ready"] is False
+    assert any("PRICE_STREAM_UNREADY" in item for item in result["errors"])
 
 
 def test_tick_before_entry_cannot_close_a_new_position(runtime):

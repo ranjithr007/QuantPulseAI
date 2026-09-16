@@ -21,6 +21,8 @@ from app.backtesting.walk_forward_jobs import (
 from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.inr_sizing import PAPER_CAPITAL_INR
 from app.paper_trading.exit_evidence import classify_exit, read_evidence
+from app.paper_trading.strategy_evidence import load_official_strategy_evidence
+from app.paper_trading.strategy_evidence import strategy_evidence_for_plan
 from app.strategies.registry import STRATEGY_REGISTRY
 from app.strategies.registry import strategy_definition
 from app.strategies.learning import latest_evaluations
@@ -31,34 +33,41 @@ router = APIRouter(prefix="/strategies", tags=["Strategies"])
 
 
 def _display_strategy_definitions(db, normalized):
-    """Keep retired entry ledgers visible without registering executable rules."""
-    retired = {
-        (strategy_id, strategy_id.lower() + "_v1")
+    """Keep every retired entry ledger visible without registering old rules."""
+    entry_ids = {
+        strategy_id
         for strategy_id in ("MARKET_MOVE_ENTRY", "REGIME_TREND_ENTRY")
         if normalized is None or normalized == strategy_id
     }
     definitions = [
         item for item in strategy_definitions(db, normalized)
-        if (item["id"], item["version"]) not in retired
     ]
-    if not retired:
+    if not entry_ids:
         return definitions
-    existing = (
+    current_versions = {
+        strategy_id: STRATEGY_REGISTRY[strategy_id]["version"]
+        for strategy_id in entry_ids
+    }
+    existing = {
+        (strategy_id, version)
+        for strategy_id, version in (
         db.query(StrategyShadowTrade.strategy_id, StrategyShadowTrade.strategy_version)
-        .filter(or_(*[
-            and_(StrategyShadowTrade.strategy_id == strategy_id,
-                 StrategyShadowTrade.strategy_version == version)
-            for strategy_id, version in retired
-        ]))
+        .filter(StrategyShadowTrade.strategy_id.in_(sorted(entry_ids)))
         .distinct().all()
-    )
+        )
+        if version and version != current_versions[strategy_id]
+    }
     for strategy_id, version in sorted(existing):
         base = STRATEGY_REGISTRY[strategy_id]
+        version_label = version.rsplit("_", 1)[-1]
         definitions.append({
             **base, "version": version,
-            "decision_version": strategy_id.lower() + "_strategy_v1",
-            "name": base["name"] + " (v1 history)",
-            "description": "Read-only v1 entry experiment history. Existing positions retain their recorded management; no new entries or promotion.",
+            "decision_version": strategy_id.lower() + f"_strategy_{version_label}",
+            "name": base["name"] + f" ({version_label} history)",
+            "description": (
+                f"Read-only {version_label} entry experiment history. Existing "
+                "positions retain their recorded management; no new entries or promotion."
+            ),
             "strategy_type": "HISTORICAL", "status": "RETIRED",
             "read_only": True, "historical": True,
             "paper_execution_enabled": False, "official_execution_enabled": False,
@@ -67,12 +76,77 @@ def _display_strategy_definitions(db, normalized):
     return definitions
 
 
+@router.get("/execution-gates")
+def get_strategy_execution_gates(
+    strategy_id: str | None = Query(default=None),
+):
+    """Return the small fail-closed execution contract without full analytics."""
+    normalized = str(strategy_id or "").upper() or None
+    if normalized and normalized not in STRATEGY_REGISTRY:
+        return {
+            "source": "strategy_execution_gates_v1",
+            "status": "NOT_FOUND",
+            "strategy_id": normalized,
+            "records": [],
+        }
+
+    db = SessionLocal()
+    try:
+        definitions = _display_strategy_definitions(db, normalized)
+        strategy_ids = [definition["id"] for definition in definitions]
+        evidence_by_key = load_official_strategy_evidence(db, strategy_ids)
+        records = []
+        for definition in definitions:
+            evidence = strategy_evidence_for_plan(
+                evidence_by_key,
+                {
+                    "strategy_id": definition["id"],
+                    "strategy_version": definition["version"],
+                },
+            )
+            configured = bool(
+                definition.get("official_execution_enabled")
+                and not definition.get("read_only")
+            )
+            records.append(
+                {
+                    **definition,
+                    "ledger_loaded": False,
+                    "coverage": {},
+                    "performance": _empty_strategy_performance(),
+                    "strategy_paper_performance": _empty_strategy_performance(),
+                    "official_performance": _empty_strategy_performance(),
+                    "official_entry_evidence": evidence,
+                    "official_execution_configured": configured,
+                    "official_execution_allowed": bool(
+                        configured and evidence.get("official_execution_allowed")
+                    ),
+                    "candidates": [],
+                }
+            )
+        return {
+            "source": "strategy_execution_gates_v1",
+            "status": "READY",
+            "execution_scope": "PAPER_ONLY",
+            "strategy_count": len(records),
+            "measured_revision_count": len(evidence_by_key),
+            "measured_closed_trades": sum(
+                int(item.get("closed_trades") or 0)
+                for item in evidence_by_key.values()
+            ),
+            "records": records,
+        }
+    finally:
+        db.close()
+
+
 @router.get("/summary")
 def get_strategy_summary(
     strategy_id: str | None = Query(default=None),
     since_days: int = Query(default=30, ge=1, le=3650),
     candidate_limit: int = Query(default=24, ge=1, le=200),
     include_ledger: bool = True,
+    include_learning_diagnostics: bool = True,
 ):
     normalized = str(strategy_id or "").upper() or None
     if normalized and normalized not in STRATEGY_REGISTRY:
@@ -92,6 +166,7 @@ def get_strategy_summary(
             definitions,
             cutoff,
             include_ledger=include_ledger,
+            include_learning_evaluations=(include_learning_diagnostics is True),
         )
         records = [
             _strategy_record_from_data(
@@ -99,6 +174,7 @@ def get_strategy_summary(
                 strategy_data,
                 cutoff,
                 candidate_limit,
+                include_learning_diagnostics=include_learning_diagnostics,
             )
             for definition in definitions
         ]
@@ -111,6 +187,7 @@ def get_strategy_summary(
             "since_days": since_days,
             "one_active_trade_per_symbol": True,
             "ledger_included": include_ledger,
+            "learning_diagnostics_included": include_learning_diagnostics is True,
             "strategy_count": len(records),
             "comparison": _shadow_comparison([item for item in records if not item.get("read_only")]),
             "entry_strategy_holdout": entry_holdout,
@@ -129,7 +206,7 @@ def _entry_holdout_readiness_or_unavailable(db):
     except Exception as exc:  # The primary strategy ledger must remain available.
         db.rollback()
         return {
-            "contract": "entry_strategy_holdout_readiness_v2f",
+            "contract": "entry_strategy_holdout_readiness_v3",
             "status": "UNAVAILABLE",
             "outcome_review_unlocked": False,
             "cohorts": [],
@@ -176,6 +253,7 @@ def _entry_holdout_outcome_job(db, readiness):
 def get_strategy_ledger(
     strategy_id: str | None = Query(default=None),
     history_limit: int = Query(default=20, ge=1, le=100),
+    include_evidence: bool = True,
 ):
     """Return lifetime Strategy Paper wallet and history without blocking summary."""
 
@@ -202,9 +280,37 @@ def get_strategy_ledger(
             "execution_scope": "PAPER_ONLY",
             "strategy_count": len(definitions),
             "records": [
-                _strategy_ledger_record_from_data(definition, strategy_data)
+                _strategy_ledger_record_from_data(
+                    definition,
+                    strategy_data,
+                    include_evidence=include_evidence,
+                )
                 for definition in definitions
             ],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/ledger/trades/{trade_id}")
+def get_strategy_trade_audit(trade_id: int):
+    """Return the full recorded evidence for one Strategy Paper trade."""
+
+    db = SessionLocal()
+    try:
+        trade = db.get(StrategyShadowTrade, trade_id)
+        if trade is None:
+            return {
+                "source": "strategy_trade_audit_v1",
+                "status": "NOT_FOUND",
+                "trade_id": trade_id,
+                "trade": None,
+            }
+        return {
+            "source": "strategy_trade_audit_v1",
+            "status": "READY",
+            "trade_id": trade_id,
+            "trade": _strategy_paper_trade_payload(trade, include_evidence=True),
         }
     finally:
         db.close()
@@ -220,7 +326,14 @@ def _strategy_record(db, definition, cutoff, candidate_limit):
     )
 
 
-def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limit):
+def _strategy_record_from_data(
+    definition,
+    strategy_data,
+    cutoff,
+    candidate_limit,
+    *,
+    include_learning_diagnostics=True,
+):
     key = (definition["id"], definition["version"])
     snapshots = strategy_data["snapshots"].get(key, [])
     plans = strategy_data["plans"].get(key, [])
@@ -247,7 +360,16 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
     strategy_book_history = strategy_data.get("strategy_paper_history", {}).get(
         key, []
     )
+    official_entry_evidence = strategy_evidence_for_plan(
+        strategy_data.get("official_entry_evidence"),
+        {
+            "strategy_id": definition["id"],
+            "strategy_version": definition["version"],
+        },
+    )
     learning_evaluation = strategy_data.get("learning_evaluations", {}).get(key)
+    if learning_evaluation and not include_learning_diagnostics:
+        learning_evaluation = _compact_learning_evaluation(learning_evaluation)
     cohort_metrics = (learning_evaluation or {}).get("metrics") or {}
     readiness_metrics = (
         cohort_metrics if cohort_metrics.get("metric_version") == "STOP_CAUSE_COHORT_V3"
@@ -294,13 +416,34 @@ def _strategy_record_from_data(definition, strategy_data, cutoff, candidate_limi
         ],
         "ledger_loaded": ledger_loaded,
         "official_performance": official_performance,
+        "official_entry_evidence": official_entry_evidence,
         "forward_test_readiness": readiness,
         "learning_evaluation": learning_evaluation,
         "candidates": candidates,
     }
 
 
-def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
+def _compact_learning_evaluation(evaluation):
+    """Keep only learning diagnostics rendered by the strategy dashboard."""
+
+    diagnostics = evaluation.get("diagnostics") or {}
+    return {
+        **evaluation,
+        "diagnostics": {
+            "by_side": diagnostics.get("by_side") or {},
+        },
+        "diagnostics_compact": True,
+    }
+
+
+def _load_strategy_data(
+    db,
+    definitions,
+    cutoff,
+    *,
+    include_ledger=True,
+    include_learning_evaluations=True,
+):
     """Load aggregate coverage plus only the rows needed by visible candidates."""
 
     strategy_ids = [definition["id"] for definition in definitions]
@@ -347,7 +490,7 @@ def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
         .group_by(DecisionSnapshot.strategy_id, DecisionSnapshot.strategy_version)
         .all()
     )
-    latest_snapshot_ids = (
+    latest_snapshot_id_rows = (
         db.query(
             func.max(DecisionSnapshot.id).label("snapshot_id"),
         )
@@ -360,18 +503,17 @@ def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
             DecisionSnapshot.decision_version,
             DecisionSnapshot.symbol,
         )
-        .subquery()
-    )
-    snapshots = (
-        db.query(DecisionSnapshot)
-        .join(
-            latest_snapshot_ids,
-            latest_snapshot_ids.c.snapshot_id == DecisionSnapshot.id,
-        )
-        .order_by(DecisionSnapshot.created_at.desc(), DecisionSnapshot.id.desc())
         .all()
     )
-    snapshot_ids = [item.id for item in snapshots]
+    snapshot_ids = [row.snapshot_id for row in latest_snapshot_id_rows]
+    snapshots = (
+        db.query(DecisionSnapshot)
+        .filter(DecisionSnapshot.id.in_(snapshot_ids))
+        .order_by(DecisionSnapshot.created_at.desc(), DecisionSnapshot.id.desc())
+        .all()
+        if snapshot_ids
+        else []
+    )
     plans = (
         db.query(TradePlan)
         .filter(TradePlan.strategy_decision_snapshot_id.in_(snapshot_ids))
@@ -435,6 +577,10 @@ def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
         strategy_ids,
         cutoff=cutoff,
     )
+    official_entry_evidence = load_official_strategy_evidence(
+        db,
+        strategy_ids,
+    )
     if include_ledger:
         ledger_data = _load_strategy_ledger_data(
             db,
@@ -472,13 +618,18 @@ def _load_strategy_data(db, definitions, cutoff, *, include_ledger=True):
         "strategy_paper_trades": _group_strategy_rows(strategy_paper_trades),
         "official_performance": official_performance,
         "strategy_paper_performance": strategy_paper_performance,
+        "official_entry_evidence": official_entry_evidence,
         "strategy_paper_lifetime_performance": (
             strategy_paper_lifetime_performance
         ),
         "strategy_paper_history": strategy_paper_history,
         "ledger_loaded": include_ledger,
     }
-    loaded["learning_evaluations"] = latest_evaluations(db, definitions)
+    loaded["learning_evaluations"] = (
+        latest_evaluations(db, definitions)
+        if include_learning_evaluations
+        else {}
+    )
     return loaded
 
 
@@ -504,7 +655,12 @@ def _load_strategy_ledger_data(db, definitions, *, history_limit):
     }
 
 
-def _strategy_ledger_record_from_data(definition, strategy_data):
+def _strategy_ledger_record_from_data(
+    definition,
+    strategy_data,
+    *,
+    include_evidence=True,
+):
     key = (definition["id"], definition["version"])
     performance = strategy_data["strategy_paper_lifetime_performance"].get(
         key, _empty_strategy_performance()
@@ -530,7 +686,8 @@ def _strategy_ledger_record_from_data(definition, strategy_data):
             "open_position_count": performance["open_trades"],
         },
         "strategy_paper_history": [
-            _strategy_paper_trade_payload(item) for item in history
+            _strategy_paper_trade_payload(item, include_evidence=include_evidence)
+            for item in history
         ],
     }
 
@@ -661,68 +818,62 @@ def _load_strategy_drawdowns(
     cutoff=None,
     exclude_qa_symbols=False,
 ):
-    """Calculate maximum drawdown with SQL windows, returning one row per book."""
+    """Calculate maximum drawdown from a narrow, index-ordered row stream.
+
+    The previous nested SQL-window query was correct but could monopolize a
+    LocalDB worker long enough to starve every strategy request.  Streaming
+    only the book key and realized result keeps the database query simple and
+    performs the small running-equity calculation in application code.
+    """
 
     order_time = func.coalesce(model.closed_at, model.created_at)
-    realized = func.coalesce(model.realized_pnl_inr, 0.0)
-    partition = (model.strategy_id, model.strategy_version)
-    equity_query = db.query(
-        model.strategy_id.label("strategy_id"),
-        model.strategy_version.label("strategy_version"),
-        model.id.label("trade_id"),
+    query = db.query(
+        model.strategy_id,
+        model.strategy_version,
+        func.coalesce(model.realized_pnl_inr, 0.0).label("realized_pnl_inr"),
         order_time.label("order_time"),
-        (
-            PAPER_CAPITAL_INR
-            + func.sum(realized).over(
-                partition_by=partition,
-                order_by=(order_time, model.id),
-                rows=(None, 0),
-            )
-        ).label("equity"),
-    ).filter(model.strategy_id.in_(strategy_ids))
-    equity_query = equity_query.filter(func.upper(model.status) == "CLOSED")
+        model.id.label("trade_id"),
+    ).filter(
+        model.strategy_id.in_(strategy_ids),
+        func.upper(model.status) == "CLOSED",
+    )
     if cutoff is not None:
-        equity_query = equity_query.filter(model.created_at >= cutoff)
+        query = query.filter(model.created_at >= cutoff)
     if exclude_qa_symbols:
-        equity_query = equity_query.filter(func.upper(model.symbol).notlike("QA%"))
-    equity = equity_query.subquery()
-    with_peak = db.query(
-        equity.c.strategy_id,
-        equity.c.strategy_version,
-        equity.c.equity,
-        func.max(equity.c.equity)
-        .over(
-            partition_by=(equity.c.strategy_id, equity.c.strategy_version),
-            order_by=(equity.c.order_time, equity.c.trade_id),
-            rows=(None, 0),
+        query = query.filter(func.upper(model.symbol).notlike("QA%"))
+    rows = query.order_by(
+        model.strategy_id.asc(),
+        model.strategy_version.asc(),
+        order_time.asc(),
+        model.id.asc(),
+    ).yield_per(1000)
+
+    books = {}
+    for row in rows:
+        key = (row.strategy_id, row.strategy_version)
+        state = books.setdefault(
+            key,
+            {
+                "equity": float(PAPER_CAPITAL_INR),
+                "peak": float(PAPER_CAPITAL_INR),
+                "max_drawdown_percent": 0.0,
+            },
         )
-        .label("peak"),
-    ).subquery()
-    running_peak = case(
-        (with_peak.c.peak < PAPER_CAPITAL_INR, PAPER_CAPITAL_INR),
-        else_=with_peak.c.peak,
-    )
-    drawdown = case(
-        (
-            running_peak > 0,
-            (running_peak - with_peak.c.equity) / running_peak * 100.0,
-        ),
-        else_=0.0,
-    )
-    rows = (
-        db.query(
-            with_peak.c.strategy_id,
-            with_peak.c.strategy_version,
-            func.max(drawdown).label("max_drawdown_percent"),
+        state["equity"] += float(row.realized_pnl_inr or 0.0)
+        state["peak"] = max(state["peak"], state["equity"])
+        drawdown = (
+            (state["peak"] - state["equity"]) / state["peak"] * 100.0
+            if state["peak"] > 0
+            else 0.0
         )
-        .group_by(with_peak.c.strategy_id, with_peak.c.strategy_version)
-        .all()
-    )
+        state["max_drawdown_percent"] = max(
+            state["max_drawdown_percent"],
+            drawdown,
+        )
+
     return {
-        (row.strategy_id, row.strategy_version): round(
-            float(row.max_drawdown_percent or 0.0), 4
-        )
-        for row in rows
+        key: round(state["max_drawdown_percent"], 4)
+        for key, state in books.items()
     }
 
 
@@ -1026,16 +1177,15 @@ def _strategy_performance(trades):
     }
 
 
-def _strategy_paper_trade_payload(trade):
+def _strategy_paper_trade_payload(trade, *, include_evidence=True):
     exit_evidence = read_evidence(getattr(trade, "exit_evidence_json", None))
     classification = exit_evidence.get("classification") or classify_exit(trade)
-    return {
+    payload = {
+        "audit_evidence_included": include_evidence,
         "recorded_exit_policy": getattr(trade, "exit_policy", None),
         "recorded_initial_stop_loss": getattr(trade, "initial_stop_loss", None),
         "strategy_id": getattr(trade, "strategy_id", None),
         "strategy_version": getattr(trade, "strategy_version", None),
-        "execution_evidence": read_evidence(getattr(trade, "execution_evidence_json", None)),
-        "exit_evidence": exit_evidence,
         "trailing_activation_r": getattr(trade, "trailing_activation_r", None),
         "exit_classification": classification,
         "exit_classification_source": "RECORDED_TRIGGER" if exit_evidence.get("classification") else "RECORDED_LEVELS_INFERENCE",
@@ -1072,6 +1222,12 @@ def _strategy_paper_trade_payload(trade):
             and float(trade.realized_pnl_inr or 0) < 0
         ),
     }
+    if include_evidence:
+        payload["execution_evidence"] = read_evidence(
+            getattr(trade, "execution_evidence_json", None)
+        )
+        payload["exit_evidence"] = exit_evidence
+    return payload
 
 
 def _profit_factor(closed):
@@ -1101,6 +1257,9 @@ def _forward_test_readiness(
     initial_stop_failures = int(performance.get("initial_stop_failures") or 0)
     pre_t1_losing_stops = int(performance.get("pre_t1_losing_stops", initial_stop_failures) or 0)
     max_drawdown = float(performance.get("max_drawdown_percent") or 0)
+    exit_evidence_coverage = float(
+        performance.get("exit_evidence_coverage_percent") or 0
+    )
     sample_passed = closed >= minimum_closed_trades
     gates = {
         "sample_size": sample_passed,
@@ -1112,11 +1271,17 @@ def _forward_test_readiness(
     }
     if require_verified_cohort:
         gates["verified_policy_cohort"] = performance.get("cohort_verified") is True
+        gates["persisted_clean_evidence_snapshot"] = (
+            performance.get("evidence_snapshot_persisted") is True
+        )
+        gates["timely_recorded_exit_evidence_complete"] = exit_evidence_coverage >= 100.0
     promotion_candidate = sample_passed and all(gates.values())
     if not sample_passed:
         status = "COLLECTING"
     elif require_verified_cohort and not gates["verified_policy_cohort"]:
         status = "COLLECTING_COHORT"
+    elif require_verified_cohort and not gates["persisted_clean_evidence_snapshot"]:
+        status = "COLLECTING_CLEAN_MILESTONE"
     elif promotion_candidate:
         status = "PROMOTION_CANDIDATE"
     else:
@@ -1124,6 +1289,28 @@ def _forward_test_readiness(
     return {
         "status": status,
         "closed_trades": closed,
+        "total_observed_closed_trades": int(
+            performance.get("total_observed_closed_trades") or closed
+        ),
+        "excluded_operationally_contaminated_trades": int(
+            performance.get("excluded_operationally_contaminated_trades") or 0
+        ),
+        "evidence_scope": performance.get("evidence_scope") or "AGGREGATE_DIAGNOSTIC",
+        "evidence_policy": performance.get("evidence_policy"),
+        "evidence_snapshot_persisted": performance.get("evidence_snapshot_persisted") is True,
+        "verified_exit_evidence_trades": int(
+            performance.get("verified_exit_evidence_trades") or 0
+        ),
+        "missing_exit_evidence_trades": int(
+            performance.get("missing_exit_evidence_trades") or 0
+        ),
+        "timely_exit_evidence_trades": int(
+            performance.get("timely_exit_evidence_trades") or 0
+        ),
+        "stale_or_untimed_exit_evidence_trades": int(
+            performance.get("stale_or_untimed_exit_evidence_trades") or 0
+        ),
+        "exit_evidence_coverage_percent": exit_evidence_coverage,
         "minimum_closed_trades": minimum_closed_trades,
         "remaining_trades": max(0, minimum_closed_trades - closed),
         "minimum_win_rate": minimum_win_rate,
@@ -1132,7 +1319,7 @@ def _forward_test_readiness(
         "target_successes": target_successes,
         "initial_stop_failures": initial_stop_failures,
         "pre_t1_losing_stops": pre_t1_losing_stops,
-        "sample_interpretation": "Aggregate diagnostics only; compare matched recorded policy cohorts before selecting a strategy. Thirty trades do not establish live readiness.",
+        "sample_interpretation": "Clean operational evidence with recorded exit triggers only; deadline-breached and legacy missing-evidence exits remain in headline PNL but cannot support promotion. Compare matched recorded policy cohorts before selecting a strategy. Thirty trades do not establish live readiness.",
         "requires_targets_exceed_initial_stops": True,
         "requires_positive_cost_adjusted_expectancy": True,
         "gates": gates,
@@ -1189,6 +1376,86 @@ def _shadow_comparison(records):
             "profit_factor_then_expectancy_then_net_pnl_then_win_rate_then_drawdown"
         ),
         "ranking": [item["id"] for item in ranked],
+        "official_recovery": _official_recovery_readiness(records),
+    }
+
+
+def _official_recovery_readiness(records):
+    """Summarize recovery evidence without authorizing a reset or resume."""
+
+    configured = [
+        item
+        for item in records or []
+        if item.get("official_execution_enabled") is True
+        and not item.get("read_only")
+    ]
+    review_candidates = [
+        item
+        for item in configured
+        if (item.get("official_entry_evidence") or {}).get(
+            "official_execution_allowed"
+        )
+        is True
+        and (item.get("forward_test_readiness") or {}).get(
+            "promotion_candidate"
+        )
+        is True
+    ]
+    failed = [
+        item
+        for item in configured
+        if (item.get("official_entry_evidence") or {}).get("status")
+        == "FAILED_EXPECTANCY"
+    ]
+    collecting = [
+        item
+        for item in configured
+        if item not in review_candidates and item not in failed
+    ]
+
+    def revisions(items):
+        return [
+            (item.get("official_entry_evidence") or {}).get(
+                "strategy_revision"
+            )
+            or f"{item.get('id')}@{item.get('version')}"
+            for item in items
+        ]
+
+    return {
+        "policy": "MANUAL_DRAWDOWN_RECOVERY_REVIEW_V1",
+        "status": (
+            "MANUAL_REVIEW_AVAILABLE"
+            if review_candidates
+            else "NO_QUALIFIED_STRATEGY"
+        ),
+        "automatic_resume_allowed": False,
+        "portfolio_reset_authorized": False,
+        "qualified_revision_count": len(review_candidates),
+        "qualified_revisions": revisions(review_candidates),
+        "failed_expectancy_revision_count": len(failed),
+        "failed_expectancy_revisions": revisions(failed),
+        "collecting_revision_count": len(collecting),
+        "collecting_revisions": revisions(collecting),
+        "requirements": {
+            "minimum_clean_closed_trades": 30,
+            "minimum_win_rate_percent": 55.0,
+            "minimum_profit_factor": 1.3,
+            "positive_cost_adjusted_expectancy": True,
+            "maximum_drawdown_percent": 10.0,
+            "persisted_clean_evidence_snapshot": True,
+            "timely_recorded_exit_evidence_complete": True,
+            "manual_recovery_decision_required": True,
+        },
+        "reason": (
+            "At least one exact strategy revision passed both official-entry and "
+            "strict forward-test evidence gates; manual recovery review is allowed, "
+            "but the portfolio remains paused until an explicit recovery decision."
+            if review_candidates
+            else "No exact strategy revision has passed both official-entry and "
+            "strict forward-test evidence gates; keep the official portfolio paused "
+            "while Strategy Paper research continues."
+        ),
     }
 
 

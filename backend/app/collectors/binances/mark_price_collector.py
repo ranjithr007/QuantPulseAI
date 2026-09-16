@@ -11,6 +11,17 @@ class MarkPriceCollector:
     URL = "https://fapi.binance.com/fapi/v1/markPriceKlines"
     CURRENT_PRICE_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 
+    def __init__(
+        self,
+        *,
+        timeout_seconds=20,
+        max_attempts=3,
+        retry_delay_seconds=3,
+    ):
+        self.timeout_seconds = max(1, float(timeout_seconds))
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_delay_seconds = max(0, float(retry_delay_seconds))
+
     def get_klines(
         self,
         symbol,
@@ -21,7 +32,7 @@ class MarkPriceCollector:
         end_time_ms=None,
     ):
         last_error = None
-        for _attempt in range(3):
+        for attempt in range(self.max_attempts):
             try:
                 params = {
                     "symbol": symbol,
@@ -35,7 +46,7 @@ class MarkPriceCollector:
                 response = requests.get(
                     self.URL,
                     params=params,
-                    timeout=20,
+                    timeout=self.timeout_seconds,
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -50,7 +61,8 @@ class MarkPriceCollector:
                 ]
             except Exception as ex:
                 last_error = ex
-                time.sleep(3)
+                if attempt < self.max_attempts - 1:
+                    time.sleep(self.retry_delay_seconds)
 
         if last_error is not None and not is_transient_network_error(last_error):
             print(

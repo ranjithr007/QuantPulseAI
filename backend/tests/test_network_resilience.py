@@ -2,7 +2,7 @@ import asyncio
 import socket
 import sys
 import types
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -102,3 +102,42 @@ def test_live_market_service_sanitizes_transient_websocket_errors():
 
     assert service._last_error == "connection reset by remote host"
     print_mock.assert_not_called()
+
+
+def test_live_market_service_reconnects_silent_websocket_and_seeds_rest():
+    class _SilentWebSocket:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def recv(self):
+            await asyncio.Future()
+
+    async def _timeout(_awaitable, timeout):
+        _awaitable.close()
+        raise TimeoutError("live websocket produced no ticks")
+
+    async def _cancel_sleep(_delay):
+        raise asyncio.CancelledError
+
+    service = LiveMarketService()
+    service._trigger_rest_seed = Mock()
+
+    with patch(
+        "app.services.live_market_service.websockets.connect",
+        return_value=_SilentWebSocket(),
+    ), patch(
+        "app.services.live_market_service.asyncio.wait_for",
+        new=_timeout,
+    ), patch(
+        "app.services.live_market_service.asyncio.sleep",
+        new=_cancel_sleep,
+    ), patch("builtins.print"):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(service._run(["BTCUSDT"]))
+
+    assert service._connected is False
+    assert service._reconnect_count == 1
+    assert service._trigger_rest_seed.called

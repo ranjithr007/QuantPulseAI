@@ -14,7 +14,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import { loadStrategyLedger, loadStrategySummary } from "../hooks/dashboardApi";
+import { loadStrategyExecutionGates, loadStrategyLedger, loadStrategySummary, loadStrategyTradeAudit } from "../hooks/dashboardApi";
 import { formatPercent, formatSigned, formatTimeInIst } from "../utils/formatters";
 import { requestFailureMessage, retryDelay } from "../utils/requestRecovery";
 import { startVisiblePolling } from "../utils/visiblePolling";
@@ -29,10 +29,12 @@ export default function StrategiesPage() {
   const [ledgerError, setLedgerError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [summaryLoadedAt, setSummaryLoadedAt] = useState(null);
+  const [gatesLoadedAt, setGatesLoadedAt] = useState(null);
   const [ledgerLoadedAt, setLedgerLoadedAt] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [paused, setPaused] = useState(document.visibilityState === "hidden");
   const records = payload?.records || [];
+  const strategyPagination = usePaginatedRows(records);
   const initialLoading = loading && !records.length;
 
   useEffect(() => {
@@ -40,30 +42,54 @@ export default function StrategiesPage() {
     return startVisiblePolling(async (signal) => {
       setLoading(true);
       setLedgerLoading(true);
-      let section = "summary";
+      let gateFailure = null;
       try {
-        const response = await loadStrategySummary({
-          includeLedger: false,
-          signal,
-        });
+        try {
+          const gates = await loadStrategyExecutionGates({ signal });
+          if (signal.aborted) return null;
+          setPayload((current) => mergeStrategyGates(current, gates));
+          setGatesLoadedAt(Date.now());
+        } catch (requestError) {
+          gateFailure = requestError;
+        }
+
+        const [summaryResult, ledgerResult] = await Promise.allSettled([
+          loadStrategySummary({ includeLedger: false, signal }),
+          loadStrategyLedger({ signal }),
+        ]);
         if (signal.aborted) return null;
-        setPayload((current) => preserveLoadedLedger(response, current));
-        setSummaryLoadedAt(Date.now());
-        setError("");
-        setLoading(false);
-        section = "ledger";
-        const ledger = await loadStrategyLedger({ signal });
-        if (signal.aborted) return null;
-        setPayload((current) => mergeStrategyLedger(current, ledger));
-        setLedgerLoadedAt(Date.now());
-        setLedgerError("");
-        failures = 0;
-        return 60000;
-      } catch (requestError) {
-        if (signal.aborted) return null;
-        const delay = retryDelay(requestError, ++failures);
-        const message = requestFailureMessage(requestError, section === "summary" ? "Strategy decisions" : "Strategy Paper history");
-        (section === "summary" ? setError : setLedgerError)(message + (delay != null ? ` Retrying automatically in ${delay / 1000} seconds.` : ""));
+
+        const failuresThisCycle = [];
+        if (summaryResult.status === "fulfilled") {
+          setPayload((current) => preserveLoadedLedger(summaryResult.value, current));
+          setSummaryLoadedAt(Date.now());
+          setError("");
+        } else {
+          failuresThisCycle.push(summaryResult.reason);
+        }
+        if (ledgerResult.status === "fulfilled") {
+          setPayload((current) => mergeStrategyLedger(current, ledgerResult.value));
+          setLedgerLoadedAt(Date.now());
+          setLedgerError("");
+        } else {
+          failuresThisCycle.push(ledgerResult.reason);
+        }
+        if (gateFailure && summaryResult.status === "rejected") {
+          failuresThisCycle.unshift(gateFailure);
+        }
+
+        if (!failuresThisCycle.length) {
+          failures = 0;
+          return 60000;
+        }
+        const delay = retryDelay(failuresThisCycle[0], ++failures);
+        const suffix = delay != null ? ` Retrying automatically in ${delay / 1000} seconds.` : "";
+        if (summaryResult.status === "rejected") {
+          setError(requestFailureMessage(summaryResult.reason, "Strategy analytics") + suffix);
+        }
+        if (ledgerResult.status === "rejected") {
+          setLedgerError(requestFailureMessage(ledgerResult.reason, "Strategy Paper history") + suffix);
+        }
         return delay;
       } finally {
         if (!signal.aborted) {
@@ -113,6 +139,7 @@ export default function StrategiesPage() {
 
         <div role="status" className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
           {paused ? "Automatic refresh paused while hidden." : "Automatic refresh every 60 seconds after each completed cycle."}
+          <span className="ml-2">Safety gates loaded: {gatesLoadedAt ? formatTimeInIst(gatesLoadedAt) : "Not yet loaded"}{gatesLoadedAt && now - gatesLoadedAt > 120000 ? " · STALE DISPLAY" : ""}.</span>
           <span className="ml-2">Decisions loaded: {summaryLoadedAt ? formatTimeInIst(summaryLoadedAt) : "Not yet loaded"}{summaryLoadedAt && (error || now - summaryLoadedAt > 120000) ? " · STALE DISPLAY" : ""}.</span>
           <span className="ml-2">Wallet/history loaded: {ledgerLoadedAt ? formatTimeInIst(ledgerLoadedAt) : "Not yet loaded"}{ledgerLoadedAt && (ledgerError || now - ledgerLoadedAt > 120000) ? " · STALE DISPLAY" : ""}.</span>
           <span className="mt-1 block">These are page retrieval times, not signal generation times. Check each candidate’s Evaluated IST timestamp for evidence freshness.</span>
@@ -144,7 +171,7 @@ export default function StrategiesPage() {
               Loading governed paper strategies…
             </div>
           ) : null}
-          {records.map((strategy) => (
+          {strategyPagination.visibleRows.map((strategy) => (
             <StrategyPanel
               key={`${strategy.id}:${strategy.version}`}
               strategy={strategy}
@@ -153,6 +180,15 @@ export default function StrategiesPage() {
           ))}
           {!loading && !error && !records.length ? (
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-8 text-center text-sm text-slate-400">No governed paper strategies are registered.</div>
+          ) : null}
+          {records.length ? (
+            <div className="overflow-hidden rounded-xl border border-white/10 bg-slate-900/70">
+              <GridPagination
+                {...strategyPagination}
+                itemLabel="strategies"
+                ariaLabel="Governed paper strategies pagination"
+              />
+            </div>
           ) : null}
         </div>
       </div>
@@ -279,6 +315,26 @@ function preserveLoadedLedger(response, current) {
   };
 }
 
+function mergeStrategyGates(current, gates) {
+  const currentByKey = new Map(
+    (current?.records || []).map((strategy) => [strategyKey(strategy), strategy])
+  );
+  const gateKeys = new Set((gates?.records || []).map(strategyKey));
+  return {
+    ...gates,
+    ...current,
+    records: [
+      ...(gates?.records || []).map((strategy) => ({
+        ...strategy,
+        ...(currentByKey.get(strategyKey(strategy)) || {}),
+        official_entry_evidence: strategy.official_entry_evidence,
+        official_execution_allowed: strategy.official_execution_allowed,
+      })),
+      ...(current?.records || []).filter((strategy) => !gateKeys.has(strategyKey(strategy))),
+    ],
+  };
+}
+
 function mergeStrategyLedger(current, ledger) {
   const ledgerByKey = new Map(
     (ledger?.records || []).map((strategy) => [strategyKey(strategy), strategy])
@@ -296,6 +352,7 @@ function ComparisonBanner({ comparison }) {
   if (!comparison) return null;
   const ready = comparison.status === "EVIDENCE_READY";
   const leader = comparison.research_leader_strategy_id;
+  const recovery = comparison.official_recovery;
   return (
     <div className="mt-4 flex flex-col gap-2 rounded-xl border border-white/10 bg-slate-900/70 p-4 sm:flex-row sm:items-center sm:justify-between">
       <div>
@@ -308,6 +365,21 @@ function ComparisonBanner({ comparison }) {
             : `Collecting ${comparison.minimum_closed_trades_per_strategy || 30} closed Strategy Paper trades per strategy`}
         </div>
         <div className="mt-1 text-xs text-slate-500">Current ranking: {(comparison.ranking || []).join(" → ") || "waiting for data"}</div>
+        {recovery ? (
+          <div className="mt-2 rounded-lg border border-rose-400/15 bg-rose-500/5 px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] uppercase tracking-[0.14em] text-rose-300/75">Official recovery readiness</span>
+              <StatusBadge
+                label={recovery.status}
+                tone={recovery.status === "MANUAL_REVIEW_AVAILABLE" ? "amber" : "rose"}
+              />
+            </div>
+            <div className="mt-1 text-xs text-slate-400">{recovery.reason}</div>
+            <div className="mt-1 text-[11px] text-slate-500">
+              Qualified {recovery.qualified_revision_count || 0} · Failed expectancy {recovery.failed_expectancy_revision_count || 0} · Collecting {recovery.collecting_revision_count || 0} · Automatic resume disabled
+            </div>
+          </div>
+        ) : null}
       </div>
       <StatusBadge label={comparison.status} tone={ready ? "emerald" : "amber"} />
     </div>
@@ -320,6 +392,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
   const wallet = strategy.strategy_paper_wallet || {};
   const coverage = strategy.coverage || {};
   const readiness = strategy.forward_test_readiness || {};
+  const officialEvidence = strategy.official_entry_evidence || {};
   const learning = strategy.learning_evaluation || {};
   return (
     <article className="overflow-hidden rounded-xl border border-white/10 bg-slate-900/70">
@@ -335,6 +408,12 @@ function StrategyPanel({ strategy, ledgerLoading }) {
                 label={strategy.read_only ? "READ-ONLY HISTORY" : strategy.official_execution_enabled ? "OFFICIAL PAPER LANE" : "STRATEGY PAPER ONLY"}
                 tone={strategy.official_execution_enabled ? "emerald" : "slate"}
               />
+              {!strategy.read_only ? (
+                <StatusBadge
+                  label={officialEvidence.status === "PROMOTABLE" ? "OFFICIAL GATE PASS" : officialEvidence.status === "FAILED_EXPECTANCY" ? "OFFICIAL GATE QUARANTINED" : "OFFICIAL GATE COLLECTING"}
+                  tone={officialEvidence.status === "PROMOTABLE" ? "emerald" : officialEvidence.status === "FAILED_EXPECTANCY" ? "rose" : "amber"}
+                />
+              ) : null}
               <StatusBadge
                 label={readiness.status || "COLLECTING"}
                 tone={readiness.status === "PROMOTION_CANDIDATE" ? "emerald" : readiness.status === "EVIDENCE_COMPLETE_FAILED" ? "rose" : "amber"}
@@ -366,6 +445,9 @@ function StrategyPanel({ strategy, ledgerLoading }) {
           <ValueCard label="Fees" value={formatPercent(performance.fees_percent || 0, 2)} tone="amber" />
           <ValueCard label="Funding cost" value={formatPercent(performance.funding_cost_percent || 0, 3)} tone="amber" />
           <ValueCard label="Profit factor" value={performance.profit_factor == null ? "—" : number(performance.profit_factor, 2)} />
+          <ValueCard label="Clean official-gate sample" value={`${officialEvidence.closed_trades || 0}/${officialEvidence.minimum_closed_trades || 30}`} tone={officialEvidence.status === "PROMOTABLE" ? "emerald" : "amber"} description={`${officialEvidence.excluded_operationally_contaminated_trades || 0} deadline-breached exit(s) excluded; headline PNL is unchanged.`} />
+          <ValueCard label="Gate expectancy" value={`${formatSigned(officialEvidence.expectancy_percent || 0, 2)}%`} tone={(officialEvidence.expectancy_percent || 0) > 0 ? "emerald" : "rose"} />
+          <ValueCard label="Gate profit factor" value={officialEvidence.profit_factor == null ? "—" : number(officialEvidence.profit_factor, 2)} tone={(officialEvidence.profit_factor || 0) >= 1 ? "emerald" : "rose"} />
           <ValueCard label="Consolidated winner trades" value={officialPerformance.total_trades || 0} tone="cyan" />
           <ValueCard label="Target successes" value={`${performance.target_successes || 0} · ${formatPercent(performance.target_success_rate || 0, 1)}`} tone="emerald" />
           <ValueCard label="Pre-T1 losing stops" value={preTargetLosingStops(performance) ?? "Not recorded"} tone="rose" />
@@ -379,7 +461,10 @@ function StrategyPanel({ strategy, ledgerLoading }) {
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
-          Promotion requires {readiness.minimum_closed_trades || 30} closed Strategy Paper trades in a verified policy cohort, win rate ≥ {readiness.minimum_win_rate || 55}%, profit factor ≥ {number(readiness.minimum_profit_factor || 1.3, 2)}, positive cost-adjusted expectancy, target successes greater than pre-T1 losing stops, and drawdown ≤ {formatPercent(readiness.maximum_drawdown_percent || 10, 0)}. {readiness.remaining_trades || 0} trades remain for the sample gate. This never enables live orders automatically.
+          Official-entry safety requires {officialEvidence.minimum_closed_trades || 30} deduplicated, operationally clean closed paper observations, positive net expectancy, and profit factor ≥ {number(officialEvidence.minimum_profit_factor || 1, 2)}. Official and Strategy Paper observations are combined by trade plan, so the same signal is never counted twice. {officialEvidence.excluded_operationally_contaminated_trades || 0} late exit(s) remain visible in headline PNL but are excluded from this gate.
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          Promotion requires {readiness.minimum_closed_trades || 30} clean closed Strategy Paper trades in a verified policy cohort, win rate ≥ {readiness.minimum_win_rate || 55}%, profit factor ≥ {number(readiness.minimum_profit_factor || 1.3, 2)}, positive cost-adjusted expectancy, target successes greater than pre-T1 losing stops, and drawdown ≤ {formatPercent(readiness.maximum_drawdown_percent || 10, 0)}. {readiness.excluded_operationally_contaminated_trades || 0} deadline-breached exit(s) are excluded, and {readiness.remaining_trades || 0} clean trades remain for the sample gate. This never enables live orders automatically.
         </div>
         <div className="mt-1 text-xs text-slate-500">
           Eligible scans are evaluations, not separate positions. Repeated unchanged signals reuse the matching open plan or position; only one official paper winner may be active per coin.
@@ -410,15 +495,21 @@ function StrategyLearningStatus({ learning }) {
         </div>
         <StatusBadge label="LIVE DISABLED" tone="slate" />
       </div>
+      {learning.status === "CLEAN_EVIDENCE_RECALCULATED_PREVIEW" ? (
+        <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-100">
+          This is a read-only clean-evidence recalculation of an immutable historical snapshot. It cannot promote a strategy; the next distinct clean milestone must be persisted first.
+        </div>
+      ) : null}
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <ValueCard label="Targets / pre-T1 losing stops" value={`${metrics.target_successes || 0} / ${preTargetLosingStops(metrics) ?? "Unknown"}`} tone={preTargetLosingStops(metrics) != null && (metrics.target_successes || 0) > preTargetLosingStops(metrics) ? "emerald" : "rose"} />
         <ValueCard label="Window win rate" value={formatPercent(metrics.win_rate || 0, 1)} />
         <ValueCard label="Window expectancy" value={`₹${number(metrics.expectancy_inr || 0, 2)}`} tone={(metrics.expectancy_inr || 0) > 0 ? "emerald" : "rose"} />
-        <ValueCard label="Candidate version" value={learning.candidate_version || "No new candidate version"} tone="cyan" />
+          <ValueCard label="Candidate version" value={learning.candidate_version || "No new candidate version"} tone="cyan" />
+          <ValueCard label="Timely exit evidence" value={`${metrics.timely_exit_evidence_trades || 0}/${metrics.closed_trades || 0} · ${formatPercent(metrics.exit_evidence_coverage_percent || 0, 1)}`} tone={(metrics.exit_evidence_coverage_percent || 0) >= 100 ? "emerald" : "rose"} description="Recorded trigger evidence must be processed within the five-second promotion-quality limit." />
       </div>
       {metrics.metric_version === "STOP_CAUSE_COHORT_V3" ? <div className="mt-3 rounded-lg border border-white/10 p-3">
         <div className="break-words text-xs text-slate-400">{metrics.cohort_verified ? `Verified policy cohort: ${metrics.cohort_key}` : "Legacy diagnostic only: policy cohort is not verified; cannot qualify a new exit policy."}</div>
-        <div className="mt-1 text-xs text-slate-500">{metrics.cohort_closed_trades ?? 0} cohort closes · {metrics.unknown_cohort_trades ?? 0} unknown-policy closes excluded from verified cohort. Thirty closes are an initial checkpoint, not proof of a durable edge.</div>
+        <div className="mt-1 text-xs text-slate-500">{metrics.cohort_closed_trades ?? 0} clean cohort closes · {metrics.unknown_cohort_trades ?? 0} unknown-policy closes excluded from verified cohort · {metrics.excluded_operationally_contaminated_trades ?? 0} delayed exits excluded · {metrics.missing_exit_evidence_trades ?? 0} closes missing recorded exit evidence · {metrics.stale_or_untimed_exit_evidence_trades ?? 0} closes stale or untimed. Thirty clean, timely observed closes are an initial checkpoint, not proof of a durable edge.</div>
         <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <ValueCard label="Verified initial-stop losses" value={metrics.initial_stop_failures ?? "Not recorded"} tone="rose" />
           <ValueCard label="Trailed exits before T1" value={metrics.trailed_stop_pre_t1_exits ?? "Not recorded"} />
@@ -449,6 +540,19 @@ function StrategyLearningStatus({ learning }) {
 function StrategyPaperHistory({ trades, loading = false }) {
   const pagination = usePaginatedRows(trades);
   const [auditTrade, setAuditTrade] = useState(null);
+  const [auditLoadingId, setAuditLoadingId] = useState(null);
+  const [auditError, setAuditError] = useState("");
+  const openAudit = async (trade) => {
+    setAuditLoadingId(trade.id);
+    setAuditError("");
+    try {
+      setAuditTrade(await loadStrategyTradeAudit(trade.id));
+    } catch (requestError) {
+      setAuditError(requestFailureMessage(requestError, "Strategy trade audit"));
+    } finally {
+      setAuditLoadingId(null);
+    }
+  };
   return (
     <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
       <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/60 px-4 py-3">
@@ -473,7 +577,7 @@ function StrategyPaperHistory({ trades, loading = false }) {
                 <td>{price(trade.exit_price)}</td>
                 <td className={numberTone(trade.realized_pnl_inr)}>{trade.status === "OPEN" ? "Open" : `₹${number(trade.realized_pnl_inr, 2)} · ${formatSigned(trade.pnl_percent || 0, 2)}%`}</td>
                 <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(trade.opened_at)}</span></td>
-                <td className="pr-3"><button type="button" className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs" aria-label={`View strategy audit ${trade.symbol} trade ${trade.id}`} onClick={() => setAuditTrade(trade)}>View audit</button></td>
+                <td className="pr-3"><button type="button" disabled={auditLoadingId != null} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs disabled:cursor-wait disabled:opacity-60" aria-label={`View strategy audit ${trade.symbol} trade ${trade.id}`} onClick={() => openAudit(trade)}>{auditLoadingId === trade.id ? "Loading…" : "View audit"}</button></td>
               </tr>
             ))}
             {loading ? <tr><td colSpan="11" className="px-4 py-8 text-center text-slate-500">Loading recent Strategy Paper trades…</td></tr> : null}
@@ -486,6 +590,7 @@ function StrategyPaperHistory({ trades, loading = false }) {
         itemLabel="paper trades"
         ariaLabel="Strategy Paper trade history pagination"
       />
+      {auditError ? <div role="alert" className="border-t border-rose-400/20 bg-rose-500/10 px-4 py-2 text-xs text-rose-200">{auditError}</div> : null}
       {auditTrade ? <TradeAuditDialog trade={auditTrade} ledgerLabel="Isolated Strategy Paper ledger" onClose={() => setAuditTrade(null)} /> : null}
     </div>
   );

@@ -33,7 +33,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
   const result = summary?.result || null;
   const contract = result?.validation_contract || null;
   const paperReport = measurement?.report || null;
-  const paperOverall = paperReport?.overall || null;
+  const paperOverall = paperReport?.evidence_overall || paperReport?.overall || null;
   const scenarioAccuracy = paperReport?.scenario_accuracy || null;
   const regimeAccuracy = paperReport?.regime_accuracy || null;
 
@@ -316,7 +316,7 @@ export default function Phase2ValidationBadge({ symbol, timeframe = "1h", signal
             <Pill tone={measurementTone(paperReport.status)}>{paperReport.status || "Pending"}</Pill>
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
-            <span>Closed: {paperOverall?.closed_trades ?? 0}</span>
+            <span>Clean closed: {paperOverall?.closed_trades ?? 0}</span>
             <span>Days: {paperOverall?.observation_days ?? 0}</span>
             <span>Scenario: {accuracyLabel(scenarioAccuracy)}</span>
             <span>Regime: {accuracyLabel(regimeAccuracy)}</span>
@@ -533,6 +533,7 @@ function RollingMetric({ label, value }) {
 function LifecycleFunnel({ funnel }) {
   if (!funnel || funnel.status === "UNAVAILABLE") return null;
 
+  const executionSafetyBlockers = Object.entries(funnel.blockers?.execution_safety || {});
   const executorBlockers = Object.entries(funnel.blockers?.executor || {})
     .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
     .slice(0, 4);
@@ -554,6 +555,20 @@ function LifecycleFunnel({ funnel }) {
           </div>
         ))}
       </div>
+      {executionSafetyBlockers.length ? (
+        <div className="mt-2 rounded border border-rose-400/20 bg-rose-500/5 px-2 py-1.5">
+          <div className="text-[10px] uppercase tracking-[0.12em] text-rose-300/80">
+            Global execution safety pause
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {executionSafetyBlockers.map(([reason]) => (
+              <Pill key={reason} tone="rose">
+                {humanizeIssue(reason)}
+              </Pill>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {executorBlockers.length ? (
         <div className="mt-2 rounded border border-amber-400/15 bg-amber-500/5 px-2 py-1.5">
           <div className="text-[10px] uppercase tracking-[0.12em] text-amber-300/70">

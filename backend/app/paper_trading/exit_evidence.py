@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 EVIDENCE_VERSION = "PAPER_EXIT_EVIDENCE_V1"
 MAX_EVIDENCE_BYTES = 8192
+DEFAULT_TRAILING_ACTIVATION_R = 0.0
+DEFAULT_EXIT_MANAGEMENT_PROFILE = "IMMEDIATE_TRAIL_V1"
 
 
 def read_evidence(value):
@@ -33,22 +35,39 @@ def _json_default(value):
 
 
 def entry_evidence_fields(candidate):
-    activation = candidate.get("trailing_activation_r")
-    if activation is not None:
-        activation = float(activation)
-        if not math.isfinite(activation) or not 0 <= activation <= 5:
-            raise ValueError("Paper trailing activation must be between zero and five R")
+    plan = candidate.get("trade_plan") or {}
+    candidate_activation = candidate.get("trailing_activation_r")
+    plan_activation = plan.get("trailing_activation_r")
+    if (
+        candidate_activation is not None
+        and plan_activation is not None
+        and float(candidate_activation) != float(plan_activation)
+    ):
+        raise ValueError("Candidate and trade-plan trailing activation do not match")
+    if candidate_activation is not None:
+        activation = candidate_activation
+        activation_source = "CANDIDATE"
+    elif plan_activation is not None:
+        activation = plan_activation
+        activation_source = "TRADE_PLAN"
+    else:
+        activation = DEFAULT_TRAILING_ACTIVATION_R
+        activation_source = "DEFAULT_IMMEDIATE"
+    activation = float(activation)
+    if not math.isfinite(activation) or not 0 <= activation <= 5:
+        raise ValueError("Paper trailing activation must be between zero and five R")
     supplied = candidate.get("execution_evidence")
     if supplied is not None and not isinstance(supplied, dict):
         raise ValueError("Paper execution evidence must be an object")
-    plan = candidate.get("trade_plan") or {}
     evidence = dict(supplied or {})
+    evidence.setdefault("exit_management_profile", DEFAULT_EXIT_MANAGEMENT_PROFILE)
     evidence.update({
         "evidence_version": EVIDENCE_VERSION,
         "strategy_id": plan.get("strategy_id"),
         "strategy_version": plan.get("strategy_version"),
         "decision_snapshot_id": plan.get("strategy_decision_snapshot_id"),
         "trailing_activation_r": activation,
+        "trailing_activation_source": activation_source,
     })
     return {"execution_evidence_json": encode_evidence(evidence), "trailing_activation_r": activation}
 

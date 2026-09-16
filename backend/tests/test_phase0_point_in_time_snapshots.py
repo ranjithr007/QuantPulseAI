@@ -157,6 +157,45 @@ def test_save_decision_snapshot_is_idempotent_for_same_identity():
         db.close()
 
 
+def test_decision_snapshot_duplicate_lookup_tolerates_sqlserver_datetime_rounding():
+    from app.repositories.point_in_time_snapshot_repository import (
+        _get_existing_decision_snapshot,
+        save_decision_snapshot,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    db = sessionmaker(bind=engine, autocommit=False, autoflush=False)()
+    DecisionSnapshot.__table__.create(bind=engine)
+    snapshot = {
+        "symbol": "BNBUSDT",
+        "timeframe": "stack",
+        "source_timestamp": START,
+        "effective_timestamp": START,
+        "feature_version": "spot_participation_features_v1",
+        "decision_version": "market_participation_trend_v1",
+        "quality_state": "OK",
+        "decision": "NEUTRAL",
+        "confidence": 50.0,
+    }
+
+    try:
+        expected = save_decision_snapshot(db, snapshot)
+        rounded_identity = {
+            **snapshot,
+            "effective_timestamp": START + timedelta(milliseconds=3),
+        }
+
+        assert _get_existing_decision_snapshot(db, rounded_identity) is None
+        recovered = _get_existing_decision_snapshot(
+            db,
+            rounded_identity,
+            tolerate_database_rounding=True,
+        )
+        assert recovered.id == expected.id
+    finally:
+        db.close()
+
+
 def test_build_feature_snapshot_rejects_future_candle_leakage():
     candles = [candle(0), candle(2, high_price=103, low_price=98, close_price=102)]
 

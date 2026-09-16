@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -106,6 +107,100 @@ def test_run_paper_trade_monitor_job_continues_after_trade_error():
     assert summary["closed"] == 1
     assert summary["status"] == "FAILED"
     assert fake_db.close.called
+
+
+def test_strategy_paper_monitor_error_degrades_without_failing_official_monitor():
+    fake_db = SimpleNamespace(close=Mock())
+
+    class FakeRepo:
+        def get_open_trades(self, db):
+            return []
+
+    shadow = {
+        "source": "strategy_shadow_monitor_v1",
+        "processed": 1,
+        "closed": 0,
+        "partial_closes": 0,
+        "stop_moves": 0,
+        "still_open": 1,
+        "errors": ["REGIME_TREND_ENTRY SOLUSDT: EXIT_EVIDENCE_UNAVAILABLE"],
+        "records": [],
+    }
+    with patch(
+        "app.jobs.paper_trade_monitor_job.SessionLocal",
+        return_value=fake_db,
+    ), patch(
+        "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
+        return_value=FakeRepo(),
+    ), patch(
+        "app.jobs.paper_trade_monitor_job._run_strategy_shadow_monitor",
+        return_value=shadow,
+    ):
+        summary = run_paper_trade_monitor_job()
+
+    assert summary["status"] == "DEGRADED"
+    assert summary["errors"] == []
+    assert summary["shadow"]["errors"] == shadow["errors"]
+    assert fake_db.close.called
+
+
+def test_resolved_intrabar_overlap_warns_without_failing_official_monitor():
+    checkpoint = datetime.utcnow()
+    trade = SimpleNamespace(
+        id=1,
+        symbol="BNBUSDT",
+        side="SHORT",
+        opened_at=checkpoint - timedelta(hours=1),
+        last_exit_evaluated_at=checkpoint,
+    )
+    candle = SimpleNamespace(
+        open_time=checkpoint - timedelta(minutes=2),
+        close_time=checkpoint + timedelta(minutes=3),
+        candle_time=checkpoint - timedelta(minutes=2),
+        high_price=725.0,
+        low_price=723.0,
+        close_price=724.0,
+        live_mark=False,
+    )
+    fake_db = SimpleNamespace(close=Mock(), flush=Mock())
+
+    class FakeRepo:
+        def get_open_trades(self, db):
+            return [trade]
+
+        def ensure_staged_exit_policy(self, db, item):
+            return False
+
+        def mark_exit_evaluated(self, db, item, evaluated_at):
+            item.last_exit_evaluated_at = evaluated_at
+
+    with patch(
+        "app.jobs.paper_trade_monitor_job.SessionLocal",
+        return_value=fake_db,
+    ), patch(
+        "app.jobs.paper_trade_monitor_job.PaperTradeRepository",
+        return_value=FakeRepo(),
+    ), patch(
+        "app.jobs.paper_trade_monitor_job._exit_candles",
+        return_value=([candle], "5m", False, True),
+    ), patch(
+        "app.jobs.paper_trade_monitor_job.lock_open_trade",
+        side_effect=lambda db, item: item,
+    ), patch(
+        "app.jobs.paper_trade_monitor_job.evaluate_paper_trade_exit",
+        return_value={"action": "HOLD", "result": "OPEN"},
+    ), patch(
+        "app.jobs.paper_trade_monitor_job._run_strategy_shadow_monitor",
+        return_value={"errors": [], "warnings": []},
+    ):
+        summary = run_paper_trade_monitor_job()
+
+    assert summary["status"] == "OK"
+    assert summary["errors"] == []
+    assert summary["warnings"] == [
+        "BNBUSDT: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY"
+    ]
+    assert summary["candles_evaluated"] == 1
 
 
 def test_run_ml_dataset_job_continues_after_symbol_error():

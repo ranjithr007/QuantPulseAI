@@ -19,6 +19,7 @@ from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.database.sqlserver import Base
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
+from app.paper_trading.strategy_evidence import load_official_strategy_evidence
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.risk_repository import RiskRepository
 from app.repositories.trade_plan_repository import TradePlanRepository
@@ -34,6 +35,90 @@ def _session_factory():
     )
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
+
+
+def test_execution_gates_endpoint_stays_independent_of_full_summary(monkeypatch):
+    factory = _session_factory()
+    with factory() as db:
+        db.add(
+            PaperTrade(
+                trade_plan_id=900,
+                symbol="BTCUSDT",
+                status="CLOSED",
+                entry_timeframe="1h",
+                strategy_id="CORE_FUSION",
+                strategy_version="core_fusion_v1",
+                pnl_percent=-1.0,
+            )
+        )
+        db.commit()
+    monkeypatch.setattr(strategy_api, "SessionLocal", factory)
+    monkeypatch.setattr(
+        strategy_api,
+        "_load_strategy_data",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("full strategy analytics must not run")
+        ),
+    )
+
+    payload = strategy_api.get_strategy_execution_gates(
+        strategy_id="CORE_FUSION",
+    )
+
+    assert payload["status"] == "READY"
+    assert payload["strategy_count"] == 1
+    record = payload["records"][0]
+    assert record["id"] == "CORE_FUSION"
+    assert record["official_entry_evidence"]["status"] == "INSUFFICIENT_EVIDENCE"
+    assert record["official_entry_evidence"]["closed_trades"] == 1
+    assert record["official_entry_evidence"]["expectancy_percent"] == -1.0
+    assert record["official_execution_allowed"] is False
+
+
+def test_narrow_execution_evidence_loader_keeps_selected_sql_rows():
+    factory = _session_factory()
+    with factory() as db:
+        db.add(
+            PaperTrade(
+                trade_plan_id=901,
+                symbol="BTCUSDT",
+                status="CLOSED",
+                entry_timeframe="1h",
+                strategy_id="REGIME_TREND",
+                strategy_version="regime_trend_v1",
+                pnl_percent=-1.25,
+            )
+        )
+        db.add_all(
+            [
+                PaperTrade(
+                    trade_plan_id=902,
+                    symbol="QABTCUSDT",
+                    status="CLOSED",
+                    entry_timeframe="1h",
+                    strategy_id="REGIME_TREND",
+                    strategy_version="regime_trend_v1",
+                    pnl_percent=99.0,
+                ),
+                PaperTrade(
+                    trade_plan_id=903,
+                    symbol="BTCUSDT",
+                    status="CLOSED",
+                    entry_timeframe="15m",
+                    strategy_id="REGIME_TREND",
+                    strategy_version="regime_trend_v1",
+                    pnl_percent=99.0,
+                ),
+            ]
+        )
+        db.commit()
+
+        evidence = load_official_strategy_evidence(db, ["REGIME_TREND"])
+
+    record = evidence[("REGIME_TREND", "regime_trend_v1")]
+    assert record["closed_trades"] == 1
+    assert record["official_paper_closed_trades"] == 1
+    assert record["expectancy_percent"] == -1.25
 
 
 def _eligible_payload(now):
@@ -375,6 +460,9 @@ def test_strategy_summary_excludes_other_strategy_version(monkeypatch):
     assert record["performance"]["total_trades"] == 0
     assert record["official_performance"]["total_trades"] == 1
     assert record["official_performance"]["net_pnl_inr"] == 1500.0
+    assert record["official_entry_evidence"]["closed_trades"] == 1
+    assert record["official_entry_evidence"]["official_paper_closed_trades"] == 1
+    assert record["official_entry_evidence"]["status"] == "INSUFFICIENT_EVIDENCE"
     assert [item["symbol"] for item in record["candidates"]] == ["BTCUSDT"]
 
 
@@ -633,9 +721,11 @@ def test_strategy_summary_aggregates_lifetime_book_but_bounds_history(monkeypatc
         since_days=30,
         candidate_limit=24,
         include_ledger=False,
+        include_learning_diagnostics=False,
     )
     summary_record = summary_without_ledger["records"][0]
     assert summary_without_ledger["ledger_included"] is False
+    assert summary_without_ledger["learning_diagnostics_included"] is False
     assert summary_record["ledger_loaded"] is False
     assert summary_record["strategy_paper_history"] == []
 
@@ -648,6 +738,27 @@ def test_strategy_summary_aggregates_lifetime_book_but_bounds_history(monkeypatc
     assert ledger_record["strategy_paper_lifetime_performance"]["total_trades"] == 25
     assert ledger_record["strategy_paper_wallet"]["wallet_balance_inr"] == 204_500.0
     assert len(ledger_record["strategy_paper_history"]) == 20
+
+    compact_ledger = strategy_api.get_strategy_ledger(
+        strategy_id=CORE_FUSION_STRATEGY_ID,
+        history_limit=20,
+        include_evidence=False,
+    )
+    compact_trade = compact_ledger["records"][0]["strategy_paper_history"][0]
+    assert compact_trade["audit_evidence_included"] is False
+    assert "execution_evidence" not in compact_trade
+    assert "exit_evidence" not in compact_trade
+
+    audit = strategy_api.get_strategy_trade_audit(compact_trade["id"])
+    assert audit["status"] == "READY"
+    assert audit["trade"]["id"] == compact_trade["id"]
+    assert audit["trade"]["audit_evidence_included"] is True
+    assert "execution_evidence" in audit["trade"]
+    assert "exit_evidence" in audit["trade"]
+
+    missing_audit = strategy_api.get_strategy_trade_audit(999_999)
+    assert missing_audit["status"] == "NOT_FOUND"
+    assert missing_audit["trade"] is None
 
 
 def test_forward_readiness_requires_performance_not_only_sample_size():
@@ -721,3 +832,73 @@ def test_forward_readiness_rejects_excessive_drawdown():
 
     assert readiness["status"] == "EVIDENCE_COMPLETE_FAILED"
     assert readiness["gates"]["maximum_drawdown"] is False
+
+
+def test_official_recovery_readiness_keeps_portfolio_frozen_without_qualified_revision():
+    recovery = strategy_api._official_recovery_readiness(
+        [
+            {
+                "id": "LOSING",
+                "version": "v1",
+                "official_execution_enabled": True,
+                "official_entry_evidence": {
+                    "strategy_revision": "LOSING@v1",
+                    "status": "FAILED_EXPECTANCY",
+                    "official_execution_allowed": False,
+                },
+                "forward_test_readiness": {"promotion_candidate": False},
+            },
+            {
+                "id": "NEW",
+                "version": "v2",
+                "official_execution_enabled": True,
+                "official_entry_evidence": {
+                    "strategy_revision": "NEW@v2",
+                    "status": "INSUFFICIENT_EVIDENCE",
+                    "official_execution_allowed": False,
+                },
+                "forward_test_readiness": {"promotion_candidate": False},
+            },
+        ]
+    )
+
+    assert recovery["status"] == "NO_QUALIFIED_STRATEGY"
+    assert recovery["automatic_resume_allowed"] is False
+    assert recovery["portfolio_reset_authorized"] is False
+    assert recovery["qualified_revision_count"] == 0
+    assert recovery["failed_expectancy_revisions"] == ["LOSING@v1"]
+    assert recovery["collecting_revisions"] == ["NEW@v2"]
+
+
+def test_official_recovery_readiness_requires_both_execution_and_strict_forward_gates():
+    recovery = strategy_api._official_recovery_readiness(
+        [
+            {
+                "id": "QUALIFIED",
+                "version": "v3",
+                "official_execution_enabled": True,
+                "official_entry_evidence": {
+                    "strategy_revision": "QUALIFIED@v3",
+                    "status": "PROMOTABLE",
+                    "official_execution_allowed": True,
+                },
+                "forward_test_readiness": {"promotion_candidate": True},
+            },
+            {
+                "id": "LOOSE_ONLY",
+                "version": "v1",
+                "official_execution_enabled": True,
+                "official_entry_evidence": {
+                    "strategy_revision": "LOOSE_ONLY@v1",
+                    "status": "PROMOTABLE",
+                    "official_execution_allowed": True,
+                },
+                "forward_test_readiness": {"promotion_candidate": False},
+            },
+        ]
+    )
+
+    assert recovery["status"] == "MANUAL_REVIEW_AVAILABLE"
+    assert recovery["qualified_revisions"] == ["QUALIFIED@v3"]
+    assert recovery["automatic_resume_allowed"] is False
+    assert recovery["portfolio_reset_authorized"] is False

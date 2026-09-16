@@ -94,10 +94,15 @@ def main():
         action="store_true",
         help="Omit per-trade rows while retaining coverage, exclusions, assumptions, and policy summaries.",
     )
+    parser.add_argument(
+        "--allow-sqlite",
+        action="store_true",
+        help="Explicitly allow a configured development SQLite database.",
+    )
     args = parser.parse_args()
     # Import after parsing: --help works without DB initialization or credentials.
     from sqlalchemy import text
-    from app.database.sqlserver import SessionLocal
+    from app.database.sqlserver import SessionLocal, USING_SQLITE_FALLBACK
     from app.database.models.paper_trade import PaperTrade
     from app.database.models.strategy_shadow_trade import StrategyShadowTrade
     from app.database.models.market_candles import MarketCandle
@@ -110,6 +115,13 @@ def main():
         CURRENT_EXIT_CONTROL_SPECS,
         build_entry_quality_report,
     )
+
+    if USING_SQLITE_FALLBACK and not args.allow_sqlite:
+        raise RuntimeError(
+            "Matched replay requires canonical evidence storage; SQLite fallback "
+            "was selected. Restore SQL Server/PostgreSQL connectivity or pass "
+            "--allow-sqlite for an intentional development database."
+        )
 
     model = StrategyShadowTrade if args.book == "strategy" else PaperTrade
     end = parse_as_of(args.as_of)

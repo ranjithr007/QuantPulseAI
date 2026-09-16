@@ -14,6 +14,7 @@ from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.paper_trading.exit_policy import approved_adaptive_entry_levels, PAPER_ADAPTIVE_EXIT_POLICY
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
+from app.paper_trading.paper_trade_performance import performance_edge_metrics
 from app.paper_trading.evidence_scope import QA_PAPER_SYMBOL_PREFIX
 from app.paper_trading.evidence_scope import is_quarantined_paper_symbol
 from app.repositories._db_utils import commit_or_rollback
@@ -279,6 +280,39 @@ class PaperTradeRepository:
 
         return query.all()
 
+    def paginated_closed_trades(
+        self,
+        db,
+        *,
+        symbol=None,
+        limit=10,
+        offset=0,
+        entry_timeframes=None,
+    ):
+        """Load one indexed closed-trade page and its exact total.
+
+        A previous COUNT OVER query used ``UPPER(status)`` and forced SQL
+        Server to scan/sort the history (including large evidence columns)
+        before applying the page limit. Two narrow indexable statements are
+        materially faster on a cold cache and keep page totals exact.
+        """
+
+        total = self.count_trades(
+            db,
+            status="CLOSED",
+            symbol=symbol,
+            entry_timeframes=entry_timeframes,
+        )
+        rows = self.list_trades(
+            db,
+            status="CLOSED",
+            symbol=symbol,
+            limit=max(1, int(limit)),
+            offset=max(0, int(offset)),
+            entry_timeframes=entry_timeframes,
+        )
+        return rows, total
+
     def count_trades(
         self,
         db,
@@ -347,6 +381,18 @@ class PaperTradeRepository:
             ).label("short_trades"),
             func.sum(case((closed, pnl), else_=0.0)).label("total_pnl_percent"),
             func.sum(
+                case((and_(closed, pnl > 0), pnl), else_=0.0)
+            ).label("gross_profit_percent"),
+            func.sum(
+                case((and_(closed, pnl < 0), pnl), else_=0.0)
+            ).label("gross_loss_percent"),
+            func.sum(
+                case((and_(closed, pnl > 0), 1), else_=0)
+            ).label("profitable_trades"),
+            func.sum(
+                case((and_(closed, pnl < 0), 1), else_=0)
+            ).label("losing_pnl_trades"),
+            func.sum(
                 case(
                     (
                         and_(closed, PaperTrade.closed_at >= now - timedelta(days=1)),
@@ -383,6 +429,17 @@ class PaperTradeRepository:
         closed_count = int(row.closed_trades or 0)
         wins = int(row.wins or 0)
         total_pnl = round(float(row.total_pnl_percent or 0.0), 2)
+        gross_profit = float(row.gross_profit_percent or 0.0)
+        gross_loss = float(row.gross_loss_percent or 0.0)
+        profitable_count = int(row.profitable_trades or 0)
+        losing_pnl_count = int(row.losing_pnl_trades or 0)
+        edge_health = performance_edge_metrics(
+            gross_profit_percent=gross_profit,
+            gross_loss_percent=gross_loss,
+            profitable_trades=profitable_count,
+            losing_trades=losing_pnl_count,
+            closed_trades=closed_count,
+        )
         return {
             "total_trades": int(row.total_trades or 0),
             "open_trades": int(row.open_trades or 0),
@@ -395,10 +452,106 @@ class PaperTradeRepository:
             "average_pnl_percent": (
                 round(total_pnl / closed_count, 2) if closed_count else 0
             ),
+            "average_win_pnl_percent": edge_health["average_win_pnl_percent"],
+            "average_loss_pnl_percent": edge_health["average_loss_pnl_percent"],
+            "edge_health": edge_health,
             "total_pnl_percent": total_pnl,
             "daily_pnl_percent": round(float(row.daily_pnl_percent or 0.0), 2),
             "weekly_pnl_percent": round(float(row.weekly_pnl_percent or 0.0), 2),
             "monthly_pnl_percent": round(float(row.monthly_pnl_percent or 0.0), 2),
+        }
+
+    def performance_breakdown(self, db, *, symbol=None, entry_timeframes=None):
+        """Aggregate exact closed-trade PNL across recorded cohort dimensions."""
+
+        self.ensure_table(db)
+        symbol_key = func.upper(PaperTrade.symbol)
+        side_key = func.upper(PaperTrade.side)
+        regime_key = func.upper(PaperTrade.regime)
+        timeframe_key = func.lower(PaperTrade.entry_timeframe)
+        strategy_key = func.upper(PaperTrade.strategy_id)
+        strategy_version_key = PaperTrade.strategy_version
+        exit_reason_key = func.upper(PaperTrade.exit_reason)
+        query = db.query(
+            symbol_key.label("symbol"),
+            side_key.label("side"),
+            regime_key.label("regime"),
+            timeframe_key.label("timeframe"),
+            strategy_key.label("strategy_id"),
+            strategy_version_key.label("strategy_version"),
+            exit_reason_key.label("exit_reason"),
+            func.count(PaperTrade.id).label("closed_trades"),
+            func.sum(func.coalesce(PaperTrade.pnl_percent, 0.0)).label(
+                "pnl_percent"
+            ),
+        ).filter(func.upper(PaperTrade.status) == "CLOSED")
+        query = _apply_production_ledger_scope(query, False)
+        if symbol:
+            query = query.filter(PaperTrade.symbol == symbol)
+        if entry_timeframes:
+            query = query.filter(PaperTrade.entry_timeframe.in_(entry_timeframes))
+        rows = query.group_by(
+            symbol_key,
+            side_key,
+            regime_key,
+            timeframe_key,
+            strategy_key,
+            strategy_version_key,
+            exit_reason_key,
+        ).all()
+
+        by_symbol = {}
+        by_side = {}
+        by_regime = {}
+        by_timeframe = {}
+        by_strategy = {}
+        by_strategy_revision = {}
+        by_exit_reason = {}
+        strategy_attributed_trades = 0
+        regime_attributed_trades = 0
+        for row in rows:
+            value = float(row.pnl_percent or 0.0)
+            count = int(row.closed_trades or 0)
+            strategy_id = row.strategy_id or "UNATTRIBUTED"
+            strategy_revision = (
+                f"{strategy_id}@{row.strategy_version or 'UNKNOWN_VERSION'}"
+                if row.strategy_id
+                else "UNATTRIBUTED"
+            )
+            if row.strategy_id:
+                strategy_attributed_trades += count
+            if row.regime:
+                regime_attributed_trades += count
+            for target, name in (
+                (by_symbol, row.symbol or "UNKNOWN"),
+                (by_side, row.side or "UNKNOWN"),
+                (by_regime, row.regime or "UNATTRIBUTED"),
+                (by_timeframe, row.timeframe or "UNATTRIBUTED"),
+                (by_strategy, strategy_id),
+                (by_strategy_revision, strategy_revision),
+                (by_exit_reason, row.exit_reason or "UNATTRIBUTED"),
+            ):
+                item = target.setdefault(
+                    str(name).upper(),
+                    {"value": 0.0, "closed_trades": 0},
+                )
+                item["value"] += value
+                item["closed_trades"] += count
+
+        return {
+            "scope": "ALL_OFFICIAL_CLOSED_TRADES",
+            "by_symbol": _sorted_pnl_breakdown(by_symbol),
+            "by_side": _sorted_pnl_breakdown(by_side),
+            "by_regime": _sorted_pnl_breakdown(by_regime),
+            "by_timeframe": _sorted_pnl_breakdown(by_timeframe),
+            "by_strategy": _sorted_pnl_breakdown(by_strategy),
+            "by_strategy_revision": _sorted_pnl_breakdown(by_strategy_revision),
+            "by_exit_reason": _sorted_pnl_breakdown(by_exit_reason),
+            "attribution_coverage": {
+                "closed_trades": sum(int(row.closed_trades or 0) for row in rows),
+                "strategy_attributed_trades": strategy_attributed_trades,
+                "regime_attributed_trades": regime_attributed_trades,
+            },
         }
 
     def all_trades(self, db, symbol=None, include_quarantined=False):
@@ -1035,3 +1188,15 @@ def _price_text(value):
     if abs(number) < 100:
         return f"{number:.4f}"
     return f"{number:,.2f}"
+
+
+def _sorted_pnl_breakdown(groups):
+    records = [
+        {
+            "name": name,
+            "value": round(values["value"], 2),
+            "closed_trades": values["closed_trades"],
+        }
+        for name, values in groups.items()
+    ]
+    return sorted(records, key=lambda item: (-abs(item["value"]), item["name"]))

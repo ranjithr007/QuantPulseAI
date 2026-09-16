@@ -15,10 +15,17 @@ from app.utils.network_resilience import is_transient_network_error
 class LeverageBracketCollector:
     URL = "https://fapi.binance.com/fapi/v1/leverageBracket"
 
-    def __init__(self, api_key=None, api_secret=None):
+    def __init__(
+        self,
+        api_key=None,
+        api_secret=None,
+        *,
+        timeout_seconds=20,
+    ):
         settings = get_settings()
         self.api_key = api_key or settings.binance_api_key
         self.api_secret = api_secret or settings.binance_api_secret
+        self.timeout_seconds = max(1, float(timeout_seconds))
         self.last_status = "NOT_REQUESTED"
 
     def get_brackets(self, symbol):
@@ -43,7 +50,7 @@ class LeverageBracketCollector:
                 self.URL,
                 params=params,
                 headers={"X-MBX-APIKEY": self.api_key},
-                timeout=20,
+                timeout=self.timeout_seconds,
             )
             response.raise_for_status()
             records = _parse_bracket_payload(

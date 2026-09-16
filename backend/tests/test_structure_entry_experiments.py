@@ -55,8 +55,12 @@ def build(family, core, raw, now):
         base = core
         rebuild = lambda gate: rebuild_core_entry_payload(core, gate)
     elif family == "REGIME_TREND":
-        base = build_regime_trend_payload(core)
-        rebuild = lambda gate: build_regime_trend_payload(core, structure_gate=gate)
+        base = build_regime_trend_payload(core, require_trend_regime=True)
+        rebuild = lambda gate: build_regime_trend_payload(
+            core,
+            structure_gate=gate,
+            require_trend_regime=True,
+        )
     else:
         base = signals_api._build_market_move_strategy_payload(core, raw)
         rebuild = lambda gate: signals_api._build_market_move_strategy_payload(core, raw, structure_gate=gate)
@@ -98,6 +102,18 @@ def test_high_score_without_price_confirmation_waits(family):
     _, result = build(family, core, raw, now)
     assert result["trigger"]["status"] == "WAIT"
     assert "Higher lows" in result["trigger"]["reason"]
+
+
+def test_regime_trend_entry_rejects_range_regime_even_with_confirmed_structure():
+    core, raw, now = inputs("SHORT")
+    for item in core["timeframes"]:
+        item["component_scores"]["regime"]["value"] = "RANGE_DISTRIBUTION"
+
+    _, result = build("REGIME_TREND", core, raw, now)
+
+    assert result["trigger"]["status"] == "WAIT"
+    assert result["trade_plan_validation"]["is_valid"] is False
+    assert "belongs to another strategy family" in result["trigger"]["reason"]
 
 
 def candidate(side="LONG"):
@@ -168,7 +184,7 @@ def test_scan_clock_is_independent_of_selected_closed_candle(family):
 
 
 @pytest.mark.parametrize("strategy,version", [("CORE_SIGNAL_ENTRY","core_signal_entry_v1"),
-                                             ("REGIME_TREND_ENTRY","regime_trend_entry_v2"),
+                                             ("REGIME_TREND_ENTRY","regime_trend_entry_v3"),
                                              ("MARKET_MOVE_ENTRY","market_move_entry_v2"),
                                              ("MARKET_MOVE_ENTRY",None)])
 def test_missing_metadata_cannot_bypass_current_entry_experiment(strategy, version):

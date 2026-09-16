@@ -49,6 +49,9 @@ class PipelineReadiness(BaseModel):
     required_stages: List[str]
     missing_stages: List[str]
     failed_stages: List[str]
+    running_stages: List[str] = Field(default_factory=list)
+    degraded_stages: List[str] = Field(default_factory=list)
+    blocked_stages: List[str] = Field(default_factory=list)
 
 
 class PipelineLineage(BaseModel):
@@ -67,6 +70,34 @@ class PipelineJobHealth(BaseModel):
     error_category: Optional[str] = None
 
 
+class PriceStreamHealth(BaseModel):
+    policy: str
+    ready: bool
+    connected: bool
+    reason: Optional[str] = None
+    max_age_seconds: float
+    message_age_seconds: Optional[float] = None
+    last_message_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    thread_alive: bool
+
+
+class ExitProtectionHealth(BaseModel):
+    policy: str
+    ready: bool
+    status: str
+    reason: Optional[str] = None
+    max_age_seconds: float
+    age_seconds: Optional[float] = None
+    last_attempt_at: Optional[datetime] = None
+    last_success_at: Optional[datetime] = None
+    last_worker_status: str
+    last_duration_seconds: Optional[float] = None
+    last_error: Optional[str] = None
+    consecutive_failures: int = 0
+    price_stream: Optional[PriceStreamHealth] = None
+
+
 class PipelineHealthResponse(BaseModel):
     source: str
     available: bool
@@ -76,4 +107,5 @@ class PipelineHealthResponse(BaseModel):
     pipeline: Optional[PipelineSummary] = None
     readiness: Optional[PipelineReadiness] = None
     lineage: Optional[PipelineLineage] = None
+    exit_protection: Optional[ExitProtectionHealth] = None
     jobs: List[PipelineJobHealth] = Field(default_factory=list)

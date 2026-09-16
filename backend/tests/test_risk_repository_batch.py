@@ -58,6 +58,44 @@ def test_latest_for_symbols_handles_empty_input_without_querying():
     assert RiskRepository().latest_for_symbols(None, []) == {}
 
 
+def test_latest_master_for_symbol_ignores_newer_trade_plan_authorization():
+    engine = create_engine("sqlite:///:memory:")
+    RiskDecision.__table__.create(bind=engine)
+    session = sessionmaker(bind=engine)()
+    now = datetime.utcnow()
+    try:
+        session.add_all(
+            [
+                RiskDecision(
+                    symbol="BTCUSDT",
+                    signal="LONG",
+                    decision="REJECT",
+                    trade_plan_id=None,
+                    thesis_id=42,
+                    created_at=now - timedelta(seconds=1),
+                ),
+                RiskDecision(
+                    symbol="BTCUSDT",
+                    signal="LONG",
+                    decision="APPROVE",
+                    trade_plan_id=99,
+                    thesis_id=42,
+                    created_at=now,
+                ),
+            ]
+        )
+        session.commit()
+
+        latest = RiskRepository().latest_master_for_symbol(session, "BTCUSDT")
+
+        assert latest is not None
+        assert latest.trade_plan_id is None
+        assert latest.decision == "REJECT"
+        assert latest.thesis_id == 42
+    finally:
+        session.close()
+
+
 def test_latest_for_trade_plans_keeps_strategy_authorizations_separate():
     engine = create_engine("sqlite:///:memory:")
     RiskDecision.__table__.create(bind=engine)

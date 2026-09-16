@@ -154,16 +154,40 @@ class PipelineRunRepository:
         jobs = self.jobs_for_pipeline(db, pipeline_run_id)
         by_job = {job.job_id: job for job in jobs}
         missing = [stage for stage in required_stages if stage not in by_job]
+        running = [
+            stage
+            for stage in required_stages
+            if stage in by_job and str(by_job[stage].status).upper() == "RUNNING"
+        ]
         failed = [
             stage
             for stage in required_stages
-            if stage in by_job and by_job[stage].status != "COMPLETED"
+            if stage in by_job
+            and str(by_job[stage].status).upper() not in {
+                "COMPLETED",
+                "RUNNING",
+                "DEGRADED",
+                "BLOCKED",
+            }
+        ]
+        degraded = [
+            stage
+            for stage in required_stages
+            if stage in by_job and str(by_job[stage].status).upper() == "DEGRADED"
+        ]
+        blocked = [
+            stage
+            for stage in required_stages
+            if stage in by_job and str(by_job[stage].status).upper() == "BLOCKED"
         ]
         return {
-            "ready": not missing and not failed,
+            "ready": not any((missing, running, failed, degraded, blocked)),
             "required_stages": list(required_stages),
             "missing_stages": missing,
+            "running_stages": running,
             "failed_stages": failed,
+            "degraded_stages": degraded,
+            "blocked_stages": blocked,
             "jobs": jobs,
         }
 

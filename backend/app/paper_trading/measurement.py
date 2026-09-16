@@ -8,9 +8,16 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.database.models.trade_thesis import TradeThesis
 from app.database.models.market_regimes import MarketRegime
+from app.paper_trading.exit_evidence import classify_exit
+from app.paper_trading.exit_evidence import read_evidence
+from app.paper_trading.operational_exit_quality import EXIT_DEADLINE_GRACE_MINUTES
+from app.paper_trading.operational_exit_quality import MAX_PROMOTION_EXIT_QUOTE_AGE_SECONDS
+from app.paper_trading.operational_exit_quality import is_operationally_contaminated_exit
+from app.paper_trading.operational_exit_quality import late_time_exit_delay_minutes
+from app.paper_trading.operational_exit_quality import stale_recorded_exit_quote_age_seconds
 
 
-MEASUREMENT_VERSION = "extended_paper_measurement_v1"
+MEASUREMENT_VERSION = "extended_paper_measurement_v2"
 
 
 @dataclass(frozen=True)
@@ -47,18 +54,23 @@ def build_measurement_report(trades, gates=None, as_of=None):
     as_of = _as_datetime(as_of) if as_of is not None else datetime.utcnow()
     records = list(trades or [])
     overall = _scorecard(records, as_of)
+    evidence_records = [
+        trade for trade in records if not is_operationally_contaminated_exit(trade)
+    ]
+    evidence_overall = _scorecard(evidence_records, as_of)
+    excluded_exit_count = len(records) - len(evidence_records)
     evidence_checks = [
         _check(
             "closed_trade_sample",
-            overall["closed_trades"] >= gates.min_closed_trades,
-            overall["closed_trades"],
+            evidence_overall["closed_trades"] >= gates.min_closed_trades,
+            evidence_overall["closed_trades"],
             gates.min_closed_trades,
             "minimum",
         ),
         _check(
             "observation_period_days",
-            overall["observation_days"] >= gates.min_observation_days,
-            overall["observation_days"],
+            evidence_overall["observation_days"] >= gates.min_observation_days,
+            evidence_overall["observation_days"],
             gates.min_observation_days,
             "minimum",
         ),
@@ -66,43 +78,43 @@ def build_measurement_report(trades, gates=None, as_of=None):
     performance_checks = [
         _check(
             "positive_net_return",
-            overall["compounded_return_percent"] > gates.min_total_return_percent,
-            overall["compounded_return_percent"],
+            evidence_overall["compounded_return_percent"] > gates.min_total_return_percent,
+            evidence_overall["compounded_return_percent"],
             gates.min_total_return_percent,
             "greater_than",
         ),
         _check(
             "positive_expectancy",
-            overall["expectancy_percent"] > gates.min_expectancy_percent,
-            overall["expectancy_percent"],
+            evidence_overall["expectancy_percent"] > gates.min_expectancy_percent,
+            evidence_overall["expectancy_percent"],
             gates.min_expectancy_percent,
             "greater_than",
         ),
         _check(
             "win_rate",
-            overall["win_rate"] >= gates.min_win_rate_percent,
-            overall["win_rate"],
+            evidence_overall["win_rate"] >= gates.min_win_rate_percent,
+            evidence_overall["win_rate"],
             gates.min_win_rate_percent,
             "minimum",
         ),
         _check(
             "reward_risk_ratio",
-            _reward_risk_passes(overall, gates.min_reward_risk),
-            overall["payoff_ratio"],
+            _reward_risk_passes(evidence_overall, gates.min_reward_risk),
+            evidence_overall["payoff_ratio"],
             gates.min_reward_risk,
             "minimum",
         ),
         _check(
             "profit_factor",
-            _profit_factor_passes(overall, gates.min_profit_factor),
-            overall["profit_factor"],
+            _profit_factor_passes(evidence_overall, gates.min_profit_factor),
+            evidence_overall["profit_factor"],
             gates.min_profit_factor,
             "minimum",
         ),
         _check(
             "maximum_drawdown",
-            overall["max_drawdown_percent"] <= gates.max_drawdown_percent,
-            overall["max_drawdown_percent"],
+            evidence_overall["max_drawdown_percent"] <= gates.max_drawdown_percent,
+            evidence_overall["max_drawdown_percent"],
             gates.max_drawdown_percent,
             "maximum",
         ),
@@ -138,18 +150,34 @@ def build_measurement_report(trades, gates=None, as_of=None):
         },
         "gates": asdict(gates),
         "evaluation": {
+            "scorecard_scope": "CLEAN_OPERATIONAL_EVIDENCE_ONLY",
+            "excluded_operationally_contaminated_exits": excluded_exit_count,
             "evidence_sufficient": evidence_sufficient,
             "performance_passed": performance_passed,
             "evidence_checks": evidence_checks,
             "performance_checks": performance_checks,
         },
         "overall": overall,
+        "evidence_overall": evidence_overall,
+        "confidence_calibration": build_confidence_calibration(
+            records,
+            gates,
+            as_of,
+        ),
+        "return_decomposition": _return_decomposition(records),
         "cohorts": {
+            "strategy": _cohort_scorecards(records, "strategy", gates, as_of),
             "symbol": _cohort_scorecards(records, "symbol", gates, as_of),
             "side": _cohort_scorecards(records, "side", gates, as_of),
             "mode": _cohort_scorecards(records, "mode", gates, as_of),
             "entry_timeframe": _cohort_scorecards(records, "entry_timeframe", gates, as_of),
             "regime": _cohort_scorecards(records, "regime", gates, as_of),
+            "exit_classification": _cohort_scorecards(
+                records,
+                "exit_classification",
+                gates,
+                as_of,
+            ),
             "confidence_band": _cohort_scorecards(
                 records,
                 "confidence_band",
@@ -159,6 +187,7 @@ def build_measurement_report(trades, gates=None, as_of=None):
         },
         "scenario_accuracy": _scenario_accuracy(records),
         "regime_accuracy": _regime_accuracy(records),
+        "operational_exit_quality": _operational_exit_quality(records),
         "data_quality": _data_quality(records),
     }
 
@@ -323,6 +352,14 @@ def _cohort_scorecards(trades, dimension, gates, as_of):
 
 
 def _cohort_value(trade, dimension):
+    if dimension == "strategy":
+        strategy_id = _value(trade, "strategy_id")
+        strategy_version = _value(trade, "strategy_version")
+        if strategy_id in (None, ""):
+            return "UNKNOWN"
+        if strategy_version in (None, ""):
+            return str(strategy_id)
+        return f"{strategy_id}@{strategy_version}"
     if dimension == "confidence_band":
         confidence = _value(trade, "confidence")
         if confidence is None:
@@ -335,8 +372,176 @@ def _cohort_value(trade, dimension):
         if confidence < 80:
             return "70_79"
         return "80_PLUS"
+    if dimension == "exit_classification":
+        recorded = read_evidence(_value(trade, "exit_evidence_json")).get(
+            "classification"
+        )
+        return str(recorded or classify_exit(trade)).upper()
     value = _value(trade, dimension)
     return str(value) if value not in (None, "") else "UNKNOWN"
+
+
+def build_confidence_calibration(trades, gates=None, as_of=None):
+    """Check whether higher recorded confidence separates better outcomes.
+
+    This is a descriptive evidence gate, not a threshold optimizer. The fixed
+    60-point split matches the published confidence cohorts and is never chosen
+    from the observed outcomes.
+    """
+    gates = gates or MeasurementGates()
+    as_of = _as_datetime(as_of) if as_of is not None else datetime.utcnow()
+    records = list(trades or [])
+    closed_with_outcomes = [
+        trade
+        for trade in records
+        if _value(trade, "status") == "CLOSED"
+        and _value(trade, "confidence") is not None
+        and _value(trade, "pnl_percent") is not None
+    ]
+    measured = [
+        trade
+        for trade in closed_with_outcomes
+        if not is_operationally_contaminated_exit(trade)
+    ]
+    lower = [trade for trade in measured if float(_value(trade, "confidence")) < 60]
+    higher = [trade for trade in measured if float(_value(trade, "confidence")) >= 60]
+    lower_score = _scorecard(lower, as_of)
+    higher_score = _scorecard(higher, as_of)
+    gap = round(
+        higher_score["expectancy_percent"] - lower_score["expectancy_percent"],
+        4,
+    )
+    correlation = _pearson_correlation(
+        [float(_value(trade, "confidence")) for trade in measured],
+        [float(_value(trade, "pnl_percent")) for trade in measured],
+    )
+    sufficient = bool(
+        lower_score["closed_trades"] >= gates.min_cohort_closed_trades
+        and higher_score["closed_trades"] >= gates.min_cohort_closed_trades
+    )
+    aligned = bool(gap > 0 and correlation is not None and correlation > 0)
+    higher_has_positive_edge = bool(
+        higher_score["expectancy_percent"] > 0
+        and higher_score["profit_factor"] is not None
+        and higher_score["profit_factor"] > 1
+    )
+    status = (
+        "INSUFFICIENT_EVIDENCE"
+        if not sufficient
+        else "DIRECTIONALLY_ALIGNED"
+        if aligned
+        else "NOT_DIRECTIONALLY_ALIGNED"
+    )
+    direction = (
+        "HIGHER_OUTPERFORMS"
+        if gap > 0
+        else "HIGHER_UNDERPERFORMS"
+        if gap < 0
+        else "FLAT"
+    )
+    return {
+        "status": status,
+        "direction": direction,
+        "evidence_scope": "CLEAN_OPERATIONAL_EVIDENCE_ONLY",
+        "excluded_operationally_contaminated_exits": (
+            len(closed_with_outcomes) - len(measured)
+        ),
+        "evaluated_trades": len(measured),
+        "minimum_trades_per_group": gates.min_cohort_closed_trades,
+        "sample_sufficient": sufficient,
+        "higher_confidence_positive_edge": higher_has_positive_edge,
+        "higher_confidence_promotion_eligible": bool(
+            sufficient and aligned and higher_has_positive_edge
+        ),
+        "expectancy_gap_percentage_points": gap,
+        "confidence_pnl_correlation": correlation,
+        "below_60": {
+            "closed_trades": lower_score["closed_trades"],
+            "win_rate": lower_score["win_rate"],
+            "expectancy_percent": lower_score["expectancy_percent"],
+            "profit_factor": lower_score["profit_factor"],
+        },
+        "at_least_60": {
+            "closed_trades": higher_score["closed_trades"],
+            "win_rate": higher_score["win_rate"],
+            "expectancy_percent": higher_score["expectancy_percent"],
+            "profit_factor": higher_score["profit_factor"],
+        },
+        "note": (
+            "Fixed predeclared confidence groups; descriptive association only. "
+            "This report does not tune an entry threshold or prove causation."
+        ),
+    }
+
+
+def _pearson_correlation(left, right):
+    if len(left) != len(right) or len(left) < 2:
+        return None
+    left_mean = mean(left)
+    right_mean = mean(right)
+    numerator = sum(
+        (left_value - left_mean) * (right_value - right_mean)
+        for left_value, right_value in zip(left, right)
+    )
+    left_variance = sum((value - left_mean) ** 2 for value in left)
+    right_variance = sum((value - right_mean) ** 2 for value in right)
+    denominator = sqrt(left_variance * right_variance)
+    return round(numerator / denominator, 4) if denominator else None
+
+
+def _return_decomposition(trades):
+    """Reconcile persisted post-fill price return to the official net return."""
+    closed = [trade for trade in trades if _value(trade, "status") == "CLOSED"]
+    required = (
+        "gross_pnl_percent",
+        "fees_percent",
+        "funding_cost_percent",
+        "pnl_percent",
+    )
+    complete = [
+        trade
+        for trade in closed
+        if all(_value(trade, field) is not None for field in required)
+    ]
+    post_fill_gross = sum(
+        float(_value(trade, "gross_pnl_percent")) for trade in complete
+    )
+    fees = sum(float(_value(trade, "fees_percent")) for trade in complete)
+    funding = sum(
+        float(_value(trade, "funding_cost_percent")) for trade in complete
+    )
+    net = sum(float(_value(trade, "pnl_percent")) for trade in complete)
+    total_cost = fees + funding
+    reconciled_net = post_fill_gross - total_cost
+    error = net - reconciled_net
+    cost_share = (
+        round((total_cost / abs(net)) * 100, 2)
+        if net < 0 and total_cost > 0
+        else 0.0
+    )
+    return {
+        "status": "COMPLETE" if len(complete) == len(closed) else "INCOMPLETE",
+        "closed_trades": len(closed),
+        "reconciled_trades": len(complete),
+        "missing_component_trades": len(closed) - len(complete),
+        "post_fill_gross_return_percent": round(post_fill_gross, 4),
+        "fees_percent": round(fees, 4),
+        "funding_cost_percent": round(funding, 6),
+        "total_cost_drag_percent": round(total_cost, 4),
+        "net_return_percent": round(net, 4),
+        "reconciliation_error_percent": round(error, 6),
+        "cost_share_of_net_loss_percent": cost_share,
+        "pre_cost_result": (
+            "POSITIVE" if post_fill_gross > 0 else "NEGATIVE" if post_fill_gross < 0 else "FLAT"
+        ),
+        "costs_changed_result_sign": bool(
+            (post_fill_gross > 0 and net <= 0) or (post_fill_gross < 0 and net >= 0)
+        ),
+        "slippage_policy": (
+            "Entry and exit slippage are already embedded in the simulated fill "
+            "prices and therefore in post-fill gross return."
+        ),
+    }
 
 
 def _scenario_accuracy(trades):
@@ -523,6 +728,11 @@ def _data_quality(trades):
             for trade in closed
             if _value(trade, "exit_slippage_percent") is None
         ),
+        "closed_trades_missing_trailing_activation": sum(
+            1
+            for trade in closed
+            if _value(trade, "trailing_activation_r") is None
+        ),
         "trades_missing_funding_snapshot": sum(
             1
             for trade in trades
@@ -541,6 +751,93 @@ def _data_quality(trades):
         ),
         "legacy_trade_note": (
             "Trades opened before measurement v1 may not contain fee or context snapshots."
+        ),
+    }
+
+
+def _operational_exit_quality(trades):
+    """Expose infrastructure-tainted exits without changing account P&L."""
+
+    closed = [trade for trade in trades if _value(trade, "status") == "CLOSED"]
+    time_exits = [
+        trade
+        for trade in closed
+        if str(_value(trade, "exit_reason") or "").upper() == "TIME_EXIT"
+    ]
+    late = []
+    for trade in time_exits:
+        delay_minutes = late_time_exit_delay_minutes(trade)
+        if delay_minutes is not None:
+            late.append((trade, delay_minutes))
+
+    observed_only = 0
+    missing_evidence = 0
+    stale_recorded_exits = []
+    for trade in closed:
+        evidence = _decode_json(_value(trade, "exit_evidence_json"))
+        if evidence is None:
+            missing_evidence += 1
+            continue
+        coverage = str((evidence.get("observations") or {}).get("coverage") or "")
+        if coverage.upper() == "OBSERVED_ONLY":
+            observed_only += 1
+        stale_age = stale_recorded_exit_quote_age_seconds(trade)
+        if stale_age is not None:
+            stale_recorded_exits.append((trade, stale_age))
+
+    by_strategy = {}
+    for trade, delay_minutes in late:
+        strategy = _cohort_value(trade, "strategy")
+        group = by_strategy.setdefault(
+            strategy,
+            {
+                "strategy": strategy,
+                "late_time_exits": 0,
+                "net_pnl_percent": 0.0,
+                "max_delay_minutes": 0.0,
+            },
+        )
+        group["late_time_exits"] += 1
+        group["net_pnl_percent"] += float(_value(trade, "pnl_percent") or 0)
+        group["max_delay_minutes"] = max(
+            group["max_delay_minutes"],
+            delay_minutes,
+        )
+
+    late_pnl = sum(float(_value(trade, "pnl_percent") or 0) for trade, _ in late)
+    return {
+        "status": "DEGRADED" if late or stale_recorded_exits else "OK",
+        "deadline_grace_minutes": EXIT_DEADLINE_GRACE_MINUTES,
+        "closed_trades": len(closed),
+        "time_exits": len(time_exits),
+        "late_time_exits": len(late),
+        "late_time_exit_net_pnl_percent": round(late_pnl, 4),
+        "maximum_exit_delay_minutes": round(
+            max((delay for _, delay in late), default=0.0),
+            2,
+        ),
+        "maximum_promotion_quote_age_seconds": MAX_PROMOTION_EXIT_QUOTE_AGE_SECONDS,
+        "stale_recorded_exit_triggers": len(stale_recorded_exits),
+        "maximum_recorded_trigger_quote_age_seconds": round(
+            max((age for _, age in stale_recorded_exits), default=0.0),
+            3,
+        ),
+        "observed_only_exit_evidence": observed_only,
+        "closed_trades_missing_exit_evidence": missing_evidence,
+        "late_time_exits_by_strategy": [
+            {
+                **item,
+                "net_pnl_percent": round(item["net_pnl_percent"], 4),
+                "max_delay_minutes": round(item["max_delay_minutes"], 2),
+            }
+            for item in sorted(
+                by_strategy.values(),
+                key=lambda value: (-value["late_time_exits"], value["strategy"]),
+            )
+        ],
+        "accounting_policy": (
+            "Late exits remain included in account P&L and headline strategy "
+            "results, but are excluded from validation and promotion scorecards."
         ),
     }
 

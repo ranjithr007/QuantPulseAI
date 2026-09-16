@@ -16,13 +16,16 @@ try {
   await page.clock.install();
   const errors = [];
   page.on("pageerror", error => { errors.push(error.message); console.error(error.message); });
-  let summaries = 0, ledgers = 0, summaryFailure = 0, ledgerFailure = 0;
+  let gates = 0, summaries = 0, ledgers = 0, summaryFailure = 0, ledgerFailure = 0;
   const headers = {"Access-Control-Allow-Origin":"http://127.0.0.1:5181", "Access-Control-Allow-Credentials":"true"};
   const record = {id:"CORE_SIGNAL", version:"test_v1", name:"Synthetic Core Signal", status:"ACTIVE", ledger_loaded:false};
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     let status = 200, json;
-    if (path.endsWith("/strategies/summary")) {
+    if (path.endsWith("/strategies/execution-gates")) {
+      gates++;
+      json = {records:[{...record, official_entry_evidence:{status:"INSUFFICIENT_EVIDENCE",closed_trades:7,minimum_closed_trades:30,official_execution_allowed:false}}]};
+    } else if (path.endsWith("/strategies/summary")) {
       summaries++;
       status = summaryFailure || 200;
       json = {records:[{...record, description:`Snapshot ${summaries}`}],entry_strategy_holdout:{status:"COLLECTING_PROSPECTIVE_ENTRIES",maturation_hours:48,minimum_mature_trades_per_candidate:30,cohorts:[{strategy_id:"CORE_SIGNAL_ENTRY",strategy_version:"core_signal_entry_v1",label:"Core Signal Entry Candidate",valid_mature_entry_evidence:7,immature_entries:2,invalid_mature_entry_evidence:0}]},entry_strategy_holdout_outcome:{status:"PENDING_READINESS",automatic:true,report:null}};
@@ -53,7 +56,7 @@ try {
   await page.getByText("7/30",{exact:true}).waitFor();
   await page.getByText(/Outcomes remain hidden until every cohort is ready/).waitFor();
   await page.getByText("₹1,87,654.00",{exact:true}).waitFor();
-  assert.equal(summaries,1); assert.equal(ledgers,1);
+  assert.equal(gates,1); assert.equal(summaries,1); assert.equal(ledgers,1);
   await page.clock.runFor(60100);
   await page.getByText("Snapshot 2",{exact:true}).waitFor();
   await page.getByRole('button',{name:'Refresh',exact:true}).waitFor();

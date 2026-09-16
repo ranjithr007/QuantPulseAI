@@ -29,9 +29,9 @@ const PAGE_DATA_NEEDS = {
   "coin-details": { signals: true },
   "risk-controls": { paper: true, paperCandidates: false, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },
-  // Executor candidates are not part of positions, wallet totals, charts, or
-  // paginated history, so they must not delay the authoritative PNL ledger.
-  pnl: { watchlist: true, paper: true, paperCandidates: false, signals: false },
+  // The PNL hook owns its ledger requests. Keeping the overview batch empty
+  // prevents unrelated watchlist/database work from contending with page 1.
+  pnl: { paperCandidates: false, signals: false },
   backtest: { signals: true },
   rotation: { watchlist: true, signals: true },
   "rs-ranking": { watchlist: true, signals: true },
@@ -81,7 +81,7 @@ export async function loadMarketParticipationTrends({ signal } = {}) {
   return response || { source: "market_participation_trends", count: 0, records: [] };
 }
 
-export async function loadStrategySummary({ strategyId, sinceDays = 30, includeLedger = true, signal } = {}) {
+export async function loadStrategySummary({ strategyId, sinceDays = 30, includeLedger = true, includeLearningDiagnostics = false, signal } = {}) {
   const response = await requestJson(
     "/strategies/summary",
     {
@@ -89,6 +89,7 @@ export async function loadStrategySummary({ strategyId, sinceDays = 30, includeL
       since_days: sinceDays,
       candidate_limit: 24,
       include_ledger: includeLedger,
+      include_learning_diagnostics: includeLearningDiagnostics,
     },
     signal,
     45000
@@ -96,17 +97,41 @@ export async function loadStrategySummary({ strategyId, sinceDays = 30, includeL
   return response || { source: "strategy_performance_v1", status: "UNAVAILABLE", records: [] };
 }
 
-export async function loadStrategyLedger({ strategyId, historyLimit = 20, signal } = {}) {
+export async function loadStrategyExecutionGates({ strategyId, signal } = {}) {
+  const response = await requestJson(
+    "/strategies/execution-gates",
+    { strategy_id: strategyId },
+    signal,
+    15000
+  );
+  return response || { source: "strategy_execution_gates_v1", status: "UNAVAILABLE", records: [] };
+}
+
+export async function loadStrategyLedger({ strategyId, historyLimit = 20, includeEvidence = false, signal } = {}) {
   const response = await requestJson(
     "/strategies/ledger",
     {
       strategy_id: strategyId,
       history_limit: historyLimit,
+      include_evidence: includeEvidence,
     },
     signal,
     45000
   );
   return response || { source: "strategy_ledger_v1", status: "UNAVAILABLE", records: [] };
+}
+
+export async function loadStrategyTradeAudit(tradeId, { signal } = {}) {
+  const response = await requestJson(
+    `/strategies/ledger/trades/${encodeURIComponent(tradeId)}`,
+    {},
+    signal,
+    15000
+  );
+  if (response?.status !== "READY" || !response?.trade) {
+    throw new Error(`Strategy Paper trade ${tradeId} audit evidence is unavailable`);
+  }
+  return response.trade;
 }
 
 export async function loadNotifications({ unreadOnly = false, limit = 50, signal } = {}) {
@@ -352,6 +377,71 @@ export async function loadPaperTrades({
   return response;
 }
 
+export async function loadOpenPaperPositions({ symbol, limit = 120, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/open-positions",
+    { symbol, limit },
+    signal,
+    15000
+  );
+  if (!response || response.status === "UNAVAILABLE" || !Array.isArray(response.records)) {
+    throw new Error(response?.detail || "Open positions are unavailable.");
+  }
+  return response;
+}
+
+export async function loadPaperTradeHistory({ symbol, page = 1, limit = 10, includeEvidence = false, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/trade-history",
+    { symbol, page, limit, include_evidence: includeEvidence },
+    signal,
+    15000
+  );
+  if (!response || response.status === "UNAVAILABLE" || !Array.isArray(response.records)) {
+    throw new Error(response?.detail || "Trade history is unavailable; no page was loaded.");
+  }
+  return response;
+}
+
+export async function loadPaperTradeAudit(tradeId, { signal } = {}) {
+  const response = await requestJson(
+    `/paper-trade/trade-history/${encodeURIComponent(tradeId)}`,
+    {},
+    signal,
+    15000
+  );
+  if (!response || response.status !== "READY" || !response.trade) {
+    throw new Error(response?.detail || "Trade audit is unavailable.");
+  }
+  return response.trade;
+}
+
+export async function loadPaperTradePerformance({ symbol, signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/performance",
+    { symbol },
+    signal,
+    15000
+  );
+  if (!response || response.status === "UNAVAILABLE" || !response.performance) {
+    throw new Error(response?.detail || "Paper performance is unavailable.");
+  }
+  return response;
+}
+
+export async function loadPaperAccountSummary({ signal } = {}) {
+  const response = await requestJson(
+    "/paper-trade/account-summary",
+    {},
+    signal,
+    15000
+  );
+  if (!response || response.status === "UNAVAILABLE" || !response.ledgerScope) {
+    throw new Error(response?.detail || "Paper wallet summary is unavailable.");
+  }
+  return response;
+}
+
 export async function exportPhase2ValidationReport({ symbol, signalSide, timeframe = "1h", validation, signal }) {
   const response = await requestJson(
     "/backtest/phase2-report/export",
@@ -536,6 +626,27 @@ export async function loadDashboardBatches({ activePage, view, filters, auto, sy
         }),
       });
     }
+  }
+
+  if (needs.paperOpenPositions) {
+    overviewRequests.push({
+      key: "paperTradeOpenPositions",
+      promise: loadOpenPaperPositions({ symbol: paperSymbol, signal }),
+    });
+  }
+
+  if (needs.paperHistory) {
+    overviewRequests.push({
+      key: "paperTradeHistory",
+      promise: loadPaperTradeHistory({ page: 1, limit: 10, signal }),
+    });
+  }
+
+  if (needs.paperPerformance) {
+    overviewRequests.push({
+      key: "paperTradePerformance",
+      promise: loadPaperTradePerformance({ symbol: paperSymbol, signal }),
+    });
   }
 
   if (needs.risk) {

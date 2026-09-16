@@ -218,6 +218,7 @@ function Wait-ForCanonicalBackend {
 function Get-Phase2Health {
     $dependencies = Invoke-Api "/health/dependencies"
     $scheduler = Invoke-Api "/scheduler/status"
+    $exitProtection = Invoke-Api "/health/exit-protection" -TimeoutSeconds 3
     $pipeline = Invoke-Api "/health/pipeline"
     $live = Invoke-Api "/live/status"
     $coverageStatus = "UNAVAILABLE"
@@ -259,6 +260,7 @@ function Get-Phase2Health {
     $pipelineStatus = [string]$pipeline.pipeline.status
     $pipelineStartedAt = $pipeline.pipeline.started_at
     $pipelineStuck = $false
+    $exitProtectionReady = [bool]$exitProtection.ready
 
     if ($pipelineStatus -eq "RUNNING" -and $pipelineStartedAt) {
         $parsedPipelineStart = [datetime]$pipelineStartedAt
@@ -327,6 +329,13 @@ function Get-Phase2Health {
         pipeline_status = $pipelineStatus
         pipeline_ready = [bool]$pipeline.ready
         paper_execution_allowed = [bool]$pipeline.paper_execution_allowed
+        exit_protection_ready = $exitProtectionReady
+        exit_protection_status = $exitProtection.status
+        exit_protection_reason = $exitProtection.reason
+        exit_protection_age_seconds = $exitProtection.age_seconds
+        exit_protection_last_success_at = (
+            $exitProtection.last_success_at
+        )
         pipeline_stuck = $pipelineStuck
         live_running = $liveRunning
         live_connected = [bool]$live.connected
@@ -472,6 +481,7 @@ $consecutiveFailures = 0
 $script:lastCoverageRepairKey = $null
 $script:apiUnresponsiveSince = $null
 $script:lastCheckpointDate = $null
+$script:lastExitProtectionState = $null
 
 try {
     while ($true) {
@@ -485,6 +495,29 @@ try {
                 Ensure-DailyEvidenceCheckpoint $health
             )
             Write-SupervisorStatus $health
+
+            $exitProtectionState = if ($health.exit_protection_ready) {
+                "READY"
+            }
+            else {
+                "BLOCKED"
+            }
+            if (
+                $exitProtectionState -ne $script:lastExitProtectionState -and
+                $exitProtectionState -eq "BLOCKED"
+            ) {
+                Write-SupervisorLog (
+                    "Paper execution blocked by exit protection: " +
+                    [string]$health.exit_protection_reason
+                ) "WARN"
+            }
+            elseif (
+                $exitProtectionState -ne $script:lastExitProtectionState -and
+                $exitProtectionState -eq "READY"
+            ) {
+                Write-SupervisorLog "Paper exit protection is ready."
+            }
+            $script:lastExitProtectionState = $exitProtectionState
 
             if ($health.healthy) {
                 $consecutiveFailures = 0
@@ -512,6 +545,28 @@ try {
         catch {
             $listenerPid = Get-BackendListenerPid
             if ($null -ne $listenerPid) {
+                $exitProtectionReady = $false
+                $exitProtectionStatus = "UNAVAILABLE"
+                $exitProtectionReason = (
+                    "Exit protection health endpoint is unavailable"
+                )
+                $exitProtectionAge = $null
+                $exitProtectionLastSuccessAt = $null
+                try {
+                    $exitProtection = Invoke-Api (
+                        "/health/exit-protection"
+                    ) -TimeoutSeconds 3
+                    $exitProtectionReady = [bool]$exitProtection.ready
+                    $exitProtectionStatus = $exitProtection.status
+                    $exitProtectionReason = $exitProtection.reason
+                    $exitProtectionAge = $exitProtection.age_seconds
+                    $exitProtectionLastSuccessAt = (
+                        $exitProtection.last_success_at
+                    )
+                }
+                catch {
+                    # Preserve the explicit unavailable status above.
+                }
                 if ($null -eq $script:apiUnresponsiveSince) {
                     $script:apiUnresponsiveSince = Get-Date
                     Write-SupervisorLog (
@@ -528,6 +583,13 @@ try {
                     api_responsive = $false
                     listener_active = $true
                     listener_pid = $listenerPid
+                    exit_protection_ready = $exitProtectionReady
+                    exit_protection_status = $exitProtectionStatus
+                    exit_protection_reason = $exitProtectionReason
+                    exit_protection_age_seconds = $exitProtectionAge
+                    exit_protection_last_success_at = (
+                        $exitProtectionLastSuccessAt
+                    )
                     api_unresponsive_minutes = [math]::Round(
                         $unresponsiveAge.TotalMinutes,
                         2

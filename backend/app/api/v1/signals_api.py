@@ -2162,9 +2162,19 @@ def _persist_strategy_candidates(db, payload, market_participation):
             "snapshot": experiment_snapshot,
         })
     regime_trend_payload = build_regime_trend_payload(payload)
+    regime_entry_base_payload = build_regime_trend_payload(
+        payload,
+        require_trend_regime=True,
+    )
     regime_entry_payload = build_structure_entry_payload(
-        regime_trend_payload, market_participation, strategy_definition(REGIME_TREND_ENTRY_STRATEGY_ID),
-        rebuild=lambda gate: build_regime_trend_payload(payload, structure_gate=gate),
+        regime_entry_base_payload,
+        market_participation,
+        strategy_definition(REGIME_TREND_ENTRY_STRATEGY_ID),
+        rebuild=lambda gate: build_regime_trend_payload(
+            payload,
+            structure_gate=gate,
+            require_trend_regime=True,
+        ),
     )
     for experiment_id, base_payload, rebuild in (
         (MARKET_MOVE_ENTRY_STRATEGY_ID, market_move_payload,
@@ -2841,7 +2851,12 @@ def _persist_core_fusion_strategy_snapshot(
     }
 
 
-def _persist_phase2_opportunity_snapshot(db, payload):
+def _persist_phase2_opportunity_snapshot(
+    db,
+    payload,
+    *,
+    effective_timestamp=None,
+):
     timeframes = payload.get("timeframes") or []
     selected = _selected_timeframe_record(payload)
     source_timestamp = selected.get("candle_time")
@@ -2866,7 +2881,10 @@ def _persist_phase2_opportunity_snapshot(db, payload):
         timeframe,
         decision=trigger.get("status") or "WAIT",
         source_timestamp=source_timestamp,
-        effective_timestamp=source_timestamp,
+        # Ordinary live evaluation uses the selected entry candle. Historical
+        # coverage recovery must retain the requested hourly evaluation slot;
+        # otherwise adjacent gaps collapse onto one 2h/4h candle record.
+        effective_timestamp=effective_timestamp or source_timestamp,
         quality_state=quality_state,
         confidence=(
             selected.get("confidence")
@@ -2993,7 +3011,11 @@ def _reconstruct_phase2_opportunity_snapshot(db, symbol, slot):
             "leakage_status": "PASS",
         },
     }
-    result = _persist_phase2_opportunity_snapshot(db, payload)
+    result = _persist_phase2_opportunity_snapshot(
+        db,
+        payload,
+        effective_timestamp=slot,
+    )
     return {
         "symbol": symbol,
         "effective_timestamp": slot,

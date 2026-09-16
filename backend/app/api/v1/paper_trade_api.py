@@ -18,7 +18,9 @@ from app.database.models.trade_plan import TradePlan
 from app.database.sqlserver import SessionLocal
 from app.paper_trading.fill_model import build_fill_profile
 from app.paper_trading.entry_price_service import get_current_paper_entry_mark
+from app.paper_trading.exit_evidence import classify_exit as classify_paper_exit
 from app.paper_trading.exit_evidence import read_evidence as evidence_dict
+from app.paper_trading.exit_protection_health import exit_protection_snapshot
 from app.paper_trading.inr_sizing import build_inr_paper_sizing
 from app.paper_trading.inr_sizing import apply_equity_risk_budget
 from app.paper_trading.inr_sizing import build_inr_paper_wallet
@@ -26,10 +28,14 @@ from app.paper_trading.inr_sizing import fit_inr_paper_sizing_to_margin_capacity
 from app.paper_trading.measurement import MeasurementGates
 from app.paper_trading.measurement import attach_regime_outcome_context
 from app.paper_trading.measurement import attach_scenario_context
+from app.paper_trading.measurement import build_confidence_calibration
 from app.paper_trading.measurement import build_measurement_report
 from app.paper_trading.evidence_scope import production_paper_trade_records
 from app.paper_trading.reentry_policy import PAPER_STOP_REENTRY_COOLDOWN_MINUTES
 from app.paper_trading.reentry_policy import same_side_stop_reentry_cooldown
+from app.paper_trading.strategy_evidence import load_official_strategy_evidence
+from app.paper_trading.strategy_evidence import strategy_evidence_blockers
+from app.paper_trading.strategy_evidence import strategy_evidence_for_plan
 from app.paper_trading.validation_policy import build_architecture_paper_gate
 from app.risk.account_risk import build_account_daily_pnl_snapshot
 from app.risk.risk_engine import RiskEngine
@@ -81,12 +87,95 @@ PAPER_ENTRY_MARK_MAX_AGE_SECONDS = 60
 PAPER_ENTRY_MARK_CLOCK_SKEW_SECONDS = 30
 PAPER_EXECUTION_EVIDENCE_VERSION = "paper_loss_protection_v1"
 PAPER_EQUITY_MARK_MAX_AGE_SECONDS = 5
+PAPER_PORTFOLIO_DRAWDOWN_LIMIT_PERCENT = 20.0
+OFFICIAL_PAPER_REGIME_QUARANTINE = frozenset({"BULL_PULLBACK"})
 _MARKET_PARTICIPATION_UNSET = object()
 _CURRENT_SIGNAL_VALIDATION_UNSET = object()
 PAPER_STOP_REENTRY_COOLDOWN_REASON = (
     "Same-direction re-entry is cooling down for "
     f"{PAPER_STOP_REENTRY_COOLDOWN_MINUTES} minutes after stop-loss"
 )
+
+
+def _official_regime_quarantine_blockers(candidate):
+    trade_plan = candidate.get("trade_plan") or {}
+    regime = str(
+        trade_plan.get("regime") or candidate.get("regime") or ""
+    ).upper()
+    if regime not in OFFICIAL_PAPER_REGIME_QUARANTINE:
+        return []
+    return [
+        f"{regime} official paper entries are quarantined after negative "
+        "chronological validation; research candidate evidence remains enabled"
+    ]
+
+
+def _official_strategy_evidence(db):
+    return load_official_strategy_evidence(db)
+
+
+def _candidate_strategy_evidence(candidate, evidence_by_key):
+    return strategy_evidence_for_plan(
+        evidence_by_key,
+        candidate.get("trade_plan") or {},
+    )
+
+
+def _official_portfolio_drawdown_snapshot(wallet):
+    """Return the marked-equity circuit-breaker state for new entries only."""
+
+    wallet = wallet or {}
+    initial_capital = _finite_float(wallet.get("initial_capital_inr"))
+    equity = _finite_float(wallet.get("equity_inr"))
+    if initial_capital is None or initial_capital <= 0:
+        initial_capital = 200_000.0
+
+    drawdown_percent = None
+    if equity is not None:
+        drawdown_percent = max(
+            0.0,
+            (initial_capital - equity) / initial_capital * 100,
+        )
+    limit_reached = (
+        drawdown_percent is not None
+        and drawdown_percent >= PAPER_PORTFOLIO_DRAWDOWN_LIMIT_PERCENT
+    )
+    return {
+        "policy": "MARKED_EQUITY_DRAWDOWN_V1",
+        "initial_capital_inr": round(initial_capital, 2),
+        "equity_inr": round(equity, 2) if equity is not None else None,
+        "drawdown_percent": (
+            round(drawdown_percent, 4)
+            if drawdown_percent is not None
+            else None
+        ),
+        "limit_percent": PAPER_PORTFOLIO_DRAWDOWN_LIMIT_PERCENT,
+        "limit_reached": limit_reached,
+        "new_entries_paused": equity is None or limit_reached,
+    }
+
+
+def _official_portfolio_drawdown_blockers(wallet):
+    protection = _official_portfolio_drawdown_snapshot(wallet)
+    if protection["equity_inr"] is None:
+        return ["Marked paper equity is unavailable at the entry boundary"]
+    if protection["limit_reached"]:
+        return [
+            "New official paper entries are paused because marked-equity "
+            f"drawdown is {protection['drawdown_percent']:.2f}%, at or above "
+            f"the {protection['limit_percent']:.2f}% portfolio safety limit"
+        ]
+    return []
+
+
+def _exit_protection_blockers(protection=None):
+    protection = protection or exit_protection_snapshot()
+    if protection.get("ready") is True:
+        return []
+    return [
+        protection.get("reason")
+        or "One-second exit protection is unavailable for new entries"
+    ]
 
 
 def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
@@ -131,6 +220,10 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
         account_trades,
         account_risk=account_risk,
     )
+    paper_wallet["entry_protection"] = (
+        _official_portfolio_drawdown_snapshot(paper_wallet)
+    )
+    paper_wallet["exit_protection"] = exit_protection_snapshot()
 
     return {
         "source": "paper_trade_bundle",
@@ -170,9 +263,18 @@ def build_paper_trade_bundle(db, symbol=None, open_limit=120, closed_limit=200):
     }
 
 
-def _paper_wallet_snapshot(db, trades, account_risk=None):
+def _paper_wallet_snapshot(
+    db,
+    trades,
+    account_risk=None,
+    *,
+    ledger_entry_limit=100,
+):
     account_risk = account_risk or _account_risk_snapshot(db, trades)
-    ledger = PaperWalletLedgerRepository().wallet_snapshot(db)
+    ledger = PaperWalletLedgerRepository().wallet_snapshot(
+        db,
+        recent_limit=ledger_entry_limit,
+    )
     return build_inr_paper_wallet(
         trades,
         ledger_entries=ledger["recent_entries"],
@@ -276,13 +378,25 @@ def get_paper_trade_performance(symbol: str | None = Query(default=None)):
         normalized_symbol = symbol.upper() if symbol else None
         repo = PaperTradeRepository()
 
+        performance = repo.performance_summary(
+            db,
+            symbol=normalized_symbol,
+            entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
+        )
+        breakdown = repo.performance_breakdown(
+            db,
+            symbol=normalized_symbol,
+            entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
+        )
+        equity_curve = PaperWalletLedgerRepository().realized_equity_curve(db)
+
         return {
             "source": "paper_trade_performance",
             "symbol_filter": normalized_symbol,
-            "performance": repo.performance_summary(
-                db,
-                symbol=normalized_symbol,
-            ),
+            "evidence_scope": _phase2_evidence_scope(),
+            "performance": performance,
+            "breakdown": breakdown,
+            "equity_curve": equity_curve,
         }
 
     except SQLAlchemyError as exc:
@@ -292,6 +406,65 @@ def get_paper_trade_performance(symbol: str | None = Query(default=None)):
             detail="Paper-trade performance is unavailable because the database is not reachable.",
         )
 
+    finally:
+        db.close()
+
+
+@router.get("/account-summary")
+def get_paper_trade_account_summary():
+    """Return wallet and ledger scope without loading position or history rows."""
+
+    db = SessionLocal()
+    try:
+        repo = PaperTradeRepository()
+        visible_count = repo.count_trades(db)
+        auditable_count = repo.count_trades(db, include_quarantined=True)
+        account_trades = repo.risk_snapshot_trades(
+            db,
+            window_start=datetime.utcnow() - timedelta(hours=24),
+        )
+        account_risk = _account_risk_snapshot(db, account_trades)
+        paper_wallet = _paper_wallet_snapshot(
+            db,
+            account_trades,
+            account_risk=account_risk,
+            ledger_entry_limit=0,
+        )
+        paper_wallet["entry_protection"] = (
+            _official_portfolio_drawdown_snapshot(paper_wallet)
+        )
+        paper_wallet["exit_protection"] = exit_protection_snapshot()
+
+        return {
+            "source": "paper_trade_account_summary",
+            "status": "READY",
+            "symbol_filter": None,
+            "query_complete": True,
+            "accountRisk": account_risk,
+            "paperWallet": paper_wallet,
+            "ledgerScope": {
+                "scope": "PAPER_PRODUCTION",
+                "policy": "QA_SYMBOL_QUARANTINE_V1",
+                "visible_records": visible_count,
+                "quarantined_records": auditable_count - visible_count,
+                "auditable_records": auditable_count,
+            },
+        }
+    except SQLAlchemyError as exc:
+        db.rollback()
+        return {
+            "source": "paper_trade_account_summary",
+            "status": "UNAVAILABLE",
+            "symbol_filter": None,
+            "query_complete": False,
+            "retryable": True,
+            "error_category": (
+                "DB_POOL_TIMEOUT"
+                if isinstance(exc, DatabasePoolTimeout)
+                else "DB_QUERY_FAILED"
+            ),
+            "detail": "Paper wallet summary could not be loaded. Please retry.",
+        }
     finally:
         db.close()
 
@@ -437,6 +610,7 @@ def get_phase2_lifecycle_funnel(
             db,
             normalized_symbol,
             stale_after_seconds,
+            exit_protection=exit_protection_snapshot(),
         )
         approved_candidates = [
             item
@@ -446,6 +620,7 @@ def get_phase2_lifecycle_funnel(
         eligible_candidates = [item for item in candidates if item.get("eligible")]
         executor_ready_candidates = _phase2_executor_ready_candidates(candidates)
         candidate_blocks = _phase2_executor_blockers(candidates)
+        global_execution_blocks = _phase2_global_executor_blockers(candidates)
 
         open_trades = [item for item in paper_trades if item.status == "OPEN"]
         closed_trades = [item for item in paper_trades if item.status == "CLOSED"]
@@ -455,6 +630,7 @@ def get_phase2_lifecycle_funnel(
             approved_candidates,
             executor_ready_candidates,
             open_trades,
+            global_executor_blockers=global_execution_blocks,
         )
         return {
             "source": "phase2_paper_trade_lifecycle_funnel",
@@ -488,11 +664,13 @@ def get_phase2_lifecycle_funnel(
                 "candidate_count": len(candidates),
                 "eligible_candidates": len(eligible_candidates),
                 "executor_ready_candidates": len(executor_ready_candidates),
+                "global_execution_blockers": len(global_execution_blocks),
                 "open_trades": len(open_trades),
             },
             "blockers": {
                 "opportunity": opportunity.get("by_block_reason") or {},
                 "executor": dict(candidate_blocks.most_common()),
+                "execution_safety": dict(global_execution_blocks.most_common()),
             },
         }
     except SQLAlchemyError:
@@ -744,6 +922,161 @@ def get_paper_trades(
         db.close()
 
 
+@router.get("/open-positions")
+def get_open_paper_positions(
+    symbol: str | None = Query(default=None),
+    limit: int = Query(default=120, ge=1, le=200),
+):
+    """Return only active official paper positions and their mark evidence."""
+
+    db = SessionLocal()
+    normalized_symbol = symbol.upper() if symbol else None
+    try:
+        rows = PaperTradeRepository().list_trades(
+            db,
+            status="OPEN",
+            symbol=normalized_symbol,
+            limit=limit,
+            entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
+        )
+        records = [_paper_trade_payload(trade) for trade in rows]
+        records = _attach_open_position_marks(db, records)
+        return {
+            "source": "paper_trade_open_positions",
+            "status": "READY",
+            "symbol_filter": normalized_symbol,
+            "count": len(records),
+            "query_complete": True,
+            "records": records,
+        }
+    except SQLAlchemyError as exc:
+        db.rollback()
+        return {
+            "source": "paper_trade_open_positions",
+            "status": "UNAVAILABLE",
+            "symbol_filter": normalized_symbol,
+            "count": None,
+            "query_complete": False,
+            "retryable": True,
+            "error_category": (
+                "DB_POOL_TIMEOUT"
+                if isinstance(exc, DatabasePoolTimeout)
+                else "DB_QUERY_FAILED"
+            ),
+            "detail": "Open paper positions could not be loaded. Please retry.",
+            "records": [],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/trade-history")
+def get_paper_trade_history(
+    symbol: str | None = Query(default=None),
+    limit: int = Query(default=10, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    include_evidence: bool = True,
+):
+    """Return one independently paginated page of closed official trades."""
+
+    db = SessionLocal()
+    normalized_symbol = symbol.upper() if symbol else None
+    try:
+        rows, total_count = PaperTradeRepository().paginated_closed_trades(
+            db,
+            symbol=normalized_symbol,
+            limit=limit,
+            offset=(page - 1) * limit,
+            entry_timeframes=tuple(PHASE2_OFFICIAL_TIMEFRAMES),
+        )
+        records = [
+            _paper_trade_payload(trade, include_evidence=include_evidence)
+            for trade in rows
+        ]
+        return {
+            "source": "paper_trade_history",
+            "status": "READY",
+            "status_filter": "CLOSED",
+            "symbol_filter": normalized_symbol,
+            "count": len(records),
+            "total_count": total_count,
+            "page": page,
+            "page_size": limit,
+            "total_pages": max(1, (total_count + limit - 1) // limit),
+            "has_next": page * limit < total_count,
+            "has_previous": page > 1,
+            "query_complete": True,
+            "summary": _summarize_paper_trades(records),
+            "records": records,
+        }
+    except SQLAlchemyError as exc:
+        db.rollback()
+        return {
+            "source": "paper_trade_history",
+            "status": "UNAVAILABLE",
+            "status_filter": "CLOSED",
+            "symbol_filter": normalized_symbol,
+            "count": 0,
+            "total_count": 0,
+            "page": page,
+            "page_size": limit,
+            "query_complete": False,
+            "retryable": True,
+            "error_category": (
+                "DB_POOL_TIMEOUT"
+                if isinstance(exc, DatabasePoolTimeout)
+                else "DB_QUERY_FAILED"
+            ),
+            "detail": "Trade-history page could not be loaded. Please retry this page.",
+            "records": [],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/trade-history/{trade_id}")
+def get_paper_trade_audit(trade_id: int):
+    """Return full evidence for one closed, production-visible official trade."""
+
+    db = SessionLocal()
+    try:
+        trade = db.get(PaperTrade, trade_id)
+        visible = production_paper_trade_records(
+            [trade] if trade is not None else [],
+            require_official_timeframe=True,
+        )
+        if not visible or str(getattr(trade, "status", "") or "").upper() != "CLOSED":
+            return {
+                "source": "paper_trade_audit_v1",
+                "status": "NOT_FOUND",
+                "trade_id": trade_id,
+                "trade": None,
+            }
+        return {
+            "source": "paper_trade_audit_v1",
+            "status": "READY",
+            "trade_id": trade_id,
+            "trade": _paper_trade_payload(trade, include_evidence=True),
+        }
+    except SQLAlchemyError as exc:
+        db.rollback()
+        return {
+            "source": "paper_trade_audit_v1",
+            "status": "UNAVAILABLE",
+            "trade_id": trade_id,
+            "trade": None,
+            "retryable": True,
+            "error_category": (
+                "DB_POOL_TIMEOUT"
+                if isinstance(exc, DatabasePoolTimeout)
+                else "DB_QUERY_FAILED"
+            ),
+            "detail": "Trade audit could not be loaded. Please retry.",
+        }
+    finally:
+        db.close()
+
+
 @router.get("/candidates")
 def get_paper_trade_candidates(
     symbol: str | None = Query(default=None),
@@ -756,6 +1089,7 @@ def get_paper_trade_candidates(
             db,
             symbol,
             stale_after_seconds,
+            exit_protection=exit_protection_snapshot(),
         )
         eligible = [
             item
@@ -770,6 +1104,10 @@ def get_paper_trade_candidates(
             )
             is True
         ]
+        global_execution_blocks = _phase2_global_executor_blockers(records)
+        execution_safety = (
+            records[0].get("execution_safety") if records else None
+        )
 
         return {
             "source": "paper_trade_candidates",
@@ -778,6 +1116,9 @@ def get_paper_trade_candidates(
             "eligible_count": len(eligible),
             "blocked_count": len(records) - len(eligible),
             "official_selected_count": len(selected),
+            "executor_ready_count": len(selected),
+            "global_execution_blockers": list(global_execution_blocks),
+            "execution_safety": execution_safety,
             "records": records,
         }
 
@@ -835,8 +1176,19 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             db,
             symbol,
             stale_after_seconds,
+            exit_protection=exit_protection_snapshot(),
         )
         repo = PaperTradeRepository()
+        try:
+            confidence_calibration = build_confidence_calibration(repo.all_trades(db))
+        except (SQLAlchemyError, AttributeError, TypeError, ValueError, OverflowError):
+            db.rollback()
+            confidence_calibration = {
+                "status": "UNAVAILABLE",
+                "direction": "UNKNOWN",
+                "sample_sufficient": False,
+                "higher_confidence_promotion_eligible": False,
+            }
         try:
             auto = automation_settings_payload(get_automation_settings(db))
         except Exception:
@@ -849,10 +1201,20 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             records,
             auto,
         )
+        execution_strategy_evidence = (
+            _official_strategy_evidence(db)
+            if any("strategy_evidence" in candidate for candidate in records)
+            else None
+        )
 
         eligible_by_symbol = defaultdict(list)
         for candidate in records:
             candidate_plan = candidate.get("trade_plan") or {}
+            if "strategy_evidence" in candidate:
+                candidate["strategy_evidence"] = _candidate_strategy_evidence(
+                    candidate,
+                    execution_strategy_evidence,
+                )
             plan_definition = resolve_strategy_definition(
                 db,
                 candidate_plan.get("strategy_id"),
@@ -873,6 +1235,33 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                             "official paper execution requires the strategy's "
                             "explicit execution flag"
                         ],
+                    }
+                )
+                continue
+            regime_blockers = _official_regime_quarantine_blockers(candidate)
+            if candidate["eligible"] and regime_blockers:
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_regime_loss_quarantine",
+                        "strategy_id": candidate_plan.get("strategy_id"),
+                        "blocked_reasons": regime_blockers,
+                    }
+                )
+                continue
+            strategy_blockers = strategy_evidence_blockers(
+                candidate.get("strategy_evidence")
+            ) if "strategy_evidence" in candidate else []
+            if candidate["eligible"] and strategy_blockers:
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_strategy_evidence_gate",
+                        "strategy_id": candidate_plan.get("strategy_id"),
+                        "blocked_reasons": strategy_blockers,
+                        "strategy_evidence": candidate.get("strategy_evidence"),
                     }
                 )
                 continue
@@ -1024,6 +1413,38 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
                 account_trades,
                 account_risk=locked_account_risk,
             )
+            portfolio_drawdown = _official_portfolio_drawdown_snapshot(wallet)
+            portfolio_drawdown_blockers = _official_portfolio_drawdown_blockers(
+                wallet
+            )
+            if portfolio_drawdown_blockers:
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_portfolio_drawdown_quarantine",
+                        "blocked_reasons": portfolio_drawdown_blockers,
+                        "portfolio_drawdown": portfolio_drawdown,
+                    }
+                )
+                db.rollback()
+                continue
+            exit_protection = exit_protection_snapshot()
+            exit_protection_blockers = _exit_protection_blockers(
+                exit_protection
+            )
+            if exit_protection_blockers:
+                skipped.append(
+                    {
+                        "symbol": candidate["symbol"],
+                        "side": candidate["side"],
+                        "action": "skipped_exit_protection_unready",
+                        "blocked_reasons": exit_protection_blockers,
+                        "exit_protection": exit_protection,
+                    }
+                )
+                db.rollback()
+                continue
             remaining_margin_capacity = float(
                 wallet["remaining_margin_capacity_inr"]
             )
@@ -1101,6 +1522,7 @@ def execute_paper_trade_candidates_for_symbol(symbol=None, stale_after_seconds=9
             candidate, sizing_error = _budget_new_paper_entry(
                 candidate, _entry_snapshot_wallet(entry_snapshot, wallet),
                 open_trades=entry_snapshot["open_trades"],
+                confidence_calibration=confidence_calibration,
             )
             if sizing_error:
                 skipped.append({"symbol": candidate_symbol,
@@ -1420,7 +1842,9 @@ def _entry_snapshot_wallet(snapshot, previous_wallet):
     return wallet
 
 
-def _budget_new_paper_entry(candidate, wallet, *, open_trades=None):
+def _budget_new_paper_entry(
+    candidate, wallet, *, open_trades=None, confidence_calibration=None,
+):
     """Last entry boundary: use THIS ledger's marked equity and margin budget."""
     if not wallet or not wallet.get("valuation_complete", False):
         return candidate, "Fresh complete paper equity valuation is required for sizing"
@@ -1452,6 +1876,7 @@ def _budget_new_paper_entry(candidate, wallet, *, open_trades=None):
             candidate.get("paper_sizing"), confidence, wallet.get("equity_inr"),
             exit_slippage_percent=max(0.1, slippage["stop"] * 100 * max(1, stop / entry)),
             funding_reserve_percent=funding_percent * periods,
+            confidence_calibration=confidence_calibration,
         )
         capacity = float(wallet.get("remaining_margin_capacity_inr") or 0)
         if not isfinite(capacity) or capacity <= 0:
@@ -1483,6 +1908,60 @@ def _attach_open_trade_price_evidence(open_trades, account_risk):
                 **trade,
                 "current_price": current_prices.get(symbol),
                 "current_price_evidence": evidence,
+            }
+        )
+    return records
+
+
+def _attach_open_position_marks(db, open_trades):
+    """Attach current marks without loading wallet or account-history state."""
+
+    symbols = {
+        str(trade.get("symbol") or "").upper()
+        for trade in (open_trades or [])
+        if trade.get("symbol")
+    }
+    try:
+        marks = DerivativeRepository().latest_mark_prices(
+            db,
+            symbols,
+            timeframe=PAPER_RISK_MARK_TIMEFRAME,
+        ) if symbols else {}
+    except SQLAlchemyError:
+        db.rollback()
+        marks = {}
+
+    records = []
+    for trade in open_trades or []:
+        symbol = str(trade.get("symbol") or "").upper()
+        mark = marks.get(symbol)
+        mark_price = _finite_float(getattr(mark, "close_price", None))
+        mark_timestamp = getattr(mark, "close_time", None)
+        freshness = freshness_status(
+            mark_timestamp,
+            PAPER_RISK_MARK_MAX_AGE_SECONDS,
+        )
+        if mark is None:
+            status = "MISSING"
+        elif mark_price is None or mark_price <= 0:
+            status = "INVALID"
+        elif freshness["is_stale"]:
+            status = "STALE"
+        else:
+            status = "FRESH"
+        records.append(
+            {
+                **trade,
+                "current_price": mark_price if status == "FRESH" else None,
+                "current_price_evidence": {
+                    "status": status,
+                    "timeframe": PAPER_RISK_MARK_TIMEFRAME,
+                    "price": mark_price,
+                    "source": getattr(mark, "source", None),
+                    "as_of": normalize_timestamp_to_utc(mark_timestamp),
+                    "age_seconds": freshness["data_age_seconds"],
+                    "stale_after_seconds": PAPER_RISK_MARK_MAX_AGE_SECONDS,
+                },
             }
         )
     return records
@@ -1622,7 +2101,14 @@ def _paper_trade_candidate_rank(candidate, db=None):
     )
 
 
-def _annotate_candidate_arbitration(records, auto, db=None):
+def _annotate_candidate_arbitration(
+    records,
+    auto,
+    db=None,
+    exit_protection=None,
+    strategy_evidence_by_key=None,
+    global_executor_blockers=None,
+):
     """Expose the same per-symbol winner that official execution will use.
 
     Several strategies may independently produce valid plans for one coin, but
@@ -1633,6 +2119,12 @@ def _annotate_candidate_arbitration(records, auto, db=None):
 
     competitors_by_symbol = defaultdict(list)
     executor_blockers_by_id = {}
+    candidate_blockers_by_id = {}
+    strategy_evidence_by_id = {}
+    global_blockers = list(global_executor_blockers or [])
+    if exit_protection is not None:
+        global_blockers.extend(_exit_protection_blockers(exit_protection))
+    global_blockers = list(dict.fromkeys(global_blockers))
     for candidate in records:
         plan = candidate.get("trade_plan") or {}
         definition = resolve_strategy_definition(
@@ -1645,9 +2137,22 @@ def _annotate_candidate_arbitration(records, auto, db=None):
             blockers.extend(candidate.get("blocked_reasons") or [])
         if definition.get("official_execution_enabled") is not True:
             blockers.append("Strategy is not enabled for official paper execution")
+        blockers.extend(_official_regime_quarantine_blockers(candidate))
+        evidence = None
+        if strategy_evidence_by_key is not None:
+            evidence = _candidate_strategy_evidence(
+                candidate,
+                strategy_evidence_by_key,
+            )
+            blockers.extend(strategy_evidence_blockers(evidence))
+        strategy_evidence_by_id[id(candidate)] = evidence
         blockers.extend(_automation_execution_blockers(auto, candidate))
-        executor_blockers_by_id[id(candidate)] = list(dict.fromkeys(blockers))
-        if not blockers:
+        candidate_blockers = list(dict.fromkeys(blockers))
+        candidate_blockers_by_id[id(candidate)] = candidate_blockers
+        executor_blockers_by_id[id(candidate)] = list(
+            dict.fromkeys(candidate_blockers + global_blockers)
+        )
+        if not candidate_blockers and not global_blockers:
             competitors_by_symbol[str(candidate.get("symbol") or "").upper()].append(
                 candidate
             )
@@ -1662,6 +2167,7 @@ def _annotate_candidate_arbitration(records, auto, db=None):
     }
     annotated = []
     for candidate in records:
+        evidence = strategy_evidence_by_id[id(candidate)]
         symbol = str(candidate.get("symbol") or "").upper()
         ranked = ranked_by_symbol.get(symbol, [])
         selected = bool(ranked) and candidate is ranked[0]
@@ -1670,6 +2176,7 @@ def _annotate_candidate_arbitration(records, auto, db=None):
             None,
         )
         blockers = executor_blockers_by_id[id(candidate)]
+        candidate_blockers = candidate_blockers_by_id[id(candidate)]
         if selected:
             status = "SELECTED"
         elif rank is not None:
@@ -1679,6 +2186,7 @@ def _annotate_candidate_arbitration(records, auto, db=None):
         annotated.append(
             {
                 **candidate,
+                **({"strategy_evidence": evidence} if evidence is not None else {}),
                 "arbitration": {
                     "status": status,
                     "selected_for_official_execution": selected,
@@ -1695,6 +2203,16 @@ def _annotate_candidate_arbitration(records, auto, db=None):
                         else None
                     ),
                     "executor_blockers": blockers,
+                    **(
+                        {
+                            "executor_blocker_scopes": {
+                                "candidate": candidate_blockers,
+                                "global": global_blockers,
+                            }
+                        }
+                        if global_blockers
+                        else {}
+                    ),
                 },
             }
         )
@@ -1706,6 +2224,7 @@ def build_paper_trade_candidates(
     symbol=None,
     stale_after_seconds=900,
     trades=None,
+    exit_protection=None,
 ):
     trade_repo = TradePlanRepository()
     risk_repo = RiskRepository()
@@ -1734,6 +2253,7 @@ def build_paper_trade_candidates(
         latest_risks,
         normalized_symbol,
         stale_after_seconds,
+        exit_protection=exit_protection,
     )
 
 
@@ -1754,6 +2274,7 @@ def _execute_strategy_shadow_candidates(db, records, auto):
         }
     repo = StrategyShadowTradeRepository()
     live_marks = {}
+    confidence_calibration_by_strategy = {}
 
     for candidate in records:
         # Release a skipped previous book's lock before acquiring the next one.
@@ -1786,6 +2307,17 @@ def _execute_strategy_shadow_candidates(db, records, auto):
             continue
         repo.acquire_book_execution_lock(db, strategy_id, strategy_version)
         reservation = _capture_entry_reservation(db)
+        strategy_key = (strategy_id, strategy_version)
+        if strategy_key not in confidence_calibration_by_strategy:
+            confidence_calibration_by_strategy[strategy_key] = (
+                build_confidence_calibration(
+                    repo.all_trades(
+                        db,
+                        strategy_id=strategy_id,
+                        strategy_version=strategy_version,
+                    )
+                )
+            )
         strategy_history = repo.risk_snapshot_trades(
             db, window_start=datetime.utcnow() - timedelta(hours=24),
             strategy_id=strategy_id, strategy_version=strategy_version,
@@ -1960,6 +2492,7 @@ def _execute_strategy_shadow_candidates(db, records, auto):
         repriced, sizing_error = _budget_new_paper_entry(
             repriced, _entry_snapshot_wallet(entry_snapshot, strategy_wallet),
             open_trades=entry_snapshot["open_trades"],
+            confidence_calibration=confidence_calibration_by_strategy[strategy_key],
         )
         if sizing_error:
             skipped.append({"symbol": symbol, "strategy_id": strategy_id,
@@ -2058,6 +2591,7 @@ def _finish_paper_trade_candidates(
     latest_risks,
     normalized_symbol,
     stale_after_seconds,
+    exit_protection=None,
 ):
     latest_risks_by_plan = risk_repo.latest_for_trade_plans(
         db,
@@ -2109,6 +2643,8 @@ def _finish_paper_trade_candidates(
         account_trades,
         account_risk=account_risk,
     )
+    entry_protection = _official_portfolio_drawdown_snapshot(paper_wallet)
+    global_executor_blockers = _official_portfolio_drawdown_blockers(paper_wallet)
     try:
         auto = automation_settings_payload(get_automation_settings(db))
     except SQLAlchemyError:
@@ -2170,7 +2706,25 @@ def _finish_paper_trade_candidates(
         for trade in trades
     ]
 
-    records = _annotate_candidate_arbitration(records, auto, db)
+    records = _annotate_candidate_arbitration(
+        records,
+        auto,
+        db,
+        exit_protection=exit_protection,
+        strategy_evidence_by_key=(
+            _official_strategy_evidence(db) if records else {}
+        ),
+        global_executor_blockers=global_executor_blockers,
+    )
+
+    execution_safety = {
+        "entry_protection": entry_protection,
+        "exit_protection": exit_protection,
+    }
+    records = [
+        {**record, "execution_safety": execution_safety}
+        for record in records
+    ]
 
     return normalized_symbol, records
 
@@ -2243,6 +2797,7 @@ def _phase2_lifecycle_state(
     approved_candidates,
     eligible_candidates,
     open_trades,
+    global_executor_blockers=None,
 ):
     coverage = opportunity.get("coverage") or {}
     if coverage.get("status") == "GAPS_DETECTED":
@@ -2251,6 +2806,12 @@ def _phase2_lifecycle_state(
         return "MONITORING", "Monitor open paper trades through deterministic exit handling."
     if eligible_candidates:
         return "EXECUTOR_READY", "Run the paper executor; candidate passed all current gates."
+    if approved_candidates and global_executor_blockers:
+        return (
+            "EXECUTOR_BLOCKED",
+            "Official entries are paused by global execution-safety controls; "
+            "review the reported execution-safety blocker before resuming.",
+        )
     if approved_candidates:
         return "EXECUTOR_BLOCKED", "Resolve the candidate-level executor blockers."
     if plans:
@@ -2281,15 +2842,35 @@ def _phase2_executor_ready_candidates(candidates):
 
 
 def _phase2_executor_blockers(candidates):
-    """Count the complete blockers used by official paper execution."""
+    """Count candidate-specific blockers used by official paper execution."""
     return Counter(
         reason
         for item in candidates or []
         for reason in (
-            (item.get("arbitration") or {}).get("executor_blockers")
+            ((item.get("arbitration") or {}).get("executor_blocker_scopes") or {}).get(
+                "candidate"
+            )
+            if (item.get("arbitration") or {}).get("executor_blocker_scopes") is not None
+            else (item.get("arbitration") or {}).get("executor_blockers")
             or item.get("blocked_reasons")
             or []
         )
+    )
+
+
+def _phase2_global_executor_blockers(candidates):
+    """Return each account/infrastructure execution blocker exactly once."""
+    return Counter(
+        {
+            reason: 1
+            for item in candidates or []
+            for reason in (
+                ((item.get("arbitration") or {}).get("executor_blocker_scopes") or {}).get(
+                    "global"
+                )
+                or []
+            )
+        }
     )
 
 
@@ -2504,8 +3085,7 @@ def _phase2_opportunity_coverage(
     eligible_records = [
         record
         for record in records
-        if record.timeframe == "1h"
-        and record.effective_timestamp is not None
+        if record.effective_timestamp is not None
         and record.symbol in expected_symbols
     ]
 
@@ -2764,9 +3344,12 @@ def _build_phase2_checkpoint_measurement(db):
     return build_measurement_report(trades, gates=MeasurementGates())
 
 
-def _paper_trade_payload(paper_trade, fill_profile=None):
+def _paper_trade_payload(paper_trade, fill_profile=None, *, include_evidence=True):
     exit_levels = _paper_trade_display_exit_levels(paper_trade)
     execution_evidence = evidence_dict(getattr(paper_trade, "execution_evidence_json", None))
+    exit_evidence = evidence_dict(getattr(paper_trade, "exit_evidence_json", None))
+    recorded_exit_classification = exit_evidence.get("classification")
+    exit_classification = recorded_exit_classification or classify_paper_exit(paper_trade)
     remaining_fraction = getattr(
         paper_trade,
         "remaining_position_fraction",
@@ -2823,8 +3406,13 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
                       remaining_notional_inr=round(sizing["position_notional_inr"] * fraction, 2),
                       remaining_margin_inr=round(sizing["margin_used_inr"] * fraction, 2))
     payload = {
-        "execution_evidence": execution_evidence,
-        "exit_evidence": evidence_dict(getattr(paper_trade, "exit_evidence_json", None)),
+        "audit_evidence_included": include_evidence,
+        "exit_classification": exit_classification,
+        "exit_classification_source": (
+            "RECORDED_TRIGGER"
+            if recorded_exit_classification
+            else "RECORDED_LEVELS_INFERENCE"
+        ),
         "trailing_activation_r": getattr(paper_trade, "trailing_activation_r", None),
         "id": paper_trade.id,
         "trade_plan_id": paper_trade.trade_plan_id,
@@ -2945,6 +3533,9 @@ def _paper_trade_payload(paper_trade, fill_profile=None):
 
     if fill_profile is not None:
         payload["fill_profile"] = fill_profile
+    if include_evidence:
+        payload["execution_evidence"] = execution_evidence
+        payload["exit_evidence"] = exit_evidence
 
     return payload
 
@@ -3560,10 +4151,19 @@ def _paper_trade_unavailable_payload(operation, symbol_filter=None, status_filte
                 "count": 0,
                 "eligible_count": 0,
                 "blocked_count": 0,
+                "official_selected_count": 0,
+                "executor_ready_count": 0,
+                "global_execution_blockers": [],
+                "execution_safety": None,
                 "records": [],
             }
         )
     elif operation == "bundle":
+        paper_wallet = build_inr_paper_wallet([])
+        paper_wallet["entry_protection"] = (
+            _official_portfolio_drawdown_snapshot(paper_wallet)
+        )
+        paper_wallet["exit_protection"] = exit_protection_snapshot()
         payload.update(
             {
                 "performance": {
@@ -3579,7 +4179,7 @@ def _paper_trade_unavailable_payload(operation, symbol_filter=None, status_filte
                     "total_pnl_percent": 0,
                 },
                 "summary": {"open": 0, "closed": 0, "wins": 0, "losses": 0},
-                "paperWallet": build_inr_paper_wallet([]),
+                "paperWallet": paper_wallet,
                 "openTrades": {"count": 0, "records": []},
                 "closedTrades": {"count": 0, "records": []},
             }

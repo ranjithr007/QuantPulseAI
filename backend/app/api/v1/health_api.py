@@ -9,6 +9,7 @@ from app.database.runtime import engine
 from app.database.runtime import SessionLocal
 from app.repositories.pipeline_run_repository import PipelineRunRepository
 from app.contracts.health import DependencyHealthResponse
+from app.contracts.health import ExitProtectionHealth
 from app.contracts.health import HealthResponse
 from app.contracts.health import PipelineHealthResponse
 from app.jobs.candle_completeness_job import run_candle_completeness_job
@@ -16,6 +17,7 @@ from app.observability.candle_completeness import (
     get_cached_candle_completeness_report,
 )
 from app.observability.database_storage import build_database_storage_report
+from app.paper_trading.exit_protection_health import exit_protection_snapshot
 
 
 PIPELINE_REQUIRED_STAGES = (
@@ -171,8 +173,16 @@ def database_storage_health(table_limit: int = 25):
     )
 
 
+@router.get("/exit-protection", response_model=ExitProtectionHealth)
+def exit_protection_health():
+    """Return the worker heartbeat, shared through canonical storage in split deployments."""
+
+    return exit_protection_snapshot()
+
+
 @router.get("/pipeline", response_model=PipelineHealthResponse)
 def pipeline_health():
+    exit_protection = exit_protection_snapshot()
     if USING_SQLITE_FALLBACK:
         return {
             "source": "pipeline_run_ledger",
@@ -180,6 +190,7 @@ def pipeline_health():
             "ready": False,
             "paper_execution_allowed": False,
             "reason": "SQLITE_FALLBACK",
+            "exit_protection": exit_protection,
         }
 
     db = SessionLocal()
@@ -193,17 +204,38 @@ def pipeline_health():
                 "ready": False,
                 "paper_execution_allowed": False,
                 "reason": "NO_PIPELINE_RUN",
+                "exit_protection": exit_protection,
             }
 
         readiness = repo.readiness(db, pipeline.id, PIPELINE_REQUIRED_STAGES)
-        lineage_counts = repo.lineage_counts(db, pipeline.generation_id)
+        pipeline_completed = pipeline.status == "COMPLETED"
+        # The lineage tables are actively written throughout a running cycle.
+        # Counting every table here can wait behind those writes and make the
+        # supervisor mistake database contention for an unresponsive API.
+        lineage_counts = (
+            repo.lineage_counts(db, pipeline.generation_id)
+            if pipeline_completed
+            else {}
+        )
+        pipeline_ready = bool(
+            readiness["ready"] and pipeline_completed
+        )
+        exit_protection_ready = exit_protection.get("ready") is True
+        unready_reason = _pipeline_unready_reason(
+            pipeline,
+            readiness,
+            pipeline_ready=pipeline_ready,
+            exit_protection_ready=exit_protection_ready,
+        )
         return {
             "source": "pipeline_run_ledger",
             "available": True,
-            "ready": bool(readiness["ready"] and pipeline.status == "COMPLETED"),
+            "ready": pipeline_ready,
             "paper_execution_allowed": bool(
-                readiness["ready"] and pipeline.status == "COMPLETED"
+                pipeline_ready and exit_protection_ready
             ),
+            "reason": unready_reason,
+            "exit_protection": exit_protection,
             "pipeline": {
                 "id": pipeline.id,
                 "generation_id": pipeline.generation_id,
@@ -217,12 +249,15 @@ def pipeline_health():
                 "required_stages": readiness["required_stages"],
                 "missing_stages": readiness["missing_stages"],
                 "failed_stages": readiness["failed_stages"],
+                "running_stages": readiness.get("running_stages", []),
+                "degraded_stages": readiness.get("degraded_stages", []),
+                "blocked_stages": readiness.get("blocked_stages", []),
             },
             "lineage": {
                 "generation_id": pipeline.generation_id,
                 "derived_row_counts": lineage_counts,
                 "verified": bool(
-                    pipeline.status == "COMPLETED"
+                    pipeline_completed
                     and readiness["ready"]
                     and any(lineage_counts.values())
                 ),
@@ -247,6 +282,31 @@ def pipeline_health():
             "ready": False,
             "paper_execution_allowed": False,
             "reason": str(exc),
+            "exit_protection": exit_protection,
         }
     finally:
         db.close()
+
+
+def _pipeline_unready_reason(
+    pipeline,
+    readiness,
+    *,
+    pipeline_ready,
+    exit_protection_ready,
+):
+    if str(pipeline.status).upper() == "RUNNING":
+        return "PIPELINE_RUNNING"
+    if readiness.get("failed_stages"):
+        return "REQUIRED_STAGE_FAILED"
+    if readiness.get("blocked_stages"):
+        return "REQUIRED_STAGE_BLOCKED"
+    if readiness.get("degraded_stages"):
+        return "REQUIRED_STAGE_DEGRADED"
+    if readiness.get("missing_stages"):
+        return "REQUIRED_STAGE_MISSING"
+    if not pipeline_ready:
+        return "PIPELINE_" + str(pipeline.status or "UNREADY").upper()
+    if not exit_protection_ready:
+        return "EXIT_PROTECTION_UNREADY"
+    return None

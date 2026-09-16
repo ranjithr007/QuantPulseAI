@@ -57,6 +57,7 @@ class Phase0SchedulerStaticTests(unittest.TestCase):
         self.assertEqual(job.module, "app.jobs.deterministic_pipeline_job")
         self.assertEqual(job.function, "run_deterministic_pipeline_job")
         self.assertEqual(resolve_job_ids(["deterministic_pipeline"]), ["deterministic_pipeline"])
+        self.assertEqual(job.schedule_kwargs()["misfire_grace_time"], 60)
 
     def test_known_job_definitions_are_lazy_import_metadata(self):
         market = get_job_definition("market")

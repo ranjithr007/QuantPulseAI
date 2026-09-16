@@ -29,6 +29,7 @@ class SchedulerJobDefinition:
     max_instances: int = 1
     coalesce: bool = False
     executor: str = "default"
+    misfire_grace_time_seconds: int | None = None
 
     def load(self):
         module = import_module(self.module)
@@ -52,6 +53,8 @@ class SchedulerJobDefinition:
             kwargs["coalesce"] = True
         if self.executor != "default":
             kwargs["executor"] = self.executor
+        if self.misfire_grace_time_seconds is not None:
+            kwargs["misfire_grace_time"] = self.misfire_grace_time_seconds
 
         return kwargs
 
@@ -66,6 +69,7 @@ class SchedulerJobDefinition:
             "minutes": self.minutes,
             "max_instances": self.max_instances,
             "coalesce": self.coalesce,
+            "misfire_grace_time_seconds": self.misfire_grace_time_seconds,
         }
 
 
@@ -293,6 +297,7 @@ JOB_DEFINITIONS = {
         seconds=120,
         max_instances=1,
         coalesce=True,
+        misfire_grace_time_seconds=60,
     ),
     "memory": SchedulerJobDefinition(
         id="memory",

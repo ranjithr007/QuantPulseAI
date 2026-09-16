@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from math import isclose
 from typing import Any
 
 from app.backtesting.walk_forward_validator import is_phase2_official_timeframe
@@ -505,9 +507,12 @@ class RiskJob:
         summary = {
             "processed": 0,
             "persisted": 0,
+            "duplicates": 0,
+            "dedupe_mismatches": {},
             "approved": 0,
             "rejected": 0,
             "failed": 0,
+            "rejections": [],
             "errors": [],
         }
 
@@ -520,6 +525,19 @@ class RiskJob:
                 or self.config.default_timeframe
             )
         ]
+        trade_plan_ids = [
+            self._first_value(trade, "id", "trade_plan_id")
+            for trade in trades
+        ]
+        latest_by_plan = self.risk_repo.latest_for_trade_plans(
+            db,
+            trade_plan_ids,
+        )
+        if not isinstance(latest_by_plan, Mapping):
+            # Some lightweight repository doubles and legacy integrations do
+            # not implement the batch lookup yet. They must continue through
+            # the normal immutable insert path.
+            latest_by_plan = {}
 
         for trade in trades:
             symbol = self._get_required_text(trade, "symbol")
@@ -611,14 +629,25 @@ class RiskJob:
                     "strategy_decision_snapshot_id",
                 )
 
-                self._persist_result(db, result)
-                summary["persisted"] += 1
+                latest = latest_by_plan.get(result["trade_plan_id"])
+                reusable, mismatch = self._trade_plan_decision_reuse_check(
+                    latest,
+                    result,
+                )
+                if self.config.skip_duplicate_signals and reusable:
+                    summary["duplicates"] += 1
+                else:
+                    if self.config.skip_duplicate_signals:
+                        mismatch_counts = summary["dedupe_mismatches"]
+                        mismatch_counts[mismatch] = mismatch_counts.get(mismatch, 0) + 1
+                    self._persist_result(db, result)
+                    summary["persisted"] += 1
 
                 if result.get("decision") == "APPROVE":
                     summary["approved"] += 1
                 else:
                     summary["rejected"] += 1
-                    summary["errors"].append(
+                    summary["rejections"].append(
                         f"{symbol} {side}: "
                         f"{result.get('reason') or 'Risk validation failed'}"
                     )
@@ -634,6 +663,100 @@ class RiskJob:
                 )
 
         return summary
+
+    def _same_recent_trade_plan_decision(
+        self,
+        latest,
+        result: dict[str, Any],
+    ) -> bool:
+        """Reuse only an exact, fresh authorization for the same plan.
+
+        Risk decisions remain immutable. This suppresses redundant inserts
+        inside the refresh window, but any changed risk output is persisted
+        immediately and an unchanged decision is persisted again after the
+        configured refresh interval so downstream freshness checks recover.
+        """
+        reusable, _ = self._trade_plan_decision_reuse_check(latest, result)
+        return reusable
+
+    def _trade_plan_decision_reuse_check(
+        self,
+        latest,
+        result: dict[str, Any],
+    ) -> tuple[bool, str]:
+        if latest is None:
+            return False, "latest_missing"
+        if not self._risk_decision_is_recent(
+            self._as_datetime(self._get_value(latest, "created_at"))
+        ):
+            return False, "latest_stale"
+
+        latest_plan_id = self._get_value(latest, "trade_plan_id")
+        result_plan_id = result.get("trade_plan_id")
+        if (
+            latest_plan_id is None
+            or result_plan_id is None
+            or str(latest_plan_id) != str(result_plan_id)
+        ):
+            return False, "trade_plan_id"
+
+        text_fields = {
+            "symbol": result.get("symbol"),
+            "signal": result.get("signal"),
+            "decision": result.get("decision"),
+        }
+        for field, expected in text_fields.items():
+            actual = self._get_value(latest, field)
+            if str(actual or "").strip().upper() != str(expected or "").strip().upper():
+                return False, field
+
+        targets = result.get("targets") or {}
+        numeric_fields = {
+            "entry_price": result.get("entry"),
+            "stop_loss": result.get("stop_loss"),
+            "target1": targets.get("t1"),
+            "target2": targets.get("t2"),
+            "risk_reward": result.get("risk_reward"),
+            "position_size": result.get("position_size"),
+            "risk_percent": result.get("risk_percent"),
+            "confidence": result.get("confidence"),
+        }
+        for field, expected in numeric_fields.items():
+            if not self._risk_values_equal(
+                self._get_value(latest, field),
+                expected,
+            ):
+                return False, field
+
+        # Plan lineage is immutable in normal operation. If a populated
+        # lineage field does change, retain that event as a new authorization.
+        for field in (
+            "strategy_id",
+            "strategy_version",
+            "strategy_decision_snapshot_id",
+        ):
+            expected = result.get(field)
+            if expected is None:
+                continue
+            actual = self._get_value(latest, field)
+            if str(actual or "") != str(expected):
+                return False, field
+
+        return True, "identical"
+
+    @staticmethod
+    def _risk_values_equal(actual, expected) -> bool:
+        if actual is None or expected is None:
+            return actual is None and expected is None
+        try:
+            return isclose(
+                float(actual),
+                float(expected),
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+        except (TypeError, ValueError):
+            return actual == expected
 
     def _configured_max_risk_percent(self, db) -> float:
         """Use the persisted paper-trading maximum when a real DB is supplied."""
@@ -675,7 +798,7 @@ class RiskJob:
         thesis_id,
         source_timestamp: datetime | None,
     ) -> bool:
-        latest = self.risk_repo.latest_for_symbol(db, symbol)
+        latest = self.risk_repo.latest_master_for_symbol(db, symbol)
 
         if latest is None:
             return False

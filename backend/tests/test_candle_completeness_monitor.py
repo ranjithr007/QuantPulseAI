@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from app.jobs import candle_completeness_job
 from app.observability.candle_completeness import (
@@ -61,6 +62,23 @@ def test_monitor_is_healthy_when_collection_is_contiguous_and_fresh():
     assert report["status"] == "HEALTHY"
     assert report["series"]["BTCUSDT:1h"]["latest_age_seconds"] == 0
     assert report["temporal_validation"]["progress_percent"] == 0.69
+
+
+def test_scheduled_monitor_releases_each_independent_series_read_transaction():
+    db = SimpleNamespace(
+        info={"quantpulse_release_completeness_reads": True},
+        rollback=Mock(),
+    )
+
+    build_candle_completeness_report(
+        db,
+        symbols=("BTCUSDT", "ETHUSDT"),
+        timeframes=("1h",),
+        now=CUTOFF + timedelta(hours=11),
+        candle_loader=lambda *_args, **_kwargs: _candles(10),
+    )
+
+    assert db.rollback.call_count == 2
 
 
 def test_job_contains_failure_and_closes_session(monkeypatch):

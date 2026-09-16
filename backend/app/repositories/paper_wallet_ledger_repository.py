@@ -50,21 +50,101 @@ class PaperWalletLedgerRepository:
             .filter(scope)
             .one()
         )
-        recent = (
-            db.query(PaperWalletLedgerEntry)
-            .filter(scope)
-            .order_by(
-                PaperWalletLedgerEntry.created_at.desc(),
-                PaperWalletLedgerEntry.id.desc(),
+        recent = []
+        if int(recent_limit) > 0:
+            recent = (
+                db.query(PaperWalletLedgerEntry)
+                .filter(scope)
+                .order_by(
+                    PaperWalletLedgerEntry.created_at.desc(),
+                    PaperWalletLedgerEntry.id.desc(),
+                )
+                .limit(int(recent_limit))
+                .all()
             )
-            .limit(max(1, int(recent_limit)))
-            .all()
-        )
         recent.reverse()
         return {
             "count": int(count or 0),
             "realized_pnl_inr": round(float(realized_pnl or 0.0), 2),
             "recent_entries": recent,
+        }
+
+    def realized_equity_curve(
+        self,
+        db,
+        *,
+        initial_capital_inr=200_000.0,
+        max_points=240,
+    ):
+        """Return a bounded chart series while calculating drawdown over every event."""
+
+        self.ensure_table(db)
+        scope = or_(
+            PaperWalletLedgerEntry.symbol.is_(None),
+            ~func.upper(PaperWalletLedgerEntry.symbol).like(
+                f"{QA_PAPER_SYMBOL_PREFIX}%"
+            ),
+        )
+        rows = (
+            db.query(
+                PaperWalletLedgerEntry.id,
+                PaperWalletLedgerEntry.delta_inr,
+                PaperWalletLedgerEntry.created_at,
+            )
+            .filter(scope)
+            .order_by(
+                PaperWalletLedgerEntry.created_at.asc(),
+                PaperWalletLedgerEntry.id.asc(),
+            )
+            .all()
+        )
+
+        initial = float(initial_capital_inr)
+        equity = initial
+        peak = initial
+        max_drawdown_inr = 0.0
+        max_drawdown_percent = 0.0
+        points = [
+            {
+                "index": 0,
+                "label": "Start",
+                "equity": round(initial, 2),
+                "realized_pnl_inr": 0.0,
+                "observed_at": None,
+            }
+        ]
+        for index, row in enumerate(rows, start=1):
+            equity += float(row.delta_inr or 0.0)
+            peak = max(peak, equity)
+            drawdown_inr = max(0.0, peak - equity)
+            drawdown_percent = (
+                drawdown_inr / peak * 100
+                if peak > 0
+                else 0.0
+            )
+            max_drawdown_inr = max(max_drawdown_inr, drawdown_inr)
+            max_drawdown_percent = max(max_drawdown_percent, drawdown_percent)
+            points.append(
+                {
+                    "index": index,
+                    "label": f"#{index}",
+                    "equity": round(equity, 2),
+                    "realized_pnl_inr": round(equity - initial, 2),
+                    "observed_at": row.created_at,
+                }
+            )
+
+        bounded_points = _bounded_curve_points(points, int(max_points))
+        return {
+            "scope": "PAPER_PRODUCTION_REALIZED_LEDGER",
+            "currency": "INR",
+            "initial_capital_inr": round(initial, 2),
+            "event_count": len(rows),
+            "point_count": len(bounded_points),
+            "downsampled": len(bounded_points) < len(points),
+            "max_drawdown_inr": round(max_drawdown_inr, 2),
+            "max_drawdown_percent": round(max_drawdown_percent, 4),
+            "points": bounded_points,
         }
 
     def append_event(
@@ -115,3 +195,17 @@ class PaperWalletLedgerRepository:
 
 def _optional_amount(value):
     return None if value is None else round(float(value), 2)
+
+
+def _bounded_curve_points(points, max_points):
+    if max_points < 2:
+        raise ValueError("Equity curve must allow at least two points")
+    if len(points) <= max_points:
+        return points
+    last = len(points) - 1
+    indexes = {
+        round(position * last / (max_points - 1))
+        for position in range(max_points)
+    }
+    indexes.update({0, last})
+    return [points[index] for index in sorted(indexes)]

@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -240,4 +241,55 @@ def test_derivative_job_skips_missing_collector_payloads():
         "4h",
         "1d",
     ]
+    assert fake_db.close.called
+
+
+def test_derivative_job_collects_symbols_concurrently_and_persists_serially():
+    fake_db = SimpleNamespace(close=Mock(), rollback=Mock())
+    symbols = [
+        SimpleNamespace(symbol="BTCUSDT"),
+        SimpleNamespace(symbol="ETHUSDT"),
+    ]
+    barrier = threading.Barrier(2, timeout=2)
+    active = 0
+    maximum_active = 0
+    active_lock = threading.Lock()
+
+    def collect(symbol):
+        nonlocal active, maximum_active
+        with active_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            barrier.wait()
+            return (
+                None,
+                {"symbol": symbol, "value": 1.0, "time": object()},
+                [],
+                [],
+            )
+        finally:
+            with active_lock:
+                active -= 1
+
+    repo = Mock()
+    with patch(
+        "app.jobs.derivative_job.SessionLocal",
+        return_value=fake_db,
+    ), patch(
+        "app.jobs.derivative_job.SymbolRepository.get_active_symbols",
+        return_value=symbols,
+    ), patch(
+        "app.jobs.derivative_job.DerivativeRepository",
+        return_value=repo,
+    ), patch(
+        "app.jobs.derivative_job._collect_symbol_derivatives",
+        side_effect=collect,
+    ):
+        result = run_derivative_job()
+
+    assert maximum_active == 2
+    assert [item["symbol"] for item in result] == ["BTCUSDT", "ETHUSDT"]
+    assert repo.save_open_interest.call_count == 2
+    assert fake_db.rollback.called
     assert fake_db.close.called

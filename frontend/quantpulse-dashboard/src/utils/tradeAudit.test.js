@@ -5,6 +5,8 @@ import { preTargetLosingStops, recordedNumber, tradeExitBreakdown, tradeExitClas
 test("legacy losing or profitable stops cannot be inferred as initial stops", () => {
   for (const pnl_percent of [-1, 0, 2]) assert.equal(tradeExitClassification({ exit_reason: "STOP", pnl_percent }), "UNKNOWN");
   assert.equal(tradeExitClassification({ exit_evidence: { classification: "INVENTED" } }), "UNKNOWN");
+  assert.equal(tradeExitClassification({ exit_classification: "INITIAL_STOP" }), "INITIAL_STOP");
+  assert.equal(tradeExitClassification({ exit_classification: "INVENTED" }), "UNKNOWN");
 });
 test("recorded categories remain separate in page-only breakdown", () => {
   const trades = ["INITIAL_STOP", "TRAILED_STOP_PRE_T1", "PROTECTED_STOP_AFTER_T1", "TARGET2", "TIME_EXIT", "UNKNOWN_STOP"].map((classification) => ({ exit_evidence: { classification } }));

@@ -40,6 +40,8 @@ class Phase1PipelineStatusStaticTests(unittest.TestCase):
         self.assertIn("No READY watchlist setups", source)
         self.assertIn("No OPEN trade plans", source)
         self.assertIn("No eligible paper-trade candidates", source)
+        self.assertIn("No executor-ready paper-trade candidates", source)
+        self.assertIn('"global_execution_blockers"', source)
         self.assertIn("No OPEN paper trades", source)
 
     def test_main_wires_pipeline_api(self):

@@ -12,7 +12,7 @@ from app.utils.network_resilience import is_transient_network_error
 from app.utils.network_resilience import summarize_network_error
 
 
-BINANCE_STREAM_URL = "wss://fstream.binance.com/stream"
+BINANCE_STREAM_URL = "wss://fstream.binance.com/market/stream"
 BINANCE_TICKER_PRICE_URL = "https://fapi.binance.com/fapi/v1/ticker/price"
 DEFAULT_LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"]
 LIVE_STALE_AFTER_SECONDS = 15
@@ -29,6 +29,7 @@ class LiveMarketService:
         self._symbols = DEFAULT_LIVE_SYMBOLS
         self._connected = False
         self._last_message_at = None
+        self._last_websocket_message_at = None
         self._last_error = None
         self._reconnect_count = 0
         self._started_at = None
@@ -87,6 +88,7 @@ class LiveMarketService:
             "symbols": self._symbols,
             "cached_count": len(self._records),
             "last_tick_at": self._last_message_at,
+            "last_websocket_tick_at": self._last_websocket_message_at,
             "last_error": self._last_error,
             "reconnect_count": self._reconnect_count,
             "started_at": self._started_at,
@@ -148,12 +150,17 @@ class LiveMarketService:
                     print("Live market websocket connected:", ", ".join(symbols))
 
                     try:
-                        async for raw_message in websocket:
+                        while not self._stopping:
+                            raw_message = await asyncio.wait_for(
+                                websocket.recv(),
+                                timeout=LIVE_STALE_AFTER_SECONDS,
+                            )
                             record = _record_from_message(raw_message)
 
                             if record:
                                 self._records[record["symbol"]] = record
                                 self._last_message_at = record["received_at"]
+                                self._last_websocket_message_at = record["received_at"]
                                 self._broadcast(record)
                     finally:
                         self._connected = False
@@ -164,6 +171,7 @@ class LiveMarketService:
                 self._connected = False
                 self._last_error = summarize_network_error(exc)
                 self._reconnect_count += 1
+                self._trigger_rest_seed(symbols)
                 delay = _reconnect_delay_seconds(self._reconnect_count)
                 if not is_transient_network_error(exc):
                     print(
@@ -230,6 +238,9 @@ class LiveMarketService:
 
         if self._records:
             self._last_message_at = received_at
+            # A successful REST refresh is a valid recovery signal. Do not
+            # leave an old transient network error attached to fresh prices.
+            self._last_error = None
 
     def _trigger_rest_seed(self, symbols):
         if self._seed_thread and self._seed_thread.is_alive():

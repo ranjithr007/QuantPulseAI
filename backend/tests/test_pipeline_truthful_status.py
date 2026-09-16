@@ -38,13 +38,44 @@ def test_required_evidence_status_cannot_be_treated_as_ready(status, required_st
     assert not deterministic._execution_ready(results)
 
 
-def test_risk_local_degradation_remains_eligible_but_monitor_degradation_does_not():
+def test_risk_and_isolated_strategy_monitor_degradation_remain_eligible():
     assert deterministic._execution_ready({
         "paper_trade_monitor": {"status": "OK"},
         "risk": {"status": "DEGRADED", "errors": ["BTC plan missing"], "trade_plans": {"approved": 1}},
     })
-    assert not deterministic._execution_ready({"paper_trade_monitor": {"status": "DEGRADED"}, "risk": {"status": "OK"}})
+    assert deterministic._execution_ready({
+        "paper_trade_monitor": {
+            "status": "DEGRADED",
+            "errors": [],
+            "overdue_unresolved": 0,
+            "shadow": {"errors": ["REGIME_TREND_ENTRY SOLUSDT unavailable"]},
+        },
+        "risk": {"status": "OK"},
+    })
     assert not deterministic._execution_ready({"paper_trade_monitor": {"status": "OK"}, "risk": [None]})
+
+
+@pytest.mark.parametrize(
+    "monitor",
+    [
+        {"status": "DEGRADED"},
+        {
+            "status": "DEGRADED",
+            "errors": ["official BTC exit evidence unavailable"],
+            "shadow": {"errors": ["strategy error"]},
+        },
+        {
+            "status": "DEGRADED",
+            "errors": [],
+            "overdue_unresolved": 1,
+            "shadow": {"errors": ["strategy error"]},
+        },
+    ],
+)
+def test_monitor_degradation_stays_blocking_unless_only_strategy_paper_failed(monitor):
+    assert not deterministic._execution_ready(
+        {"paper_trade_monitor": monitor, "risk": {"status": "OK"}}
+    )
 
 
 @pytest.mark.parametrize("status", ["ERROR", "UNAVAILABLE", "BLOCKED"])

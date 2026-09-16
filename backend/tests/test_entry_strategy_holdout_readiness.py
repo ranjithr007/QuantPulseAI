@@ -121,7 +121,7 @@ def test_readiness_script_supports_direct_execution_without_pythonpath(tmp_path)
     )
 
     assert result.returncode == 0, result.stderr
-    assert "outcome-blind V2F" in result.stdout
+    assert "outcome-blind V3" in result.stdout
 
 
 def test_strategy_summary_exposes_automatic_outcome_blind_progress(monkeypatch):
@@ -136,7 +136,7 @@ def test_strategy_summary_exposes_automatic_outcome_blind_progress(monkeypatch):
     )
 
     holdout = summary["entry_strategy_holdout"]
-    assert holdout["contract"] == "entry_strategy_holdout_readiness_v2f"
+    assert holdout["contract"] == "entry_strategy_holdout_readiness_v3"
     assert holdout["governance"]["outcome_columns_accessed"] is False
     assert holdout["governance"]["automatic_promotion_allowed"] is False
     assert {item["strategy_id"] for item in holdout["cohorts"]} == {

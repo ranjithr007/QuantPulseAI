@@ -1,5 +1,8 @@
 import json
+import threading
+import weakref
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +11,10 @@ from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.database.models.point_in_time_snapshots import FeatureSnapshot
 from app.repositories._db_utils import commit_or_rollback
 from app.utils.freshness import normalize_timestamp_to_utc
+
+
+_snapshot_schema_lock = threading.Lock()
+_snapshot_schema_ready = weakref.WeakSet()
 
 
 def _to_naive_utc(timestamp):
@@ -28,8 +35,22 @@ def _snapshot_json(snapshot):
 
 def _ensure_snapshot_tables(db):
     bind = db.get_bind()
-    FeatureSnapshot.__table__.create(bind=bind, checkfirst=True)
-    DecisionSnapshot.__table__.create(bind=bind, checkfirst=True)
+    try:
+        if bind in _snapshot_schema_ready:
+            return
+    except TypeError:
+        # A few focused tests provide minimal non-weak-referenceable bind
+        # doubles. They retain the original safe check-first behavior.
+        FeatureSnapshot.__table__.create(bind=bind, checkfirst=True)
+        DecisionSnapshot.__table__.create(bind=bind, checkfirst=True)
+        return
+
+    with _snapshot_schema_lock:
+        if bind in _snapshot_schema_ready:
+            return
+        FeatureSnapshot.__table__.create(bind=bind, checkfirst=True)
+        DecisionSnapshot.__table__.create(bind=bind, checkfirst=True)
+        _snapshot_schema_ready.add(bind)
 
 
 def save_feature_snapshot(db, snapshot):
@@ -116,7 +137,15 @@ def save_decision_snapshot(db, snapshot):
     try:
         commit_or_rollback(db)
     except IntegrityError:
+        if hasattr(db, "expire_all"):
+            db.expire_all()
         existing = _get_existing_decision_snapshot(db, snapshot)
+        if existing is None:
+            existing = _get_existing_decision_snapshot(
+                db,
+                snapshot,
+                tolerate_database_rounding=True,
+            )
         if existing is not None:
             return existing
         raise
@@ -199,12 +228,28 @@ def _get_existing_feature_snapshot(db, snapshot):
     )
 
 
-def _get_existing_decision_snapshot(db, snapshot):
-    return (
+def _get_existing_decision_snapshot(
+    db,
+    snapshot,
+    *,
+    tolerate_database_rounding=False,
+):
+    timestamp = _to_naive_utc(snapshot["effective_timestamp"])
+    query = (
         db.query(DecisionSnapshot)
         .filter(DecisionSnapshot.symbol == snapshot["symbol"])
         .filter(DecisionSnapshot.timeframe == snapshot["timeframe"])
-        .filter(DecisionSnapshot.effective_timestamp == _to_naive_utc(snapshot["effective_timestamp"]))
         .filter(DecisionSnapshot.decision_version == snapshot["decision_version"])
-        .first()
     )
+    if tolerate_database_rounding:
+        # SQL Server ``datetime`` values are rounded to roughly 3.33 ms.  A
+        # unique-key collision can therefore be raised even when an exact
+        # Python datetime equality lookup cannot reload the winning row.
+        tolerance = timedelta(milliseconds=4)
+        query = query.filter(
+            DecisionSnapshot.effective_timestamp >= timestamp - tolerance,
+            DecisionSnapshot.effective_timestamp <= timestamp + tolerance,
+        )
+    else:
+        query = query.filter(DecisionSnapshot.effective_timestamp == timestamp)
+    return query.order_by(DecisionSnapshot.id.desc()).first()

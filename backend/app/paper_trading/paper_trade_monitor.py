@@ -219,8 +219,8 @@ def _favorable_price_trailing_stop(trade, candle):
     initial = float(initial_stop)
     activation_r = float(getattr(trade, "trailing_activation_r", None) or 0)
     favorable = close - entry if str(trade.side).upper() == "LONG" else entry - close
-    # Only newly recorded challengers opt in. NULL legacy rows retain immediate
-    # one-for-one trailing; the hard stop/T1 protection remain active throughout.
+    # New rows persist an explicit activation. NULL legacy rows retain their
+    # historical immediate one-for-one behavior for replay compatibility.
     if activation_r > 0 and favorable < abs(entry - initial) * activation_r:
         return None
     precision = _price_precision(entry)

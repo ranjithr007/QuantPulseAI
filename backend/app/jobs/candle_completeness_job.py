@@ -20,6 +20,12 @@ def run_candle_completeness_job():
     _prepare_storage()
     db = SessionLocal()
     try:
+        # This monitor scans many independent candle series and does not need a
+        # transaction-wide snapshot. Let the report release each completed
+        # read transaction so its 15-minute audit cannot retain shared locks
+        # across the whole scan and stall the live dashboard/pipeline writers.
+        if isinstance(getattr(db, "info", None), dict):
+            db.info["quantpulse_release_completeness_reads"] = True
         report = build_candle_completeness_report(db)
         cache_candle_completeness_report(report)
         if report.get("status") != "HEALTHY":

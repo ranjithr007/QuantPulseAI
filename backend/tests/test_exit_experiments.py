@@ -146,8 +146,8 @@ def test_entry_cohorts_receive_new_versions_and_baselines_keep_their_versions():
     assert CORE_SIGNAL_ENTRY_STRATEGY["version"] == "core_signal_entry_v1"
     assert MARKET_MOVE_ENTRY_STRATEGY["version"] == "market_move_entry_v2"
     assert MARKET_MOVE_ENTRY_STRATEGY["decision_version"] == "market_move_entry_strategy_v2"
-    assert REGIME_TREND_ENTRY_STRATEGY["version"] == "regime_trend_entry_v2"
-    assert REGIME_TREND_ENTRY_STRATEGY["decision_version"] == "regime_trend_entry_strategy_v2"
+    assert REGIME_TREND_ENTRY_STRATEGY["version"] == "regime_trend_entry_v3"
+    assert REGIME_TREND_ENTRY_STRATEGY["decision_version"] == "regime_trend_entry_strategy_v3"
     for baseline in (CORE_SIGNAL_STRATEGY, MARKET_MOVE_STRATEGY, REGIME_TREND_STRATEGY):
         assert baseline["version"] == baseline["id"].lower() + "_v1"
         assert baseline["official_execution_enabled"] is True

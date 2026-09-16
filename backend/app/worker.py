@@ -4,6 +4,8 @@ import signal
 import threading
 
 from app.config import get_settings
+from app.database.paper_execution_schema import ensure_paper_execution_schema
+from app.database.sqlserver import engine
 from app.scheduler.scheduler import get_scheduler, start_scheduler
 
 
@@ -13,6 +15,8 @@ def main():
         raise RuntimeError("Scheduler worker requires QUANTPULSE_PROCESS_ROLE=worker")
     if not settings.run_scheduler:
         raise RuntimeError("Scheduler worker requires QUANTPULSE_START_SCHEDULER=true")
+
+    ensure_paper_execution_schema(engine)
 
     if not start_scheduler():
         raise RuntimeError("QuantPulse scheduler failed to start")

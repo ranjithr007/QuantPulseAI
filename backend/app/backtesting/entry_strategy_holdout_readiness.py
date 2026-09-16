@@ -1,4 +1,4 @@
-"""Outcome-blind V2F readiness for frozen entry-strategy holdout cohorts."""
+"""Outcome-blind V3 readiness for frozen entry-strategy holdout cohorts."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from app.paper_trading.exit_evidence import read_evidence
 from app.strategies.registry import STRATEGY_REGISTRY
 
 
-READINESS_VERSION = "entry_strategy_holdout_readiness_v2f"
-DEFAULT_MANIFEST_PATH = Path(__file__).with_name("entry_strategy_holdout_v2f.json")
+READINESS_VERSION = "entry_strategy_holdout_readiness_v3"
+DEFAULT_MANIFEST_PATH = Path(__file__).with_name("entry_strategy_holdout_v3.json")
 
 
 def load_manifest(path=None):

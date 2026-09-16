@@ -1,4 +1,4 @@
-"""Gated V2G outcome review for frozen V2F entry-strategy cohorts."""
+"""Gated outcome review for frozen V3 entry-strategy cohorts."""
 
 from __future__ import annotations
 

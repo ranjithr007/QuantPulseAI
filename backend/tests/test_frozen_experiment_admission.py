@@ -81,7 +81,7 @@ def test_auto_candidate_open_position_does_not_consume_frozen_or_other_auto_book
         repo = StrategyShadowTradeRepository()
         strategy_id = "REGIME_TREND_ENTRY"
         _row(db, strategy_id, "regime_trend_entry_auto_m30_1")
-        assert not repo.has_open_trade(db, strategy_id, "regime_trend_entry_v2", "BTCUSDT")
+        assert not repo.has_open_trade(db, strategy_id, "regime_trend_entry_v3", "BTCUSDT")
         assert not repo.has_open_trade(db, strategy_id, "regime_trend_entry_auto_m30_2", "BTCUSDT")
         assert repo.has_open_trade(db, strategy_id, "regime_trend_entry_auto_m30_1", "BTCUSDT")
 
@@ -92,25 +92,25 @@ def test_frozen_admission_does_not_merge_versioned_risk_valuation_or_performance
         strategy_id = "REGIME_TREND_ENTRY"
         old = _row(db, strategy_id, "regime_trend_entry_v1")
         current = _row(
-            db, strategy_id, "regime_trend_entry_v2", plan_id=2,
+            db, strategy_id, "regime_trend_entry_v3", plan_id=2,
             status="CLOSED", closed_at=datetime.utcnow(), realized_pnl_inr=123,
         )
-        assert repo.has_open_trade(db, strategy_id, "regime_trend_entry_v2", "BTCUSDT")
+        assert repo.has_open_trade(db, strategy_id, "regime_trend_entry_v3", "BTCUSDT")
         history = repo.risk_snapshot_trades(
             db, window_start=datetime.utcnow() - timedelta(days=1),
-            strategy_id=strategy_id, strategy_version="regime_trend_entry_v2",
+            strategy_id=strategy_id, strategy_version="regime_trend_entry_v3",
         )
         assert [row.id for row in history] == [current.id]
         assert [row.id for row in repo.all_trades(
             db, strategy_id=strategy_id, strategy_version="regime_trend_entry_v1",
         )] == [old.id]
         snapshot = repo.valuation_snapshot(
-            db, strategy_id=strategy_id, strategy_version="regime_trend_entry_v2",
+            db, strategy_id=strategy_id, strategy_version="regime_trend_entry_v3",
         )
         assert snapshot["open_trades"] == []
         assert snapshot["realized_pnl_inr"] == 123
-        pnl = repo.realized_pnl_by_strategy(db, {(strategy_id, "regime_trend_entry_v2")})
-        assert pnl == {(strategy_id, "regime_trend_entry_v2"): 123}
+        pnl = repo.realized_pnl_by_strategy(db, {(strategy_id, "regime_trend_entry_v3")})
+        assert pnl == {(strategy_id, "regime_trend_entry_v3"): 123}
 
 
 @pytest.mark.parametrize("strategy_id", UPGRADED_ENTRY_IDS)
@@ -152,7 +152,7 @@ def test_auto_candidate_stop_does_not_start_frozen_cooldown_or_query_other_auto_
             strategy_id="REGIME_TREND_ENTRY", symbol="BTCUSDT", side="LONG",
             window_start=now - timedelta(minutes=30), versioned_history=original_history,
         )
-        assert repo.stop_reentry_history(db, strategy_version="regime_trend_entry_v2", **kwargs) == []
+        assert repo.stop_reentry_history(db, strategy_version="regime_trend_entry_v3", **kwargs) == []
         assert repo.stop_reentry_history(db, strategy_version="regime_trend_entry_auto_m30_2", **kwargs) is original_history
 
 

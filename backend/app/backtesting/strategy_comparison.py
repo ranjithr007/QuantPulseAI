@@ -9,6 +9,8 @@ from collections import Counter
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from sqlalchemy import true
+
 from app.database.models.market_candles import MarketCandle
 from app.database.models.point_in_time_snapshots import DecisionSnapshot
 from app.database.models.pipeline_runs import PipelineRun
@@ -224,7 +226,7 @@ def build_strategy_comparison(db, symbol, days, now=None):
         .order_by(DecisionSnapshot.effective_timestamp, DecisionSnapshot.id).limit(LIMIT+1).all())
     bars = (db.query(MarketCandle).filter(
         MarketCandle.symbol == symbol, MarketCandle.timeframe == "5m", MarketCandle.market_type == "FUTURES",
-        MarketCandle.is_final.is_(True), MarketCandle.quality_state.in_(("VERIFIED", "RECONCILED")),
+        MarketCandle.is_final == true(), MarketCandle.quality_state.in_(("VERIFIED", "RECONCILED")),
         MarketCandle.open_time >= start, MarketCandle.close_time <= end)
         .order_by(MarketCandle.open_time, MarketCandle.id).limit(LIMIT+1).all())
     if len(rows) > LIMIT or len(bars) > LIMIT:

@@ -19,7 +19,7 @@ MAXIMUM_TIER_EQUITY_RISK_PERCENT = 0.5
 
 def apply_equity_risk_budget(
     sizing, confidence, equity_inr, *, exit_slippage_percent=0.1,
-    funding_reserve_percent=0.06,
+    funding_reserve_percent=0.06, confidence_calibration=None,
 ):
     """Size NEW entries against marked equity; never resize existing positions.
 
@@ -27,6 +27,8 @@ def apply_equity_risk_budget(
     conservative exit-slippage reserve and funding reserve. These are estimates,
     not a guaranteed maximum loss during gaps or unavailable market data.
     The legacy 75/85% notionals are ceilings, not amounts we must spend.
+    The maximum risk tier fails safe to the minimum tier unless fixed-cohort
+    confidence calibration has sufficient, directionally positive evidence.
     """
     result = dict(sizing or {})
     equity = _finite_number("paper equity", equity_inr)
@@ -40,9 +42,22 @@ def apply_equity_risk_budget(
         raise ValueError("Positive fresh equity, notional and stop distance are required")
     if not 40 <= confidence <= 100 or min(fee_cost, slip, funding) < 0:
         raise ValueError("Invalid confidence or risk-cost reserve for paper entry")
-    risk_percent = (MINIMUM_TIER_EQUITY_RISK_PERCENT
-                    if confidence < FULL_SIZE_ENTRY_CONFIDENCE
-                    else MAXIMUM_TIER_EQUITY_RISK_PERCENT)
+    maximum_tier_requested = confidence >= FULL_SIZE_ENTRY_CONFIDENCE
+    calibration = dict(confidence_calibration or {})
+    confidence_scaling_eligible = bool(
+        calibration.get("higher_confidence_promotion_eligible") is True
+    )
+    maximum_tier_allowed = maximum_tier_requested and confidence_scaling_eligible
+    requested_risk_percent = (
+        MAXIMUM_TIER_EQUITY_RISK_PERCENT
+        if maximum_tier_requested
+        else MINIMUM_TIER_EQUITY_RISK_PERCENT
+    )
+    risk_percent = (
+        MAXIMUM_TIER_EQUITY_RISK_PERCENT
+        if maximum_tier_allowed
+        else MINIMUM_TIER_EQUITY_RISK_PERCENT
+    )
     budget = equity * risk_percent / 100
     fee_percent = fee_cost / requested * 100
     total_loss_percent = stop + fee_percent + slip + funding
@@ -57,11 +72,18 @@ def apply_equity_risk_budget(
     estimated_loss = notional * total_loss_percent / 100
     result.update({
         "sizing_policy": EQUITY_RISK_POLICY,
-        "position_tier": "MINIMUM" if confidence < FULL_SIZE_ENTRY_CONFIDENCE else "MAXIMUM",
+        "position_tier": (
+            "MAXIMUM"
+            if maximum_tier_allowed
+            else "CALIBRATION_CAPPED"
+            if maximum_tier_requested
+            else "MINIMUM"
+        ),
         "position_notional_inr": notional,
         "allocation_percent": round(notional / PAPER_CAPITAL_INR * 100, 4),
         "equity_at_entry_inr": round(equity, 2),
         "risk_budget_percent": risk_percent,
+        "requested_risk_budget_percent": requested_risk_percent,
         "risk_budget_inr": round(budget, 2),
         "notional_cap_inr": round(requested, 2),
         "risk_adjusted": notional < requested,
@@ -73,6 +95,37 @@ def apply_equity_risk_budget(
         "estimated_max_loss_percent": round(estimated_loss / PAPER_CAPITAL_INR * 100, 4),
         "estimated_equity_loss_percent": round(estimated_loss / equity * 100, 4),
         "loss_estimate_is_guaranteed": False,
+        "confidence_scaling_requested": maximum_tier_requested,
+        "confidence_scaling_eligible": confidence_scaling_eligible,
+        "confidence_scaling_applied": maximum_tier_allowed,
+        "confidence_calibration_status": calibration.get("status") or "UNAVAILABLE",
+        "confidence_calibration_direction": calibration.get("direction") or "UNKNOWN",
+        "confidence_calibration_sample_sufficient": bool(
+            calibration.get("sample_sufficient") is True
+        ),
+        "confidence_calibration_evaluated_trades": calibration.get(
+            "evaluated_trades"
+        ),
+        "confidence_calibration_evidence_scope": calibration.get(
+            "evidence_scope"
+        ),
+        "confidence_calibration_excluded_operational_exits": calibration.get(
+            "excluded_operationally_contaminated_exits"
+        ),
+        "confidence_calibration_minimum_trades_per_group": calibration.get(
+            "minimum_trades_per_group"
+        ),
+        "confidence_calibration_expectancy_gap_percentage_points": calibration.get(
+            "expectancy_gap_percentage_points"
+        ),
+        "confidence_calibration_pnl_correlation": calibration.get(
+            "confidence_pnl_correlation"
+        ),
+        "confidence_scaling_blocker": (
+            None
+            if not maximum_tier_requested or maximum_tier_allowed
+            else "Higher-confidence risk scaling lacks sufficient directionally positive evidence"
+        ),
     })
     return result
 

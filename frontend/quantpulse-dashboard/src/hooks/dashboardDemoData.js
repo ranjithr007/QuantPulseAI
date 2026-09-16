@@ -438,6 +438,8 @@ function buildDemoPerformance(openTrades, closedTrades) {
   const losses = closedTrades.filter((trade) => safeNumber(trade.pnl_percent, 0) < 0).length;
   const total = closedTrades.length + openTrades.length;
   const closedTotal = closedTrades.reduce((sum, trade) => sum + safeNumber(trade.pnl_percent, 0), 0);
+  const winningReturns = closedTrades.map((trade) => safeNumber(trade.pnl_percent, 0)).filter((value) => value > 0);
+  const losingReturns = closedTrades.map((trade) => safeNumber(trade.pnl_percent, 0)).filter((value) => value < 0);
   return {
     total_trades: total,
     open_trades: openTrades.length,
@@ -448,6 +450,8 @@ function buildDemoPerformance(openTrades, closedTrades) {
     short_trades: closedTrades.filter((trade) => trade.side === "SHORT").length,
     win_rate: total ? (wins / closedTrades.length) * 100 : 0,
     average_pnl_percent: closedTrades.length ? closedTotal / closedTrades.length : 0,
+    average_win_pnl_percent: winningReturns.length ? winningReturns.reduce((sum, value) => sum + value, 0) / winningReturns.length : 0,
+    average_loss_pnl_percent: losingReturns.length ? losingReturns.reduce((sum, value) => sum + value, 0) / losingReturns.length : 0,
     total_pnl_percent: closedTotal,
   };
 }

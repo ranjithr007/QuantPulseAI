@@ -29,7 +29,15 @@ POSTGRESQL_POST_BASELINE_COLUMNS = {
     "paper_trades": frozenset({"trailing_activation_r", "execution_evidence_json", "exit_evidence_json"}),
     "strategy_shadow_trades": frozenset({"trailing_activation_r", "execution_evidence_json", "exit_evidence_json"}),
 }
-POSTGRESQL_POST_BASELINE_INDEXES = frozenset({"ix_paper_trades_closed_history"})
+POSTGRESQL_POST_BASELINE_INDEXES = frozenset(
+    {
+        "ix_paper_trades_closed_history",
+        "ix_decision_snapshots_opportunity_history",
+    }
+)
+POSTGRESQL_POST_BASELINE_INDEX_TABLES = frozenset(
+    {"paper_trades", "decision_snapshots"}
+)
 
 
 @lru_cache(maxsize=1)
@@ -42,7 +50,11 @@ def _reviewed_baseline_metadata():
     """
     metadata = MetaData(naming_convention=Base.metadata.naming_convention)
     # Preserve exact original DDL/constraint order for unaffected tables.
-    for table_name in POSTGRESQL_POST_BASELINE_COLUMNS:
+    projected_tables = (
+        set(POSTGRESQL_POST_BASELINE_COLUMNS)
+        | set(POSTGRESQL_POST_BASELINE_INDEX_TABLES)
+    )
+    for table_name in projected_tables:
         Base.metadata.tables[table_name].to_metadata(metadata)
     for table_name, column_names in POSTGRESQL_POST_BASELINE_COLUMNS.items():
         table = metadata.tables[table_name]

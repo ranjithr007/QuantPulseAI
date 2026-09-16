@@ -13,6 +13,7 @@ from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.strategy_shadow_trade_repository import (
     StrategyShadowTradeRepository,
 )
+from app.services.paper_exit_prices import paper_exit_prices
 from app.repositories._db_utils import safe_rollback
 from app.utils.freshness import normalize_timestamp_to_utc
 from app.utils.network_resilience import is_transient_network_error
@@ -26,6 +27,15 @@ EXIT_CANDLE_LOOKBACK_LIMIT = 1000
 def run_paper_trade_monitor_job():
     db = SessionLocal()
     try:
+        # The strategy books often contain many copies of the same symbol.
+        # Prefer the process-local one-second stream and allow at most one
+        # bounded REST fallback per symbol for this reconciliation cycle.
+        mark_collector = MarkPriceCollector(
+            timeout_seconds=3,
+            max_attempts=1,
+            retry_delay_seconds=0,
+        )
+        mark_cache = {}
         summary = {
             "status": "OK",
             "processed": 0,
@@ -42,6 +52,7 @@ def run_paper_trade_monitor_job():
             "entry_timeframe_fallbacks": 0,
             "deadline_catchups": 0,
             "overdue_unresolved": 0,
+            "warnings": [],
             "errors": [],
             "records": [],
         }
@@ -63,6 +74,8 @@ def run_paper_trade_monitor_job():
                         db,
                         trade,
                         timeframe,
+                        collector=mark_collector,
+                        mark_cache=mark_cache,
                     )
                     if catchup_candle is not None:
                         candles = [catchup_candle]
@@ -75,7 +88,11 @@ def run_paper_trade_monitor_job():
                         )
 
                 if not candles:
-                    live_mark_candle = _current_mark_candle(trade)
+                    live_mark_candle = _current_mark_candle(
+                        trade,
+                        collector=mark_collector,
+                        mark_cache=mark_cache,
+                    )
                     if live_mark_candle is not None:
                         candles = [live_mark_candle]
                         source_available = True
@@ -106,23 +123,22 @@ def run_paper_trade_monitor_job():
                 last_evaluated_at = None
                 last_decision = None
                 trade_closed = False
+                trade = lock_open_trade(db, trade)
+                if trade is None:
+                    continue
                 for candle in candles:
-                    trade = lock_open_trade(db, trade)
-                    if trade is None:
-                        trade_closed = True
-                        break
                     if _predates_live_protection(trade, candle):
                         candle = _overlap_close_evidence(trade, candle)
                         if candle is None:
                             continue
-                        summary["errors"].append(f"{trade.symbol}: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY")
+                        summary["warnings"].append(
+                            f"{trade.symbol}: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY"
+                        )
                     decision = {
                         **evaluate_paper_trade_exit(trade, candle),
                         "monitor_timeframe": timeframe,
                     }
                     merge_observations(trade, observation_evidence(trade, candle))
-                    if hasattr(db, "flush"):
-                        db.flush()
                     summary["candles_evaluated"] += 1
                     last_evaluated_at = _candle_checkpoint(candle)
                     last_decision = decision
@@ -145,6 +161,10 @@ def run_paper_trade_monitor_job():
                                 "stop_loss": updated_trade.stop_loss,
                             }
                         )
+                        trade = lock_open_trade(db, updated_trade)
+                        if trade is None:
+                            trade_closed = True
+                            break
                         continue
 
                     if decision["action"] == "PARTIAL_CLOSE":
@@ -209,6 +229,10 @@ def run_paper_trade_monitor_job():
                                         "stop_loss": updated_trade.stop_loss,
                                     }
                                 )
+                        trade = lock_open_trade(db, updated_trade)
+                        if trade is None:
+                            trade_closed = True
+                            break
                         continue
 
                     closed_trade = repo.close_trade(
@@ -254,13 +278,19 @@ def run_paper_trade_monitor_job():
                 # Repository mutations have already committed independently.
                 safe_rollback(db)
 
-        summary["shadow"] = _run_strategy_shadow_monitor(db)
-        if (
-            summary["errors"]
-            or summary["overdue_unresolved"]
-            or summary["shadow"]["errors"]
-        ):
+        summary["shadow"] = _run_strategy_shadow_monitor(
+            db,
+            collector=mark_collector,
+            mark_cache=mark_cache,
+        )
+        if summary["errors"] or summary["overdue_unresolved"]:
             summary["status"] = "FAILED"
+        elif summary["shadow"]["errors"]:
+            # Strategy Paper books are isolated research evidence.  Their
+            # monitoring failures must remain visible, but they cannot stop
+            # official-position monitoring, risk approval, or paper execution
+            # for otherwise healthy coins.
+            summary["status"] = "DEGRADED"
         print("Paper Trade Monitor Completed", summary)
         return summary
 
@@ -276,7 +306,7 @@ def run_paper_trade_monitor_job():
         db.close()
 
 
-def _run_strategy_shadow_monitor(db):
+def _run_strategy_shadow_monitor(db, *, collector=None, mark_cache=None):
     summary = {
         "source": "strategy_shadow_monitor_v1",
         "processed": 0,
@@ -284,6 +314,7 @@ def _run_strategy_shadow_monitor(db):
         "partial_closes": 0,
         "stop_moves": 0,
         "still_open": 0,
+        "warnings": [],
         "errors": [],
         "records": [],
     }
@@ -298,14 +329,24 @@ def _run_strategy_shadow_monitor(db):
                 trade,
             )
             if not candles and _maximum_hold_due(trade):
-                catchup, error = _deadline_catchup_candle(db, trade, timeframe)
+                catchup, error = _deadline_catchup_candle(
+                    db,
+                    trade,
+                    timeframe,
+                    collector=collector,
+                    mark_cache=mark_cache,
+                )
                 if catchup is not None:
                     candles = [catchup]
                     source_available = True
                 elif error:
                     summary["errors"].append(f"{trade.strategy_id} {trade.symbol}: {error}")
             if not candles:
-                live_mark = _current_mark_candle(trade)
+                live_mark = _current_mark_candle(
+                    trade,
+                    collector=collector,
+                    mark_cache=mark_cache,
+                )
                 if live_mark is not None:
                     candles = [live_mark]
                     source_available = True
@@ -317,32 +358,35 @@ def _run_strategy_shadow_monitor(db):
 
             closed = False
             last_checkpoint = None
+            trade = lock_open_trade(db, trade)
+            if trade is None:
+                continue
             for candle in candles:
-                trade = lock_open_trade(db, trade)
-                if trade is None:
-                    closed = True
-                    break
                 if _predates_live_protection(trade, candle):
                     candle = _overlap_close_evidence(trade, candle)
                     if candle is None:
                         continue
-                    summary["errors"].append(f"{trade.symbol}: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY")
+                    summary["warnings"].append(
+                        f"{trade.symbol}: INTRABAR_RECOVERY_AMBIGUOUS_CLOSE_ONLY"
+                    )
                 decision = evaluate_paper_trade_exit(trade, candle)
                 merge_observations(trade, observation_evidence(trade, candle))
-                if hasattr(db, "flush"):
-                    db.flush()
                 last_checkpoint = _candle_checkpoint(candle)
                 action = decision["action"]
                 if action == "HOLD":
                     continue
                 if action == "MOVE_STOP":
-                    repo.move_stop_loss(
+                    trade = repo.move_stop_loss(
                         db,
                         trade,
                         decision["new_stop_loss"],
                         evaluated_at=last_checkpoint,
                     )
                     summary["stop_moves"] += 1
+                    trade = lock_open_trade(db, trade)
+                    if trade is None:
+                        closed = True
+                        break
                     continue
                 if action == "PARTIAL_CLOSE":
                     trade = repo.apply_target1(
@@ -379,6 +423,10 @@ def _run_strategy_shadow_monitor(db):
                             )
                             summary["stop_moves"] += 1
                     if not closed:
+                        trade = lock_open_trade(db, trade)
+                        if trade is None:
+                            closed = True
+                            break
                         continue
                 elif action == "CLOSE":
                     trade = repo.close_trade(
@@ -518,8 +566,19 @@ def _candle_checkpoint(candle):
     return value.replace(tzinfo=None)
 
 
-def _current_mark_candle(trade, *, collector=None, now=None):
-    mark = (collector or MarkPriceCollector()).get_current_mark_price(trade.symbol)
+def _current_mark_candle(
+    trade,
+    *,
+    collector=None,
+    now=None,
+    mark_cache=None,
+):
+    mark = _current_mark(
+        trade.symbol,
+        collector=collector,
+        now=now,
+        mark_cache=mark_cache,
+    )
     if not mark or mark.get("mark_price") is None:
         return None
     observed_at = normalize_timestamp_to_utc(mark.get("observed_at") or now)
@@ -550,7 +609,15 @@ def _maximum_hold_due(trade, now=None):
     return observed_at >= opened_at + timedelta(hours=float(max_hold_hours))
 
 
-def _deadline_catchup_candle(db, trade, timeframe, *, collector=None, now=None):
+def _deadline_catchup_candle(
+    db,
+    trade,
+    timeframe,
+    *,
+    collector=None,
+    now=None,
+    mark_cache=None,
+):
     deadline = _maximum_hold_deadline(trade)
     if deadline is None:
         return None, "MAX_HOLD_DEADLINE_UNAVAILABLE"
@@ -564,7 +631,12 @@ def _deadline_catchup_candle(db, trade, timeframe, *, collector=None, now=None):
         latest.deadline_catchup_source = "LATEST_FINAL_DB_CANDLE"
         return latest, None
 
-    mark = (collector or MarkPriceCollector()).get_current_mark_price(trade.symbol)
+    mark = _current_mark(
+        trade.symbol,
+        collector=collector,
+        now=now,
+        mark_cache=mark_cache,
+    )
     if not mark:
         return None, "OVERDUE_EXIT_MARK_PRICE_UNAVAILABLE"
     observed_at = normalize_timestamp_to_utc(mark.get("observed_at") or now)
@@ -584,6 +656,21 @@ def _deadline_catchup_candle(db, trade, timeframe, *, collector=None, now=None):
         force_time_exit=True,
         deadline_catchup_source=mark.get("source") or "CURRENT_MARK_PRICE",
     ), None
+
+
+def _current_mark(symbol, *, collector=None, now=None, mark_cache=None):
+    """Resolve one fresh mark per symbol for the whole monitor cycle."""
+    normalized = str(symbol or "").upper()
+    if mark_cache is not None and normalized in mark_cache:
+        return mark_cache[normalized]
+
+    observed_at = normalize_timestamp_to_utc(now or datetime.now(timezone.utc))
+    mark = paper_exit_prices.latest([normalized], now=observed_at).get(normalized)
+    if mark is None:
+        mark = (collector or MarkPriceCollector()).get_current_mark_price(normalized)
+    if mark_cache is not None:
+        mark_cache[normalized] = mark
+    return mark
 
 
 def _maximum_hold_deadline(trade):

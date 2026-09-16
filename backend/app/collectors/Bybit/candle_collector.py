@@ -25,6 +25,15 @@ class CandleCollector:
         "1d": "D",
     }
 
+    def __init__(
+        self,
+        *,
+        timeout_seconds=20,
+        max_attempts=3,
+    ):
+        self.timeout_seconds = max(1, float(timeout_seconds))
+        self.max_attempts = max(1, int(max_attempts))
+
     def get_candles(
         self,
         symbol,
@@ -107,13 +116,16 @@ class CandleCollector:
         )
         return candles[-requested_limit:]
 
-    @staticmethod
-    def _get_page(url, params, symbol):
+    def _get_page(self, url, params, symbol):
         last_error = None
 
-        for attempt in range(3):
+        for attempt in range(self.max_attempts):
             try:
-                response = requests.get(url, params=params, timeout=20)
+                response = requests.get(
+                    url,
+                    params=params,
+                    timeout=self.timeout_seconds,
+                )
                 response.raise_for_status()
                 payload = response.json()
                 if isinstance(payload, list):
@@ -128,7 +140,8 @@ class CandleCollector:
                 return []
             except Exception as ex:
                 last_error = ex
-                time.sleep(_retry_delay_seconds(attempt + 1))
+                if attempt < self.max_attempts - 1:
+                    time.sleep(_retry_delay_seconds(attempt + 1))
 
         if last_error is not None:
             if not is_transient_network_error(last_error):

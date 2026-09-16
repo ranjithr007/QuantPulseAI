@@ -177,12 +177,13 @@ REGIME_TREND_STRATEGY = {
 REGIME_TREND_ENTRY_STRATEGY = {
     **REGIME_TREND_STRATEGY,
     "id": REGIME_TREND_ENTRY_STRATEGY_ID,
-    "version": "regime_trend_entry_v2",
-    "decision_version": "regime_trend_entry_strategy_v2",
+    "version": "regime_trend_entry_v3",
+    "decision_version": "regime_trend_entry_strategy_v3",
     "name": "Regime Trend Entry Candidate",
     "description": (
         "Entry-only paper experiment: aligned Feature/Regime evidence with a "
-        "structure-confirmed breakout/retest or intact-trend pullback, "
+        "trend-regime-aligned, structure-confirmed breakout/retest or "
+        "intact-trend pullback, "
         "revalidated at execution. Baseline exits unchanged."
     ),
     "strategy_type": "ENTRY_CANDIDATE",

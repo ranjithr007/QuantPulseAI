@@ -1,4 +1,4 @@
-"""Run the V2G review only after the frozen V2F readiness gate unlocks."""
+"""Run the V2G review only after the frozen V3 readiness gate unlocks."""
 
 import argparse
 import json
@@ -19,7 +19,7 @@ from app.database.sqlserver import SessionLocal
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--as-of", help="Optional frozen ISO-8601 observation time.")
-    parser.add_argument("--manifest", help="Optional frozen V2F manifest path.")
+    parser.add_argument("--manifest", help="Optional frozen V3 manifest path.")
     parser.add_argument(
         "--output",
         default="outputs/entry_strategy_holdout_outcomes_v2g.json",

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -16,6 +17,7 @@ from app.strategies.learning import analyze_strategy_trades
 from app.strategies.learning import apply_learning_parameters
 from app.strategies.learning import candidate_rearm_blocker
 from app.strategies.learning import evaluate_due_strategy_versions
+from app.strategies.learning import latest_evaluations
 from app.strategies.learning import strategy_definitions
 from app.strategies.registry import CORE_SIGNAL_STRATEGY
 
@@ -46,6 +48,13 @@ def _trade(index, *, winning):
             "sizing_policy": "TEST_SIZING_V1",
             "release_version": "TEST_RELEASE_V1",
         }),
+        exit_evidence_json=json.dumps({
+            "version": "PAPER_EXIT_EVIDENCE_V1",
+            "classification": "TARGET2" if winning else "INITIAL_STOP",
+            "evidence_kind": "LIVE_MARK",
+            "observed_at": (opened + timedelta(hours=1)).isoformat(),
+            "quote_age_seconds": 0.5,
+        }),
         entry_timeframe="2h",
         regime="RANGE_ACCUMULATION",
         realized_pnl_inr=1000.0 if winning else -500.0,
@@ -74,6 +83,7 @@ def _row(index, *, winning, strategy_version=None):
         initial_stop_loss=99.25,
         exit_policy=item.exit_policy,
         execution_evidence_json=item.execution_evidence_json,
+        exit_evidence_json=item.exit_evidence_json,
         target1=101.5,
         target2=102.3,
         entry_timeframe=item.entry_timeframe,
@@ -112,6 +122,34 @@ def test_analysis_marks_profitable_30_trade_window_as_candidate_only():
     assert report["metrics"]["profit_factor"] == 3.0
     assert report["promotion_candidate"] is True
     assert report["authorizes_live_execution"] is False
+
+
+def test_analysis_blocks_promotion_when_any_exit_trigger_evidence_is_missing():
+    trades = [_trade(index, winning=index < 18) for index in range(30)]
+    trades[-1].exit_evidence_json = None
+
+    report = analyze_strategy_trades(trades)
+
+    assert report["metrics"]["verified_exit_evidence_trades"] == 29
+    assert report["metrics"]["missing_exit_evidence_trades"] == 1
+    assert report["gates"]["timely_recorded_exit_evidence_complete"] is False
+    assert report["promotion_candidate"] is False
+
+
+def test_analysis_excludes_recorded_but_stale_exit_trigger():
+    trades = [_trade(index, winning=index < 18) for index in range(30)]
+    evidence = json.loads(trades[-1].exit_evidence_json)
+    evidence["quote_age_seconds"] = 6.0
+    trades[-1].exit_evidence_json = json.dumps(evidence)
+
+    report = analyze_strategy_trades(trades)
+
+    assert report["metrics"]["closed_trades"] == 29
+    assert report["metrics"]["verified_exit_evidence_trades"] == 29
+    assert report["metrics"]["timely_exit_evidence_trades"] == 29
+    assert report["metrics"]["stale_or_untimed_exit_evidence_trades"] == 0
+    assert report["metrics"]["excluded_operationally_contaminated_trades"] == 1
+    assert report["promotion_candidate"] is False
 
 
 def test_due_evaluation_creates_one_immutable_paper_candidate():
@@ -160,6 +198,170 @@ def test_due_evaluation_waits_for_thirty_closed_trades():
         assert db.query(StrategyLearningEvaluation).count() == 0
         assert db.query(StrategyVersionConfig).count() == 0
         assert db.query(AppNotification).count() == 0
+    finally:
+        db.close()
+
+
+def test_stale_learning_snapshot_is_recalculated_but_cannot_promote():
+    db = _session()
+    try:
+        rows = [_row(index + 1, winning=True) for index in range(30)]
+        contaminated = rows[-1]
+        contaminated.exit_reason = "TIME_EXIT"
+        contaminated.max_hold_hours = 48
+        contaminated.closed_at = contaminated.opened_at + timedelta(hours=60)
+        db.add_all(rows)
+        db.add(
+            StrategyLearningEvaluation(
+                strategy_id=CORE_SIGNAL_STRATEGY["id"],
+                strategy_version=CORE_SIGNAL_STRATEGY["version"],
+                milestone=30,
+                window_size=30,
+                closed_trade_count=30,
+                status="PROMOTION_CANDIDATE",
+                metrics_json=json.dumps({"metric_version": "STOP_CAUSE_COHORT_V3"}),
+                diagnostics_json="{}",
+                recommended_changes_json="{}",
+            )
+        )
+        db.commit()
+
+        payload = latest_evaluations(db, [CORE_SIGNAL_STRATEGY])[
+            (CORE_SIGNAL_STRATEGY["id"], CORE_SIGNAL_STRATEGY["version"])
+        ]
+
+        assert payload["status"] == "CLEAN_EVIDENCE_RECALCULATED_PREVIEW"
+        assert payload["metrics"]["total_observed_closed_trades"] == 30
+        assert payload["metrics"]["excluded_operationally_contaminated_trades"] == 1
+        assert payload["metrics"]["evidence_snapshot_persisted"] is False
+        assert payload["metrics"]["gates"]["persisted_clean_evidence_snapshot"] is False
+        assert payload["candidate_version"] is None
+        assert payload["authorizes_live_execution"] is False
+    finally:
+        db.close()
+
+
+def test_latest_evaluations_returns_latest_row_for_each_requested_strategy():
+    db = _session()
+    second_definition = {
+        **CORE_SIGNAL_STRATEGY,
+        "id": "SECOND_TEST_STRATEGY",
+        "version": "second_test_v1",
+    }
+    current_metrics = json.dumps({
+        "metric_version": "STOP_CAUSE_COHORT_V3",
+        "evidence_policy": "CLEAN_OPERATIONAL_EXIT_EVIDENCE_V2",
+        "evidence_snapshot_persisted": True,
+    })
+    try:
+        db.add_all([
+            StrategyLearningEvaluation(
+                strategy_id=CORE_SIGNAL_STRATEGY["id"],
+                strategy_version=CORE_SIGNAL_STRATEGY["version"],
+                milestone=30,
+                window_size=30,
+                closed_trade_count=30,
+                status="COLLECTING",
+                metrics_json=current_metrics,
+                diagnostics_json="{}",
+                recommended_changes_json="{}",
+            ),
+            StrategyLearningEvaluation(
+                strategy_id=CORE_SIGNAL_STRATEGY["id"],
+                strategy_version=CORE_SIGNAL_STRATEGY["version"],
+                milestone=40,
+                window_size=30,
+                closed_trade_count=40,
+                status="LATEST_CORE",
+                metrics_json=current_metrics,
+                diagnostics_json="{}",
+                recommended_changes_json="{}",
+            ),
+            StrategyLearningEvaluation(
+                strategy_id=second_definition["id"],
+                strategy_version=second_definition["version"],
+                milestone=30,
+                window_size=30,
+                closed_trade_count=30,
+                status="LATEST_SECOND",
+                metrics_json=current_metrics,
+                diagnostics_json="{}",
+                recommended_changes_json="{}",
+            ),
+        ])
+        db.commit()
+
+        payloads = latest_evaluations(db, [CORE_SIGNAL_STRATEGY, second_definition])
+
+        assert payloads[(CORE_SIGNAL_STRATEGY["id"], CORE_SIGNAL_STRATEGY["version"])]["status"] == "LATEST_CORE"
+        assert payloads[(second_definition["id"], second_definition["version"])]["status"] == "LATEST_SECOND"
+    finally:
+        db.close()
+
+
+def test_latest_evaluations_batches_stale_strategy_trade_recalculation():
+    db = _session()
+    second_definition = {
+        **CORE_SIGNAL_STRATEGY,
+        "id": "SECOND_TEST_STRATEGY",
+        "version": "second_test_v1",
+    }
+    try:
+        first_trade = _row(1, winning=True)
+        second_trade = _row(2, winning=False)
+        second_trade.strategy_id = second_definition["id"]
+        second_trade.strategy_version = second_definition["version"]
+        db.add_all([
+            first_trade,
+            second_trade,
+            StrategyLearningEvaluation(
+                strategy_id=CORE_SIGNAL_STRATEGY["id"],
+                strategy_version=CORE_SIGNAL_STRATEGY["version"],
+                milestone=30,
+                window_size=30,
+                closed_trade_count=30,
+                status="COLLECTING",
+                metrics_json="{}",
+                diagnostics_json="{}",
+                recommended_changes_json="{}",
+            ),
+            StrategyLearningEvaluation(
+                strategy_id=second_definition["id"],
+                strategy_version=second_definition["version"],
+                milestone=30,
+                window_size=30,
+                closed_trade_count=30,
+                status="COLLECTING",
+                metrics_json="{}",
+                diagnostics_json="{}",
+                recommended_changes_json="{}",
+            ),
+        ])
+        db.commit()
+        statements = []
+
+        def record_statement(_connection, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement)
+
+        engine = db.get_bind()
+        event.listen(engine, "before_cursor_execute", record_statement)
+        try:
+            payloads = latest_evaluations(db, [CORE_SIGNAL_STRATEGY, second_definition])
+        finally:
+            event.remove(engine, "before_cursor_execute", record_statement)
+
+        trade_selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+            and "FROM strategy_shadow_trades" in statement
+        ]
+        assert len(trade_selects) == 1
+        assert len(payloads) == 2
+        assert all(
+            payload["status"] == "CLEAN_EVIDENCE_RECALCULATED_PREVIEW"
+            for payload in payloads.values()
+        )
     finally:
         db.close()
 

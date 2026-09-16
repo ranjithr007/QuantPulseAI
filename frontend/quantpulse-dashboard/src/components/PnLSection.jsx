@@ -18,8 +18,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -36,7 +34,6 @@ import {
 } from "../utils/executorCompetition";
 import { formatDate, formatInr, formatPercent, formatPrice, formatSigned, safeNumber, timestampMillis, tooltipStyle } from "../utils/formatters";
 
-const CHART_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#a78bfa", "#60a5fa"];
 const STAGED_EXIT_POLICIES = new Set(["PAPER_ATR_STRUCTURE_V1", "PAPER_STAGED_EXIT_V2", "PAPER_STAGED_EXIT_V1", "BTC_1H_STAGED_V1"]);
 
 export default function PnLSection({
@@ -49,14 +46,30 @@ export default function PnLSection({
   winningTrades,
   losingTrades,
   winRate,
+  averageProfit,
+  averageLoss,
+  averagePnlScope,
+  performanceHealth,
   tradeHistory,
   closedTradeCount,
   openPositions,
   paperWallet,
   ledgerScope,
+  headlineMeasurement,
+  cleanPerformance,
+  confidenceCalibration,
+  returnDecomposition,
+  measurementEvaluation,
+  measurementDataQuality,
+  exitClassificationCohorts,
+  operationalExitQuality,
+  operationalExitQualityError,
   pnlBySymbol,
   pnlBySide,
+  pnlBreakdownScope,
+  pnlCohorts,
   equitySeries,
+  equityCurveMeta,
   auto,
   selectedDetail,
   autoDecision,
@@ -64,13 +77,7 @@ export default function PnLSection({
   selectedPaperTradeCandidate,
 }) {
   const accountLedgerPending = !ledgerScope || ledgerScope.symbol_filter !== null;
-  if (accountLedgerPending) {
-    return <PnlLedgerLoading />;
-  }
-
   const totalTrades = (closedTradeCount ?? tradeHistory.length) + openPositions.length;
-  const avgProfit = averagePnl(tradeHistory, true);
-  const avgLoss = averagePnl(tradeHistory, false);
   const entryTrigger = selectedDetail?.timing?.trigger || selectedDetail?.entryTrigger?.trigger || selectedDetail?.timing || selectedDetail?.entryTrigger || null;
   const tradeSetup = selectedDetail?.prediction?.setup || selectedDetail?.tradeSetup?.setup || selectedDetail?.prediction || selectedDetail?.tradeSetup || null;
   const entryBand = entryTrigger?.confidence_window || tradeSetup?.confidence_window || null;
@@ -94,6 +101,7 @@ export default function PnLSection({
   const eligibilityBlocked = !["Eligible", "Ready to execute"].includes(eligibilityState.label);
   const entryTriggerWaiting = executionState === "WAIT";
   const executor = executorState(selectedPaperTradeCandidate);
+  const exactEquityCurve = equityCurveMeta?.scope === "PAPER_PRODUCTION_REALIZED_LEDGER";
 
   return (
     <section className="border-b border-white/5">
@@ -106,6 +114,8 @@ export default function PnLSection({
           </div>
         </div>
 
+        {accountLedgerPending ? <PnlLedgerLoading /> : null}
+
         {Number(ledgerScope?.quarantined_records || 0) > 0 ? (
           <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2.5 text-sm text-cyan-100">
             <span className="font-medium">QA evidence quarantined:</span>{" "}
@@ -113,7 +123,75 @@ export default function PnLSection({
           </div>
         ) : null}
 
-        <PaperWalletStrip wallet={paperWallet} openPositions={openPositions} />
+        {paperWallet?.entry_protection?.new_entries_paused ? (
+          <div className="mt-3 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-100" role="alert">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium">New official paper entries paused</span>
+              <Pill tone="rose">PORTFOLIO SAFETY</Pill>
+            </div>
+            <div className="mt-1 text-xs leading-5 text-rose-200/85">
+              Marked-equity drawdown is {formatPercent(paperWallet.entry_protection.drawdown_percent, 2)}; the safety limit is {formatPercent(paperWallet.entry_protection.limit_percent, 2)}. Existing positions remain under normal exit monitoring.
+            </div>
+          </div>
+        ) : null}
+
+        {paperWallet?.exit_protection?.ready === false ? (
+          <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100" role="alert">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium">New entries blocked: exit protection unavailable</span>
+              <Pill tone="amber">FAST EXIT SAFETY</Pill>
+            </div>
+            <div className="mt-1 text-xs leading-5 text-amber-200/85">
+              {paperWallet.exit_protection.reason || "The one-second exit worker is not ready."} Existing positions remain monitored when the worker recovers.
+            </div>
+          </div>
+        ) : null}
+
+        {operationalExitQualityError ? (
+          <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100" role="alert">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium">Exit-data quality unavailable</span>
+              <Pill tone="amber">AUDIT UNAVAILABLE</Pill>
+            </div>
+            <div className="mt-1 text-xs leading-5 text-amber-200/85">
+              {operationalExitQualityError}. Positions, wallet, performance, and trade history continue to load independently.
+            </div>
+          </div>
+        ) : null}
+
+        {Number(operationalExitQuality?.late_time_exits || 0) > 0 || Number(operationalExitQuality?.stale_recorded_exit_triggers || 0) > 0 ? (
+          <div className="mt-3 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-100" role="alert">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium">Historical PNL contains operationally delayed exits</span>
+              <Pill tone="rose">EXIT DATA QUALITY</Pill>
+            </div>
+            <div className="mt-1 text-xs leading-5 text-rose-200/85">
+              {Number(operationalExitQuality.late_time_exits || 0) > 0 ? `${operationalExitQuality.late_time_exits} of ${operationalExitQuality.time_exits || operationalExitQuality.closed_trades || 0} recorded time exits breached their deadline by more than ${formatDurationMinutes(operationalExitQuality.deadline_grace_minutes)}. The longest delay was ${formatDurationMinutes(operationalExitQuality.maximum_exit_delay_minutes)}, and the affected trades contributed ${formatSigned(operationalExitQuality.late_time_exit_net_pnl_percent)}% to the closed-trade return sum.` : ""}
+              {Number(operationalExitQuality.stale_recorded_exit_triggers || 0) > 0 ? ` ${operationalExitQuality.stale_recorded_exit_triggers} recorded trigger(s) exceeded the ${operationalExitQuality.maximum_promotion_quote_age_seconds}s promotion-quality limit; the largest observation delay was ${operationalExitQuality.maximum_recorded_trigger_quote_age_seconds}s.` : ""}
+              {" These operationally contaminated outcomes remain included in headline PNL for audit continuity, but are excluded from clean strategy evidence."}
+            </div>
+          </div>
+        ) : null}
+
+        {paperWallet ? <PaperWalletStrip wallet={paperWallet} openPositions={openPositions} /> : null}
+
+        {performanceHealth ? <HistoricalEdgeHealth health={performanceHealth} /> : null}
+
+        {headlineMeasurement && cleanPerformance ? (
+          <CleanEvidenceComparison
+            headline={headlineMeasurement}
+            clean={cleanPerformance}
+            evaluation={measurementEvaluation}
+          />
+        ) : null}
+
+        {confidenceCalibration ? (
+          <ConfidenceCalibration evidence={confidenceCalibration} />
+        ) : null}
+
+        {returnDecomposition ? (
+          <ReturnDecomposition evidence={returnDecomposition} />
+        ) : null}
 
         {selectedDetail ? (
           <div
@@ -206,9 +284,9 @@ export default function PnLSection({
 
         <div className="mt-3 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="Total trades" value={totalTrades} note="Open + closed" icon={Wallet} accent="cyan" compact />
-          <MetricCard label="Winning trades" value={winningTrades} note="Closed trades" icon={ShieldCheck} accent="emerald" compact />
-          <MetricCard label="Losing trades" value={losingTrades} note="Closed trades" icon={ShieldAlert} accent="rose" compact />
-          <MetricCard label="Avg profit / loss" value={`${formatSigned(avgProfit)} / ${formatSigned(avgLoss)}`} note="Closed samples" icon={BarChart3} accent="amber" compact />
+          <MetricCard label="Profit factor" value={formatRatio(performanceHealth?.profit_factor)} note="Gross winning return ÷ gross losing return" icon={ShieldCheck} accent={performanceHealth?.status === "POSITIVE" ? "emerald" : "rose"} compact />
+          <MetricCard label="Payoff ratio" value={formatRatio(performanceHealth?.payoff_ratio)} note="Average winner ÷ average loser" icon={ShieldAlert} accent={safeNumber(performanceHealth?.payoff_ratio, 0) >= 1 ? "emerald" : "rose"} compact />
+          <MetricCard label="Avg profit / loss" value={`${formatSigned(averageProfit)} / ${formatSigned(averageLoss)}`} note={averagePnlScope === "ALL_CLOSED_TRADES" ? `All ${closedTradeCount ?? 0} official closed trades` : `Loaded ${tradeHistory.length}-trade sample`} icon={BarChart3} accent="amber" compact />
         </div>
 
         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-2">
@@ -254,10 +332,10 @@ export default function PnLSection({
           <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-medium text-white">Equity curve</div>
-                <div className="text-xs text-slate-500">Loaded {tradeHistory.length}-trade sample · cumulative trade percentages, not account return</div>
+                <div className="text-sm font-medium text-white">{exactEquityCurve ? "Realized wallet equity" : "Equity curve"}</div>
+                <div className="text-xs text-slate-500">{exactEquityCurve ? `${equityCurveMeta.event_count} production ledger events${equityCurveMeta.downsampled ? ` · chart bounded to ${equityCurveMeta.point_count} points` : ""} · excludes open-position unrealized PNL` : `Loaded ${tradeHistory.length}-trade sample · cumulative trade percentages, not account return`}</div>
               </div>
-              <Pill tone="cyan">{formatSigned(maxDrawdown)} max drawdown</Pill>
+              <Pill tone="cyan">{formatPercent(maxDrawdown, 2)} {exactEquityCurve ? "max realized drawdown" : "sample drawdown"}</Pill>
             </div>
             <div className="h-60 min-w-0 w-full">
               <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 720, height: 240 }}>
@@ -270,8 +348,8 @@ export default function PnLSection({
                   </defs>
                   <CartesianGrid stroke="rgba(148,163,184,0.12)" vertical={false} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
-                  <Tooltip contentStyle={tooltipStyle()} />
+                  <YAxis tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} tickFormatter={(value) => exactEquityCurve ? formatInr(value, 0) : value} width={exactEquityCurve ? 92 : 60} />
+                  <Tooltip formatter={(value) => [exactEquityCurve ? formatInr(value, 2) : formatSigned(value), exactEquityCurve ? "Realized equity" : "Cumulative return"]} contentStyle={tooltipStyle()} />
                   <Area type="monotone" dataKey="equity" stroke="#22d3ee" fill="url(#equityFill)" strokeWidth={2} />
                 </AreaChart>
               </ResponsiveContainer>
@@ -281,32 +359,35 @@ export default function PnLSection({
           <div className="min-w-0 rounded-lg border border-white/10 bg-slate-900/70 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-medium text-white">PnL mix</div>
-                <div className="text-xs text-slate-500">Loaded sample by signal type · not lifetime totals</div>
+                <div className="text-sm font-medium text-white">PNL by side</div>
+                <div className="text-xs text-slate-500">{pnlBreakdownScope === "ALL_CLOSED_TRADES" ? `All ${closedTradeCount ?? 0} official closed trades` : `Loaded ${tradeHistory.length}-trade sample`} · signed trade-return sums</div>
               </div>
-              <Pill tone="slate">{tradeHistory.length} closed</Pill>
+              <Pill tone="slate">{pnlBreakdownScope === "ALL_CLOSED_TRADES" ? closedTradeCount : tradeHistory.length} closed</Pill>
             </div>
             <div className="h-36 min-w-0 w-full">
               <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 420, height: 144 }}>
-                <PieChart>
-                  <Pie data={pnlBySide} dataKey="value" nameKey="name" innerRadius={35} outerRadius={65}>
-                    {pnlBySide.map((entry, index) => (
-                      <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
+                <BarChart data={pnlBySide} layout="vertical">
+                  <CartesianGrid stroke="rgba(148,163,184,0.12)" horizontal={false} />
+                  <XAxis type="number" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} />
+                  <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 11 }} width={54} />
                   <Tooltip formatter={(value) => [formatSigned(value), "PnL"]} contentStyle={tooltipStyle()} />
-                </PieChart>
+                  <Bar dataKey="value" radius={[6, 6, 6, 6]}>
+                    {pnlBySide.map((entry) => (
+                      <Cell key={entry.name} fill={pnlColor(entry.value)} />
+                    ))}
+                  </Bar>
+                </BarChart>
               </ResponsiveContainer>
             </div>
 
             <div className="mt-2 space-y-1.5">
-              {pnlBySide.map((item, index) => (
+              {pnlBySide.map((item) => (
                 <div key={item.name} className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-950/70 px-3 py-1.5">
                   <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }} />
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: pnlColor(item.value) }} />
                     <span className="text-sm text-slate-300">{item.name}</span>
                   </div>
-                  <span className="text-sm font-medium text-white">{formatSigned(item.value)}</span>
+                  <span className={clsx("text-sm font-medium", safeNumber(item.value, 0) >= 0 ? "text-emerald-300" : "text-rose-300")}>{formatSigned(item.value)}</span>
                 </div>
               ))}
             </div>
@@ -318,7 +399,7 @@ export default function PnLSection({
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">PNL by symbol</div>
-                <div className="text-xs text-slate-500">Loaded closed-trade sample · not lifetime account return</div>
+                <div className="text-xs text-slate-500">{pnlBreakdownScope === "ALL_CLOSED_TRADES" ? `All ${closedTradeCount ?? 0} official closed trades` : `Loaded ${tradeHistory.length}-trade sample`} · signed trade-return sums, not account return</div>
               </div>
             </div>
             <div className="h-60 min-w-0 w-full">
@@ -329,8 +410,8 @@ export default function PnLSection({
                   <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#475569", fontSize: 11 }} width={80} />
                   <Tooltip formatter={(value) => [formatSigned(value), "PnL"]} contentStyle={tooltipStyle()} />
                   <Bar dataKey="value" radius={[0, 8, 8, 0]}>
-                    {pnlBySymbol.map((entry, index) => (
-                      <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                    {pnlBySymbol.map((entry) => (
+                      <Cell key={entry.name} fill={pnlColor(entry.value)} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -338,6 +419,17 @@ export default function PnLSection({
             </div>
           </div>
         </div>
+
+        {pnlCohorts?.scope === "ALL_OFFICIAL_CLOSED_TRADES" ? (
+          <PnlCohortDiagnostics breakdown={pnlCohorts} />
+        ) : null}
+
+        {exitClassificationCohorts?.length ? (
+          <ExitClassificationDiagnostics
+            records={exitClassificationCohorts}
+            missingActivationCount={measurementDataQuality?.closed_trades_missing_trailing_activation}
+          />
+        ) : null}
 
         <div className="mt-3.5">
           <OpenPositionsTable openPositions={openPositions} />
@@ -372,6 +464,228 @@ function executorState(candidate) {
     note: blockers[0] || "Queued OPEN trade plan is blocked by executor checks.",
     tone: "rose",
   };
+}
+
+function HistoricalEdgeHealth({ health }) {
+  const status = String(health?.status || "NO_CLOSED_TRADES").toUpperCase();
+  const positive = status === "POSITIVE";
+  const flat = status === "FLAT" || status === "NO_CLOSED_TRADES";
+  const tone = positive ? "emerald" : flat ? "amber" : "rose";
+  const title = positive
+    ? "Historical paper-trading edge is positive"
+    : flat
+      ? "Historical paper-trading edge is not established"
+      : "Historical paper-trading edge is negative";
+
+  return (
+    <div className={clsx(
+      "mt-3 rounded-lg border px-3 py-2.5 text-sm",
+      positive
+        ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-100"
+        : flat
+          ? "border-amber-400/25 bg-amber-500/10 text-amber-100"
+          : "border-rose-400/30 bg-rose-500/10 text-rose-100"
+    )}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium">{title}</span>
+        <Pill tone={tone}>{status.replaceAll("_", " ")}</Pill>
+      </div>
+      <div className="mt-1 text-xs leading-5 opacity-85">
+        Profit factor {formatRatio(health.profit_factor)} · payoff ratio {formatRatio(health.payoff_ratio)} · profitable-trade rate {formatPercent(health.profitable_win_rate_percent, 2)} versus estimated break-even {formatPercent(health.breakeven_win_rate_percent, 2)} ({formatSigned(health.win_rate_gap_percent)} percentage points). Expectancy is {formatSigned(health.expectancy_percent)}% per official closed trade.
+      </div>
+    </div>
+  );
+}
+
+function CleanEvidenceComparison({ headline, clean, evaluation }) {
+  const excluded = Number(evaluation?.excluded_operationally_contaminated_exits || 0);
+  const cleanNegative = safeNumber(clean?.expectancy_percent, 0) < 0;
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-slate-900/70 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-white">Headline versus clean strategy evidence</div>
+          <div className="text-xs text-slate-500">Clean evidence excludes {excluded} operationally contaminated exit{excluded === 1 ? "" : "s"}; account PNL remains unchanged.</div>
+        </div>
+        <Pill tone={cleanNegative ? "rose" : "emerald"}>{cleanNegative ? "STILL NEGATIVE" : "POSITIVE"}</Pill>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <EvidenceMetric label="Headline return sum" value={`${formatSigned(headline.net_pnl_percent)}%`} note={`${headline.closed_trades || 0} official closed trades`} />
+        <EvidenceMetric label="Clean return sum" value={`${formatSigned(clean.net_pnl_percent)}%`} note={`${clean.closed_trades || 0} clean closed trades`} />
+        <EvidenceMetric label="Clean profit factor" value={formatRatio(clean.profit_factor)} note={`Headline ${formatRatio(headline.profit_factor)}`} />
+        <EvidenceMetric label="Clean expectancy" value={`${formatSigned(clean.expectancy_percent)}%`} note={`Headline ${formatSigned(headline.expectancy_percent)}% per trade`} />
+      </div>
+      <div className={clsx("mt-2 text-xs leading-5", cleanNegative ? "text-rose-200/85" : "text-emerald-200/85")}>
+        {cleanNegative
+          ? "Delayed or stale exits explain part of the loss, but not all of it: clean strategy evidence remains negative."
+          : "Clean operational evidence is positive, although the headline account ledger still includes every audited exit."}
+      </div>
+    </div>
+  );
+}
+
+function EvidenceMetric({ label, value, note }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2.5">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div>
+      <div className="mt-1 text-base font-semibold text-white">{value}</div>
+      <div className="mt-0.5 text-[11px] text-slate-500">{note}</div>
+    </div>
+  );
+}
+
+function ConfidenceCalibration({ evidence }) {
+  const insufficient = evidence.status === "INSUFFICIENT_EVIDENCE";
+  const aligned = evidence.status === "DIRECTIONALLY_ALIGNED";
+  const higherUnderperforms = evidence.direction === "HIGHER_UNDERPERFORMS";
+  const tone = aligned ? "emerald" : insufficient ? "amber" : "rose";
+  const lower = evidence.below_60 || {};
+  const higher = evidence.at_least_60 || {};
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-slate-900/70 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-white">Confidence calibration evidence</div>
+          <div className="text-xs text-slate-500">Fixed score groups selected before reading outcomes · descriptive evidence, not threshold tuning</div>
+        </div>
+        <Pill tone={tone}>{String(evidence.status || "UNKNOWN").replaceAll("_", " ")}</Pill>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <EvidenceMetric label="Confidence below 60" value={`${formatSigned(lower.expectancy_percent)}%`} note={`${lower.closed_trades || 0} trades · ${formatPercent(lower.win_rate, 2)} win rate`} />
+        <EvidenceMetric label="Confidence 60+" value={`${formatSigned(higher.expectancy_percent)}%`} note={`${higher.closed_trades || 0} trades · ${formatPercent(higher.win_rate, 2)} win rate`} />
+        <EvidenceMetric label="Expectancy separation" value={`${formatSigned(evidence.expectancy_gap_percentage_points)} pp`} note="60+ expectancy minus below-60 expectancy" />
+        <EvidenceMetric label="Score / PNL correlation" value={formatSigned(evidence.confidence_pnl_correlation, 3)} note={`${evidence.evaluated_trades || 0} measured closed trades`} />
+      </div>
+      <div className={clsx("mt-2 text-xs leading-5", aligned ? "text-emerald-200/85" : higherUnderperforms ? "text-rose-200/85" : "text-amber-200/85")}>
+        {higherUnderperforms
+          ? "Higher-confidence trades currently underperform the lower-confidence group. Confidence cannot justify promotion or larger sizing."
+          : aligned
+            ? "Higher-confidence trades are directionally better in this sample, but this association alone does not authorize promotion."
+            : "The current sample does not demonstrate useful confidence separation."}
+        {insufficient ? ` At least ${evidence.minimum_trades_per_group || 0} closed trades are required in each fixed group.` : ""}
+      </div>
+    </div>
+  );
+}
+
+function ReturnDecomposition({ evidence }) {
+  const complete = evidence.status === "COMPLETE";
+  const preCostNegative = evidence.pre_cost_result === "NEGATIVE";
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-slate-900/70 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-white">Return and trading-cost decomposition</div>
+          <div className="text-xs text-slate-500">Exact persisted components across {evidence.reconciled_trades || 0} of {evidence.closed_trades || 0} official closed trades</div>
+        </div>
+        <Pill tone={complete ? "cyan" : "amber"}>{complete ? "RECONCILED" : "INCOMPLETE"}</Pill>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <EvidenceMetric label="Post-fill gross return" value={`${formatSigned(evidence.post_fill_gross_return_percent)}%`} note="Price return after simulated slippage, before fees and funding" />
+        <EvidenceMetric label="Trading fees" value={`−${formatUnsigned(evidence.fees_percent)}%`} note="Persisted round-trip fee drag" />
+        <EvidenceMetric label="Funding cost" value={`${formatSigned(-safeNumber(evidence.funding_cost_percent, 0))}%`} note="Negative display means a cost; positive means a credit" />
+        <EvidenceMetric label="Official net return" value={`${formatSigned(evidence.net_return_percent)}%`} note={`Reconciliation error ${formatSigned(evidence.reconciliation_error_percent, 4)}%`} />
+      </div>
+      <div className={clsx("mt-2 text-xs leading-5", preCostNegative ? "text-rose-200/85" : "text-amber-200/85")}>
+        {preCostNegative
+          ? `The strategy was already negative before fees and funding. Costs added ${formatPercent(evidence.total_cost_drag_percent, 2)} of drag, equal to ${formatPercent(evidence.cost_share_of_net_loss_percent, 2)} of the net loss.`
+          : "The post-fill price result was not negative; review whether costs changed the final result sign."}
+        {" Slippage is already embedded in the simulated fill prices and is not subtracted again."}
+      </div>
+    </div>
+  );
+}
+
+function formatUnsigned(value, digits = 2) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.abs(number).toFixed(digits) : "N/A";
+}
+
+function ExitClassificationDiagnostics({ records, missingActivationCount }) {
+  const sorted = [...records].sort(
+    (left, right) => safeNumber(left.net_pnl_percent, 0) - safeNumber(right.net_pnl_percent, 0)
+  );
+  const total = sorted.reduce((sum, item) => sum + Number(item.closed_trades || 0), 0);
+
+  return (
+    <div className="mt-3.5 rounded-lg border border-white/10 bg-slate-900/70 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-white">PNL by exact exit classification</div>
+          <div className="text-xs text-slate-500">Recorded trigger evidence first, with persisted stop-level inference for legacy trades · all {total} official closed trades</div>
+        </div>
+        <Pill tone="slate">EXIT CAUSE</Pill>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        {sorted.map((item) => (
+          <div key={item.value} className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2.5">
+            <div className="truncate text-[10px] uppercase tracking-[0.12em] text-slate-500" title={exitClassificationLabel(item.value)}>{exitClassificationLabel(item.value)}</div>
+            <div className={clsx("mt-1 text-base font-semibold", pnlValueTone(item.net_pnl_percent))}>{formatSigned(item.net_pnl_percent)}%</div>
+            <div className="mt-0.5 text-[11px] text-slate-500">{item.closed_trades || 0} trades · {item.wins || 0} profitable</div>
+          </div>
+        ))}
+      </div>
+      {Number(missingActivationCount || 0) > 0 ? (
+        <div className="mt-2 text-xs leading-5 text-amber-200/85">
+          {missingActivationCount} historical trade{Number(missingActivationCount) === 1 ? "" : "s"} lack an explicit trailing-activation value and retain the legacy immediate-trailing interpretation. New trades persist the activation policy explicitly.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function exitClassificationLabel(value) {
+  return String(value || "UNKNOWN").replaceAll("_", " ");
+}
+
+function PnlCohortDiagnostics({ breakdown }) {
+  const coverage = breakdown?.attribution_coverage || {};
+  const total = Number(coverage.closed_trades || 0);
+  const strategyCoverage = total ? (Number(coverage.strategy_attributed_trades || 0) / total) * 100 : 0;
+  const regimeCoverage = total ? (Number(coverage.regime_attributed_trades || 0) / total) * 100 : 0;
+  const cohorts = [
+    ["Strategy", breakdown.by_strategy],
+    ["Regime", breakdown.by_regime],
+    ["Timeframe", breakdown.by_timeframe],
+    ["Recorded exit trigger", breakdown.by_exit_reason],
+  ];
+
+  return (
+    <div className="mt-3.5 rounded-lg border border-white/10 bg-slate-900/70 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-white">Full-cohort PNL drivers</div>
+          <div className="text-xs text-slate-500">Exact signed trade-return sums across all {total} official closed trades · strategy attribution {formatPercent(strategyCoverage, 1)} · regime attribution {formatPercent(regimeCoverage, 1)}</div>
+        </div>
+        <Pill tone="slate">RECORDED EVIDENCE</Pill>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {cohorts.map(([title, records]) => (
+          <CohortPnlList key={title} title={title} records={records} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CohortPnlList({ title, records = [] }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-950/50 p-2.5">
+      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">{title}</div>
+      <div className="mt-2 space-y-1.5">
+        {records.slice(0, 8).map((item) => (
+          <div key={item.name} className="flex items-center justify-between gap-3 text-xs">
+            <span className="min-w-0 truncate text-slate-300" title={item.name}>{item.name}</span>
+            <span className={clsx("shrink-0 font-medium", pnlValueTone(item.value))}>{formatSigned(item.value)}% · {item.closed_trades}</span>
+          </div>
+        ))}
+        {!records.length ? <div className="text-xs text-slate-500">No attributed trades</div> : null}
+      </div>
+    </div>
+  );
 }
 
 function DiagnosticStrip({ label, value, note, tone = "slate" }) {
@@ -525,6 +839,15 @@ function formatAgeShort(seconds) {
   return `${Math.round(total / 86400)}d`;
 }
 
+function formatDurationMinutes(value) {
+  const minutes = Math.max(0, Number(value) || 0);
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
+  const days = hours / 24;
+  return `${days.toFixed(days < 10 ? 1 : 0)}d`;
+}
+
 function PaperWalletStrip({ wallet, openPositions }) {
   const capital = safeNumber(wallet?.initial_capital_inr ?? wallet?.paper_capital_inr, 200000);
   const walletBalance = safeNumber(wallet?.wallet_balance_inr, capital);
@@ -555,18 +878,12 @@ function PaperWalletStrip({ wallet, openPositions }) {
 
 function PnlLedgerLoading() {
   return (
-    <section className="border-b border-white/5">
-      <div className="mx-auto w-full max-w-[1680px] px-4 py-4 sm:px-6 lg:px-8">
-        <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">PnL Dashboard</div>
-        <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Trade performance</h2>
-        <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-4 py-4 text-sm text-cyan-100" role="status">
-          <div className="font-medium">Loading the account-wide paper ledger...</div>
-          <div className="mt-1 text-xs text-cyan-200/80">
-            Open positions, wallet balances, and PNL totals will appear together after the authoritative account bundle is ready.
-          </div>
-        </div>
+    <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100" role="status">
+      <div className="font-medium">Loading the account-wide wallet summary...</div>
+      <div className="mt-1 text-xs text-cyan-200/80">
+        Open positions, performance, and trade history load independently and remain available while the wallet summary is pending.
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -716,6 +1033,15 @@ function pnlValueTone(value) {
   return Number(value) >= 0 ? "text-emerald-300" : "text-rose-300";
 }
 
+function pnlColor(value) {
+  return safeNumber(value, 0) >= 0 ? "#34d399" : "#fb7185";
+}
+
+function formatRatio(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "N/A";
+}
+
 function isStagedExitPolicy(trade) {
   return STAGED_EXIT_POLICIES.has(String(trade?.exit_policy || "").toUpperCase());
 }
@@ -739,11 +1065,4 @@ function exitTimeRemainingLabel(trade) {
   if (remainingMs <= 0) return "Time exit due";
   const hours = Math.ceil(remainingMs / (60 * 60 * 1000));
   return `${hours}h remaining`;
-}
-
-
-function averagePnl(trades, positive) {
-  const items = trades.filter((trade) => (safeNumber(trade.pnl_percent, 0) > 0) === positive);
-  if (!items.length) return 0;
-  return Number((items.reduce((sum, trade) => sum + safeNumber(trade.pnl_percent, 0), 0) / items.length).toFixed(2));
 }

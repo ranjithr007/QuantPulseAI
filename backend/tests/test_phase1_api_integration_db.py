@@ -47,6 +47,12 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         cls._original_current_signal_validation = (
             paper_trade_api._current_signal_validation
         )
+        cls._original_exit_protection_snapshot = (
+            paper_trade_api.exit_protection_snapshot
+        )
+        cls._original_official_strategy_evidence = (
+            paper_trade_api._official_strategy_evidence
+        )
         paper_trade_api.SessionLocal = TestSessionLocal
         paper_trade_api._current_signal_validation = lambda *args, **kwargs: {
             "status": "VALID",
@@ -60,6 +66,18 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
             "observed_at": datetime.now(timezone.utc),
             "source": "TEST_MARK",
         }
+        paper_trade_api.exit_protection_snapshot = lambda: {
+            "policy": "FAST_EXIT_HEARTBEAT_V1",
+            "ready": True,
+            "status": "READY",
+            "reason": None,
+        }
+        paper_trade_api._official_strategy_evidence = lambda db: {
+            (TREND_PULLBACK_STRATEGY_ID, TREND_PULLBACK_STRATEGY_VERSION): {
+                "status": "PROMOTABLE",
+                "official_execution_allowed": True,
+            }
+        }
         cls.client = TestClient(app)
 
     @classmethod
@@ -70,6 +88,12 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         )
         paper_trade_api._current_signal_validation = (
             cls._original_current_signal_validation
+        )
+        paper_trade_api.exit_protection_snapshot = (
+            cls._original_exit_protection_snapshot
+        )
+        paper_trade_api._official_strategy_evidence = (
+            cls._original_official_strategy_evidence
         )
         cls.client.close()
         TEST_ENGINE.dispose()
@@ -185,13 +209,15 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(execution["executed"][0]["fill_profile"]["entry_fill_price"], 100.06)
         self.assertEqual(execution["executed"][0]["entry_price"], 100.06)
 
-        open_trades = self.client.get("/paper-trade/trades?status=OPEN&symbol=BTCUSDT")
+        open_trades = self.client.get(
+            "/paper-trade/open-positions?symbol=BTCUSDT"
+        )
         self.assertEqual(open_trades.status_code, 200)
 
         open_payload = open_trades.json()
         self.assertEqual(open_payload["count"], 1)
-        self.assertEqual(open_payload["summary"]["open"], 1)
-        self.assertEqual(open_payload["summary"]["closed"], 0)
+        self.assertEqual(open_payload["source"], "paper_trade_open_positions")
+        self.assertTrue(open_payload["query_complete"])
         self.assertEqual(open_payload["records"][0]["entry_price"], 100.06)
 
         performance = self.client.get("/paper-trade/performance?symbol=BTCUSDT")
@@ -203,6 +229,17 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(perf_payload["closed_trades"], 0)
         self.assertEqual(perf_payload["win_rate"], 0)
 
+        account_summary = self.client.get("/paper-trade/account-summary")
+        self.assertEqual(account_summary.status_code, 200)
+
+        account_payload = account_summary.json()
+        self.assertEqual(account_payload["source"], "paper_trade_account_summary")
+        self.assertEqual(account_payload["status"], "READY")
+        self.assertTrue(account_payload["query_complete"])
+        self.assertIsNone(account_payload["symbol_filter"])
+        self.assertEqual(account_payload["ledgerScope"]["scope"], "PAPER_PRODUCTION")
+        self.assertIn("paperWallet", account_payload)
+
     def test_paper_trade_history_is_database_paginated_and_officially_scoped(self):
         now = datetime.utcnow().replace(microsecond=0)
         with TestSessionLocal() as db:
@@ -212,10 +249,15 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
                         symbol="ETHUSDT",
                         side="LONG",
                         entry_price=100.0,
+                        stop_loss=99.0,
+                        initial_stop_loss=99.0,
                         entry_timeframe="5m" if index == 0 else "1h",
                         status="CLOSED",
+                        exit_reason="STOP",
                         result="WIN",
                         pnl_percent=1.0,
+                        execution_evidence_json='{"decision":"approved"}',
+                        exit_evidence_json='{"classification":"INITIAL_STOP"}',
                         closed_at=now + timedelta(seconds=index),
                         created_at=now + timedelta(seconds=index),
                     )
@@ -225,12 +267,11 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
             db.commit()
 
         response = self.client.get(
-            "/paper-trade/trades",
+            "/paper-trade/trade-history",
             params={
-                "status": "CLOSED",
                 "page": 2,
                 "limit": 10,
-                "official_timeframes_only": True,
+                "include_evidence": False,
             },
         )
 
@@ -240,10 +281,113 @@ class Phase1ApiIntegrationDbTests(unittest.TestCase):
         self.assertEqual(payload["count"], 10)
         self.assertEqual(payload["page"], 2)
         self.assertEqual(payload["total_pages"], 3)
+        self.assertEqual(payload["source"], "paper_trade_history")
+        self.assertTrue(payload["query_complete"])
         self.assertTrue(payload["has_next"])
         self.assertTrue(payload["has_previous"])
         self.assertTrue(
             all(item["entry_timeframe"] == "1h" for item in payload["records"])
+        )
+        self.assertTrue(
+            all(item["audit_evidence_included"] is False for item in payload["records"])
+        )
+        self.assertTrue(
+            all(item["exit_classification"] == "INITIAL_STOP" for item in payload["records"])
+        )
+        self.assertTrue(
+            all("execution_evidence" not in item and "exit_evidence" not in item for item in payload["records"])
+        )
+
+        trade_id = payload["records"][0]["id"]
+        audit_response = self.client.get(f"/paper-trade/trade-history/{trade_id}")
+        self.assertEqual(audit_response.status_code, 200)
+        audit = audit_response.json()
+        self.assertEqual(audit["status"], "READY")
+        self.assertTrue(audit["trade"]["audit_evidence_included"])
+        self.assertEqual(audit["trade"]["execution_evidence"]["decision"], "approved")
+        self.assertEqual(audit["trade"]["exit_evidence"]["classification"], "INITIAL_STOP")
+
+        missing = self.client.get("/paper-trade/trade-history/999999").json()
+        self.assertEqual(missing["status"], "NOT_FOUND")
+        self.assertIsNone(missing["trade"])
+
+    def test_paper_trade_performance_returns_full_cohort_win_loss_averages(self):
+        with TestSessionLocal() as db:
+            db.add_all(
+                [
+                    PaperTrade(
+                        symbol="ETHUSDT",
+                        side="LONG",
+                        entry_price=100.0,
+                        entry_timeframe=timeframe,
+                        regime=regime,
+                        strategy_id=strategy_id,
+                        strategy_version="test_v1",
+                        status="CLOSED",
+                        result=result,
+                        pnl_percent=pnl,
+                        exit_reason=exit_reason,
+                        closed_at=datetime.utcnow(),
+                    )
+                    for result, pnl, regime, strategy_id, timeframe, exit_reason in (
+                        ("WIN", 2.0, "BULL_PULLBACK", "REGIME_TREND", "1h", "STOP"),
+                        ("WIN", 4.0, "RANGE_ACCUMULATION", "RANGE_REVERSION", "2h", "TARGET2"),
+                        ("LOSS", -1.0, "BULL_PULLBACK", "REGIME_TREND", "1h", "STOP"),
+                        ("LOSS", -2.0, "BULL_PULLBACK", "REGIME_TREND", "1h", "TIME_EXIT"),
+                    )
+                ]
+            )
+            db.commit()
+
+        performance = self.client.get(
+            "/paper-trade/performance?symbol=ETHUSDT"
+        ).json()["performance"]
+
+        self.assertEqual(performance["closed_trades"], 4)
+        self.assertEqual(performance["average_win_pnl_percent"], 3.0)
+        self.assertEqual(performance["average_loss_pnl_percent"], -1.5)
+        self.assertEqual(performance["edge_health"]["status"], "POSITIVE")
+        self.assertEqual(performance["edge_health"]["profit_factor"], 2.0)
+        self.assertEqual(performance["edge_health"]["payoff_ratio"], 2.0)
+        self.assertEqual(
+            performance["edge_health"]["breakeven_win_rate_percent"],
+            33.33,
+        )
+        self.assertEqual(performance["edge_health"]["win_rate_gap_percent"], 16.67)
+
+        payload = self.client.get(
+            "/paper-trade/performance?symbol=ETHUSDT"
+        ).json()
+        self.assertEqual(payload["breakdown"]["scope"], "ALL_OFFICIAL_CLOSED_TRADES")
+        self.assertEqual(
+            payload["breakdown"]["by_symbol"],
+            [{"name": "ETHUSDT", "value": 3.0, "closed_trades": 4}],
+        )
+        self.assertEqual(
+            payload["breakdown"]["by_side"],
+            [{"name": "LONG", "value": 3.0, "closed_trades": 4}],
+        )
+        self.assertEqual(
+            payload["breakdown"]["by_regime"],
+            [
+                {"name": "RANGE_ACCUMULATION", "value": 4.0, "closed_trades": 1},
+                {"name": "BULL_PULLBACK", "value": -1.0, "closed_trades": 3},
+            ],
+        )
+        self.assertEqual(
+            payload["breakdown"]["by_strategy"],
+            [
+                {"name": "RANGE_REVERSION", "value": 4.0, "closed_trades": 1},
+                {"name": "REGIME_TREND", "value": -1.0, "closed_trades": 3},
+            ],
+        )
+        self.assertEqual(
+            payload["breakdown"]["attribution_coverage"],
+            {
+                "closed_trades": 4,
+                "strategy_attributed_trades": 4,
+                "regime_attributed_trades": 4,
+            },
         )
 
     def test_fill_model_endpoint_returns_simulation_profile(self):

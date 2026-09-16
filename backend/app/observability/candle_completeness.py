@@ -120,6 +120,8 @@ def build_candle_completeness_report(
             if issues:
                 unhealthy.append(key)
 
+            _release_completeness_read(db)
+
     hourly = [
         value
         for value in series.values()
@@ -181,6 +183,18 @@ def cache_candle_completeness_report(report):
 
 def get_cached_candle_completeness_report():
     return _LAST_REPORT
+
+
+def _release_completeness_read(db):
+    """Release locks after one independent series in the scheduled monitor."""
+
+    info = getattr(db, "info", None)
+    if (
+        isinstance(info, dict)
+        and info.get("quantpulse_release_completeness_reads")
+        and hasattr(db, "rollback")
+    ):
+        db.rollback()
 
 
 def _open_timestamp(candle):

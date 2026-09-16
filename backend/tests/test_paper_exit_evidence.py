@@ -84,6 +84,30 @@ def test_invalid_activation_fails_closed(value):
         entry_evidence_fields({"trailing_activation_r":value})
 
 
+def test_missing_activation_is_persisted_as_explicit_immediate_policy():
+    fields = entry_evidence_fields({"trade_plan": {}})
+    evidence = read_evidence(fields["execution_evidence_json"])
+
+    assert fields["trailing_activation_r"] == 0.0
+    assert evidence["trailing_activation_r"] == 0.0
+    assert evidence["trailing_activation_source"] == "DEFAULT_IMMEDIATE"
+    assert evidence["exit_management_profile"] == "IMMEDIATE_TRAIL_V1"
+
+
+def test_trade_plan_activation_is_used_and_mismatch_fails_closed():
+    fields = entry_evidence_fields({"trade_plan": {"trailing_activation_r": 1.0}})
+    assert fields["trailing_activation_r"] == 1.0
+    assert read_evidence(fields["execution_evidence_json"])["trailing_activation_source"] == "TRADE_PLAN"
+
+    with pytest.raises(ValueError, match="do not match"):
+        entry_evidence_fields(
+            {
+                "trailing_activation_r": 0.0,
+                "trade_plan": {"trailing_activation_r": 1.0},
+            }
+        )
+
+
 def test_entry_evidence_is_bounded():
     with pytest.raises(ValueError,match="bounded"):
         entry_evidence_fields({"execution_evidence":{"large":"x"*9000}})

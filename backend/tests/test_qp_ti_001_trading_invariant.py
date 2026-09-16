@@ -88,6 +88,16 @@ def _fresh_paper_entry_mark(monkeypatch):
             "source": "TEST_MARK",
         },
     )
+    monkeypatch.setattr(
+        paper_trade_api,
+        "exit_protection_snapshot",
+        lambda: {
+            "policy": "FAST_EXIT_HEARTBEAT_V1",
+            "ready": True,
+            "status": "READY",
+            "reason": None,
+        },
+    )
 
 
 def _enabled_automation_settings():

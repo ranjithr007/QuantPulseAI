@@ -200,6 +200,30 @@ class RiskRepository:
         ).first()
         return _row_to_namespace(row)
 
+    def latest_master_for_symbol(self, db, symbol):
+        """Return the newest master-signal risk row, excluding plan approvals.
+
+        A symbol can have many strategy-plan authorizations after its master
+        decision. Those rows must not mask the master row used for source
+        signal deduplication.
+        """
+        available = _risk_decision_columns(db)
+        if "trade_plan_id" not in available:
+            return self.latest_for_symbol(db, symbol)
+
+        columns = _risk_decision_select_columns(db)
+        table = RiskDecision.__table__
+        row = db.execute(
+            select(*columns)
+            .select_from(table)
+            .where(
+                table.c.symbol == symbol,
+                table.c.trade_plan_id.is_(None),
+            )
+            .order_by(table.c.created_at.desc())
+        ).first()
+        return _row_to_namespace(row)
+
     def latest_for_symbols(self, db, symbols):
         normalized_symbols = list(dict.fromkeys(symbols))
         if not normalized_symbols:

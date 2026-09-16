@@ -14,7 +14,8 @@ from test_strategy_attribution import _session_factory
 def test_retired_entry_open_position_and_history_remain_visible_separate_from_v2(monkeypatch, strategy_id):
     factory = _session_factory()
     original_registry = copy.deepcopy(STRATEGY_REGISTRY)
-    old_version, current_version = strategy_id.lower() + "_v1", strategy_id.lower() + "_v2"
+    old_version = strategy_id.lower() + "_v1"
+    current_version = STRATEGY_REGISTRY[strategy_id]["version"]
     with factory() as db:
         open_trade = _row(db, strategy_id, old_version)
         open_id = open_trade.id
@@ -59,6 +60,34 @@ def test_retired_entry_open_position_and_history_remain_visible_separate_from_v2
     assert STRATEGY_REGISTRY == original_registry
     with factory() as db:
         assert [item["version"] for item in strategy_definitions(db, strategy_id)] == [current_version]
+
+
+def test_all_observed_retired_entry_versions_remain_visible(monkeypatch):
+    factory = _session_factory()
+    strategy_id = "REGIME_TREND_ENTRY"
+    current_version = STRATEGY_REGISTRY[strategy_id]["version"]
+    with factory() as db:
+        _row(db, strategy_id, "regime_trend_entry_v1", plan_id=1)
+        _row(db, strategy_id, "regime_trend_entry_v2", plan_id=2)
+        _row(db, strategy_id, current_version, plan_id=3)
+    monkeypatch.setattr(strategy_api, "SessionLocal", factory)
+
+    summary = strategy_api.get_strategy_summary(
+        strategy_id=strategy_id,
+        since_days=30,
+        candidate_limit=1,
+        include_ledger=False,
+    )
+
+    by_version = {item["version"]: item for item in summary["records"]}
+    assert set(by_version) == {
+        "regime_trend_entry_v1",
+        "regime_trend_entry_v2",
+        current_version,
+    }
+    assert by_version["regime_trend_entry_v1"]["read_only"] is True
+    assert by_version["regime_trend_entry_v2"]["read_only"] is True
+    assert by_version[current_version].get("read_only") is not True
 
 
 @pytest.mark.parametrize("strategy_id", [None, "MARKET_MOVE_ENTRY", "REGIME_TREND_ENTRY"])

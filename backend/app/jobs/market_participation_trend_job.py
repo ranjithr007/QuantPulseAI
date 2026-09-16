@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
 from datetime import datetime, timezone
+import logging
 from app.collectors.binances.spot_market_collector import SpotMarketCollector
 from app.collectors.fred_macro_collector import FredMacroCollector
 from app.config import get_settings
@@ -22,6 +23,7 @@ SPOT_HISTORY_LIMIT = 60
 FUNDING_MAX_AGE_SECONDS = 12 * 60 * 60
 OPEN_INTEREST_MAX_AGE_SECONDS = 15 * 60
 OPEN_INTEREST_CHANGE_LOOKBACK_SECONDS = 60 * 60
+logger = logging.getLogger(__name__)
 
 
 def run_market_participation_trend_job(*, context=None):
@@ -118,11 +120,17 @@ def run_market_participation_trend_job(*, context=None):
         }
     except Exception as exc:
         db.rollback()
+        error = summarize_network_error(exc)
+        logger.exception(
+            "Market participation trend job degraded: %s",
+            error,
+        )
+        print("Market participation trend job degraded:", error)
         return {
             "status": "DEGRADED",
             "source": "market_participation_trend_job",
             "count": 0,
-            "error": summarize_network_error(exc),
+            "error": error,
         }
     finally:
         db.close()

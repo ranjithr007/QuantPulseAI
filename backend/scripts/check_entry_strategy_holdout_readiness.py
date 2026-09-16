@@ -1,4 +1,4 @@
-"""Print the outcome-blind V2F entry-strategy holdout readiness report."""
+"""Print the outcome-blind V3 entry-strategy holdout readiness report."""
 
 import argparse
 import json
@@ -24,11 +24,11 @@ def main():
     )
     parser.add_argument(
         "--manifest",
-        help="Optional frozen V2F manifest path.",
+        help="Optional frozen V3 manifest path.",
     )
     parser.add_argument(
         "--output",
-        default="outputs/entry_strategy_holdout_readiness_v2f.json",
+        default="outputs/entry_strategy_holdout_readiness_v3.json",
     )
     arguments = parser.parse_args()
     observed_at = (

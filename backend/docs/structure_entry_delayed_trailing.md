@@ -9,7 +9,7 @@ are unchanged. Entry and exit changes are deliberately tested separately.
 | --- | --- | --- |
 | `CORE_SIGNAL_ENTRY` / `core_signal_entry_v1` | Core Signal plus confirmed price structure | Original exits and immediate trailing |
 | `CORE_SIGNAL_EXIT` / `core_signal_exit_v1` | Original Core Signal | Original hard stop/targets; continuous trailing activates at +1R |
-| `REGIME_TREND_ENTRY` / `regime_trend_entry_v2` | Aligned Feature/Regime plus confirmed price structure | Original exits and immediate trailing |
+| `REGIME_TREND_ENTRY` / `regime_trend_entry_v3` | Aligned trend-regime Feature/Regime plus confirmed price structure | Original exits and immediate trailing |
 | `REGIME_TREND_EXIT` / `regime_trend_exit_v1` | Original Regime Trend | Original hard stop/targets; continuous trailing activates at +1R |
 | `MARKET_MOVE_ENTRY` / `market_move_entry_v2` | Original Market Move plus confirmed price structure | Original adaptive exits and immediate trailing |
 | `MARKET_MOVE_EXIT` / `market_move_exit_v1` | Original Market Move | Original adaptive exits; continuous trailing activates at +1R |

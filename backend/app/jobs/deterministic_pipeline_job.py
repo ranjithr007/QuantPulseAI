@@ -255,6 +255,19 @@ def _execution_ready(results):
                 # Partial per-symbol risk failures must not stop independent,
                 # approved plans. Candidate-level risk gates remain required.
                 allowed_statuses.add("DEGRADED")
+            elif name == "paper_trade_monitor":
+                # An isolated Strategy Paper monitor error is research-book
+                # degradation, not evidence that official positions were left
+                # unprotected.  Only permit this narrow degraded shape; any
+                # official error or unresolved deadline remains blocking.
+                shadow_errors = ((result.get("shadow") or {}).get("errors") or [])
+                if (
+                    stage_status == "DEGRADED"
+                    and shadow_errors
+                    and not result.get("errors")
+                    and not result.get("overdue_unresolved")
+                ):
+                    allowed_statuses.add("DEGRADED")
             if stage_status not in allowed_statuses:
                 return False
             if (result.get("error") or result.get("errors")) and not (

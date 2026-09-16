@@ -12,6 +12,7 @@ from app.repositories.notification_repository import NotificationRepository
 from app.services.paper_exit_prices import paper_exit_prices, MAX_PRICE_AGE_SECONDS
 from app.utils.freshness import normalize_timestamp_to_utc
 from app.paper_trading.exit_evidence import observation_evidence, merge_observations
+from app.paper_trading.exit_protection_health import record_exit_protection_run
 
 
 _alerted = {}
@@ -39,8 +40,15 @@ def _alert(db, key, message):
 def run_paper_trade_fast_exit_job():
     started = time.monotonic()
     paper_exit_prices.start()
+    stream_health = paper_exit_prices.health()
     db = SessionLocal()
-    summary = {"status": "OK", "processed": 0, "closed": 0, "partial_closes": 0, "stop_moves": 0, "missing_prices": [], "errors": []}
+    summary = {"status": "OK", "processed": 0, "closed": 0, "partial_closes": 0, "stop_moves": 0,
+        "missing_prices": [], "errors": [], "price_stream": stream_health}
+    if not stream_health["ready"]:
+        summary["errors"].append(
+            "PRICE_STREAM_UNREADY: "
+            + (stream_health.get("reason") or "Binance mark stream is unavailable")
+        )
     try:
         books = [(PaperTradeRepository(), False), (StrategyShadowTradeRepository(), True)]
         trades = [(repo, shadow, trade, _snapshot(trade)) for repo, shadow in books for trade in repo.get_open_trades(db)]
@@ -48,6 +56,12 @@ def run_paper_trade_fast_exit_job():
         for key in set(_observations) - active_keys:
             _observations.pop(key, None)
             _observation_flushed_at.pop(key, None)
+
+        # The ORM rows above are only discovery inputs; exit decisions use the
+        # immutable snapshots and reacquire a row lock only for an actionable
+        # tick/checkpoint. Release discovery reads before processing the stream
+        # so the one-second worker never pins paper-trade tables between ticks.
+        db.rollback()
         marks = paper_exit_prices.take([snapshot.symbol for _, _, _, snapshot in trades])
         for repo, shadow, trade, snapshot in trades:
             evidence_key = (shadow, snapshot.id, snapshot.opened_at)
@@ -126,9 +140,16 @@ def run_paper_trade_fast_exit_job():
                 + ", ".join(sorted(set(summary["missing_prices"])))
                 + ". Errors: " + ", ".join(summary["errors"])
                 + ". Candle reconciliation remains active; exact stop fills are not guaranteed.")
+        record_exit_protection_run(summary)
         return summary
     except Exception as exc:
         db.rollback()
+        record_exit_protection_run({
+            **summary,
+            "status": "FAILED",
+            "errors": [*summary.get("errors", []), type(exc).__name__],
+            "duration_seconds": round(time.monotonic() - started, 3),
+        })
         # Scheduler logs make failures visible even when the database itself
         # is unavailable and cannot persist an alert.
         raise RuntimeError("One-second paper exit protection failed") from exc

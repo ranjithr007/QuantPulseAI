@@ -16,6 +16,12 @@ from app.utils.signal_validation import validate_trade_plan_direction
 
 
 TIMEFRAME_DURABILITY = {"1h": 1, "2h": 2, "4h": 3, "1d": 4}
+REGIME_TREND_REGIMES = {
+    "TRENDING_BULL": "LONG",
+    "BULL_PULLBACK": "LONG",
+    "TRENDING_BEAR": "SHORT",
+    "BEAR_RALLY": "SHORT",
+}
 TREND_PULLBACK_REGIMES = {"BULL_PULLBACK": "LONG", "BEAR_RALLY": "SHORT"}
 RANGE_REVERSION_REGIMES = {
     "RANGE_ACCUMULATION": "LONG",
@@ -43,13 +49,58 @@ def build_range_reversion_payload(core_payload, market_participation):
     )
 
 
-def build_regime_trend_payload(core_payload, *, structure_gate=None):
+def build_regime_trend_payload(
+    core_payload,
+    *,
+    structure_gate=None,
+    require_trend_regime=False,
+):
+    def entry_gate(item):
+        side = _side(item.get("score"))
+        regime = str(
+            ((item.get("component_scores") or {}).get("regime") or {}).get(
+                "value"
+            )
+            or "UNKNOWN"
+        ).upper()
+        expected_side = REGIME_TREND_REGIMES.get(regime)
+        structure_allowed = (
+            structure_gate(item, side)
+            if structure_gate is not None
+            else None
+        )
+        if require_trend_regime and expected_side != side:
+            return {
+                **item,
+                "status": "WAIT",
+                "reason": (
+                    "Regime Trend requires an aligned trend or pullback regime; "
+                    f"{regime} belongs to another strategy family"
+                ),
+                "regime_trend_regime_allowed": False,
+                **(
+                    {"structure_entry_allowed": structure_allowed}
+                    if structure_gate is not None
+                    else {}
+                ),
+            }
+        if structure_gate is None:
+            return {
+                **item,
+                "regime_trend_regime_allowed": expected_side == side,
+            }
+        return {
+            **item,
+            "regime_trend_regime_allowed": expected_side == side,
+            "structure_entry_allowed": structure_allowed,
+        }
+
     return _build_component_payload(
         core_payload,
         label="Regime Trend",
         required_components=("feature", "regime"),
         maximum_component_total=49.0,
-        entry_gate=(lambda item: {**item, "structure_entry_allowed": structure_gate(item, _side(item.get("score")))}) if structure_gate else None,
+        entry_gate=entry_gate,
     )
 
 

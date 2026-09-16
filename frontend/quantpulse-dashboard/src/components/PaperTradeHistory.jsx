@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
-import { loadPaperTrades } from "../hooks/dashboardApi";
+import { loadPaperTradeAudit, loadPaperTradeHistory } from "../hooks/dashboardApi";
 import { cacheHistoryPage, cachedHistoryPage, PAPER_HISTORY_PAGE_SIZE, paginationPageNumbers, validatedHistoryPage, visibleHistoryPage } from "../utils/paperHistory";
 import { EXIT_CLASSIFICATIONS, tradeExitBreakdown, tradeExitClassification } from "../utils/tradeAudit";
 import { formatDate, formatSigned, formatPrice, safeNumber } from "../utils/formatters";
@@ -15,7 +15,10 @@ export default function PaperTradeHistory({ tradeHistory = [], totalCount }) {
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const [auditTrade, setAuditTrade] = useState(null);
+  const [auditLoadingId, setAuditLoadingId] = useState(null);
+  const [auditError, setAuditError] = useState("");
   const cache = useRef(new Map());
+  const auditController = useRef(null);
   const revision = `${tradeHistory[0]?.id ?? "none"}:${totalCount ?? tradeHistory.length}`;
   const totalItems = Math.max(0, remoteTotal ?? totalCount ?? tradeHistory.length);
   const totalPages = Math.max(1, Math.ceil(totalItems / PAPER_HISTORY_PAGE_SIZE));
@@ -28,6 +31,10 @@ export default function PaperTradeHistory({ tradeHistory = [], totalCount }) {
     let active = true;
     setError("");
     setAuditTrade(null);
+    setAuditError("");
+    auditController.current?.abort();
+    auditController.current = null;
+    setAuditLoadingId(null);
     const cached = cachedHistoryPage(cache.current, currentPage, revision);
     if (cached) {
       setSnapshot(cached);
@@ -37,7 +44,7 @@ export default function PaperTradeHistory({ tradeHistory = [], totalCount }) {
     }
     setSnapshot(null);
     setLoading(true);
-    loadPaperTrades({ status: "CLOSED", page: currentPage, limit: PAPER_HISTORY_PAGE_SIZE, signal: controller.signal })
+    loadPaperTradeHistory({ page: currentPage, limit: PAPER_HISTORY_PAGE_SIZE, signal: controller.signal })
       .then((response) => {
         if (!active) return;
         const page = validatedHistoryPage(response, currentPage, revision);
@@ -59,7 +66,29 @@ export default function PaperTradeHistory({ tradeHistory = [], totalCount }) {
     return () => { active = false; controller.abort(); };
   }, [currentPage, revision, retry]);
 
+  useEffect(() => () => auditController.current?.abort(), []);
+
   const refresh = () => { cache.current.delete(currentPage); setRetry((value) => value + 1); };
+  const openAudit = async (trade) => {
+    auditController.current?.abort();
+    const controller = new AbortController();
+    auditController.current = controller;
+    setAuditError("");
+    setAuditLoadingId(trade.id);
+    try {
+      const fullTrade = await loadPaperTradeAudit(trade.id, { signal: controller.signal });
+      if (!controller.signal.aborted) setAuditTrade(fullTrade);
+    } catch (requestError) {
+      if (!controller.signal.aborted) {
+        setAuditError(requestError?.message || "Trade audit is temporarily unavailable.");
+      }
+    } finally {
+      if (auditController.current === controller) {
+        auditController.current = null;
+        setAuditLoadingId(null);
+      }
+    }
+  };
   return (
     <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-slate-900/70 p-3" aria-busy={loading}>
       <div className="flex items-center justify-between gap-3">
@@ -67,6 +96,7 @@ export default function PaperTradeHistory({ tradeHistory = [], totalCount }) {
         <div className="flex items-center gap-2"><Pill tone="slate">{totalItems} closed</Pill><button type="button" disabled={loading} onClick={refresh} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs disabled:opacity-40">{error ? "Retry page" : "Refresh page"}</button></div>
       </div>
       {error ? <div role="alert" className="mt-2 rounded-md border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">Page {currentPage} could not be loaded. {error} No earlier page rows are shown. Retry requests only this page.</div> : null}
+      {auditError ? <div role="alert" className="mt-2 rounded-md border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">Audit evidence could not be loaded. {auditError}</div> : null}
       {visibleTrades.length ? <div className="mt-3 rounded-lg border border-white/10 p-2"><div className="mb-1 text-xs text-slate-500">Exit reasons · this {visibleTrades.length}-trade page only, not the full day or strategy cohort</div><div className="flex flex-wrap gap-2">{tradeExitBreakdown(visibleTrades).map(({ key, label, count }) => <Pill key={key} tone={key === "UNKNOWN" ? "amber" : "slate"}>{label}: {count}</Pill>)}</div></div> : null}
       <div className="mt-2.5 overflow-x-auto">
         <table className="min-w-full divide-y divide-white/5 text-sm">
@@ -80,7 +110,7 @@ export default function PaperTradeHistory({ tradeHistory = [], totalCount }) {
               <td className={clsx("px-3 py-2.5 font-medium", safeNumber(trade.pnl_percent, 0) >= 0 ? "text-emerald-300" : "text-rose-300")}>{formatSigned(trade.pnl_percent)}</td>
               <td className="px-3 py-2.5 text-slate-300">{EXIT_CLASSIFICATIONS[tradeExitClassification(trade)]}<div className="text-[10px] text-slate-500">{trade.result || "Result not recorded"}</div></td>
               <td className="px-3 py-2.5 text-slate-400">{trade.closed_at ? formatDate(trade.closed_at) : "Not recorded"}</td>
-              <td className="px-3 py-2.5"><button type="button" className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs" aria-label={`View audit ${trade.symbol} trade ${trade.id}`} onClick={() => setAuditTrade(trade)}>View audit</button></td>
+              <td className="px-3 py-2.5"><button type="button" disabled={auditLoadingId !== null} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs disabled:opacity-40" aria-label={`View audit ${trade.symbol} trade ${trade.id}`} onClick={() => openAudit(trade)}>{auditLoadingId === trade.id ? "Loading…" : "View audit"}</button></td>
             </tr>)}
             {!visibleTrades.length ? <tr><td className="px-3 py-3.5 text-slate-400" colSpan={8} role="status">{loading ? `Loading page ${currentPage}…` : error ? "No verified page loaded." : "No closed trades available."}</td></tr> : null}
           </tbody>

@@ -109,6 +109,48 @@ def test_exit_monitor_failure_remains_a_global_hard_gate():
     assert result["results"]["risk"]["status"] == "BLOCKED"
 
 
+def test_strategy_paper_monitor_degradation_does_not_block_official_execution():
+    calls = []
+
+    def stage(name, result):
+        def run():
+            calls.append(name)
+            return result
+
+        return run
+
+    stages = [
+        (
+            "paper_trade_monitor",
+            stage(
+                "paper_trade_monitor",
+                {
+                    "status": "DEGRADED",
+                    "errors": [],
+                    "overdue_unresolved": 0,
+                    "shadow": {"errors": ["isolated strategy exit unavailable"]},
+                },
+            ),
+        ),
+        ("risk", stage("risk", {"status": "COMPLETED", "errors": []})),
+        (
+            "paper_trade_execute",
+            stage(
+                "paper_trade_execute",
+                {"status": "COMPLETED", "executed": 1},
+            ),
+        ),
+    ]
+
+    with patch("app.jobs.deterministic_pipeline_job.STAGE_ORDER", stages):
+        result = run_deterministic_pipeline_job()
+
+    assert result["status"] == "DEGRADED"
+    assert result["degraded_stages"] == ["paper_trade_monitor"]
+    assert calls == ["paper_trade_monitor", "risk", "paper_trade_execute"]
+    assert result["results"]["paper_trade_execute"]["executed"] == 1
+
+
 def test_opportunity_recovery_runs_after_upstream_failure():
     calls = []
 

@@ -9,13 +9,60 @@ from app.paper_trading.inr_sizing import apply_equity_risk_budget, build_inr_pap
 
 @pytest.mark.parametrize("confidence,percent", [(40, .25), (59.99, .25), (60, .5), (100, .5)])
 def test_risk_budget_uses_marked_equity_not_initial_capital(confidence, percent):
-    sizing = apply_equity_risk_budget(build_inr_paper_sizing(confidence), confidence, 100_000)
+    sizing = apply_equity_risk_budget(
+        build_inr_paper_sizing(confidence), confidence, 100_000,
+        confidence_calibration={"higher_confidence_promotion_eligible": True},
+    )
     assert sizing["risk_budget_inr"] == percent * 1000
     assert sizing["estimated_max_loss_inr"] <= percent * 1000
     assert sizing["position_notional_inr"] < 100_000
     assert sizing["estimated_exit_slippage_inr"] > 0
     assert sizing["estimated_funding_reserve_inr"] > 0
     assert sizing["loss_estimate_is_guaranteed"] is False
+
+
+def test_unproven_high_confidence_is_capped_at_minimum_equity_risk():
+    sizing = apply_equity_risk_budget(
+        build_inr_paper_sizing(64),
+        64,
+        100_000,
+        confidence_calibration={
+            "status": "INSUFFICIENT_EVIDENCE",
+            "direction": "HIGHER_UNDERPERFORMS",
+            "evidence_scope": "CLEAN_OPERATIONAL_EVIDENCE_ONLY",
+            "excluded_operationally_contaminated_exits": 7,
+            "evaluated_trades": 67,
+            "minimum_trades_per_group": 20,
+            "sample_sufficient": False,
+            "higher_confidence_promotion_eligible": False,
+            "expectancy_gap_percentage_points": -.139,
+            "confidence_pnl_correlation": -.0314,
+        },
+    )
+
+    assert sizing["position_tier"] == "CALIBRATION_CAPPED"
+    assert sizing["requested_risk_budget_percent"] == .5
+    assert sizing["risk_budget_percent"] == .25
+    assert sizing["risk_budget_inr"] == 250
+    assert sizing["confidence_scaling_requested"] is True
+    assert sizing["confidence_scaling_eligible"] is False
+    assert sizing["confidence_scaling_applied"] is False
+    assert sizing["confidence_calibration_status"] == "INSUFFICIENT_EVIDENCE"
+    assert sizing["confidence_calibration_evaluated_trades"] == 67
+    assert sizing["confidence_calibration_evidence_scope"] == "CLEAN_OPERATIONAL_EVIDENCE_ONLY"
+    assert sizing["confidence_calibration_excluded_operational_exits"] == 7
+    assert sizing["confidence_calibration_minimum_trades_per_group"] == 20
+    assert sizing["confidence_calibration_expectancy_gap_percentage_points"] == -.139
+    assert sizing["confidence_calibration_pnl_correlation"] == -.0314
+    assert sizing["confidence_scaling_blocker"]
+
+
+def test_missing_calibration_fails_safe_for_high_confidence():
+    sizing = apply_equity_risk_budget(build_inr_paper_sizing(80), 80, 100_000)
+
+    assert sizing["position_tier"] == "CALIBRATION_CAPPED"
+    assert sizing["risk_budget_percent"] == .25
+    assert sizing["confidence_calibration_status"] == "UNAVAILABLE"
 
 
 def test_wider_stops_and_higher_costs_reduce_notional_without_changing_levels():

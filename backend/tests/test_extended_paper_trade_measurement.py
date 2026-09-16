@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -61,8 +62,12 @@ def gates(**overrides):
 
 
 def test_profitable_history_passes_only_with_sufficient_evidence():
+    records = [trade(3), trade(-1), trade(2), trade(-1)]
+    for record in records:
+        record.strategy_id = "CORE_FUSION"
+        record.strategy_version = "core_fusion_v1"
     report = build_measurement_report(
-        [trade(3), trade(-1), trade(2), trade(-1)],
+        records,
         gates=gates(),
         as_of=AS_OF,
     )
@@ -77,6 +82,9 @@ def test_profitable_history_passes_only_with_sufficient_evidence():
     assert report["policy"]["roadmap_targets"]["min_profit_factor"] == 1.25
     assert report["policy"]["roadmap_targets"]["min_reward_risk"] == 1.5
     assert report["cohorts"]["symbol"][0]["value"] == "BTCUSDT"
+    assert report["cohorts"]["strategy"][0]["value"] == (
+        "CORE_FUSION@core_fusion_v1"
+    )
     assert report["cohorts"]["confidence_band"][0]["value"] == "80_PLUS"
 
 
@@ -170,6 +178,93 @@ def test_more_wins_than_losses_still_fails_when_loss_value_is_greater():
     assert report["evaluation"]["performance_passed"] is False
 
 
+def test_confidence_calibration_does_not_promote_underperforming_higher_scores():
+    records = [
+        trade(1.0, confidence=55),
+        trade(-0.5, confidence=58),
+        trade(-1.0, confidence=70),
+        trade(-1.5, confidence=80),
+    ]
+    report = build_measurement_report(
+        records,
+        gates=gates(min_cohort_closed_trades=2),
+        as_of=AS_OF,
+    )
+
+    calibration = report["confidence_calibration"]
+    assert calibration["status"] == "NOT_DIRECTIONALLY_ALIGNED"
+    assert calibration["direction"] == "HIGHER_UNDERPERFORMS"
+    assert calibration["sample_sufficient"] is True
+    assert calibration["higher_confidence_promotion_eligible"] is False
+    assert calibration["below_60"]["expectancy_percent"] == 0.25
+    assert calibration["at_least_60"]["expectancy_percent"] == -1.25
+    assert calibration["expectancy_gap_percentage_points"] == -1.5
+    assert calibration["confidence_pnl_correlation"] < 0
+
+
+def test_confidence_calibration_requires_both_fixed_groups_to_be_mature():
+    report = build_measurement_report(
+        [trade(1.0, confidence=55), trade(2.0, confidence=80)],
+        gates=gates(min_cohort_closed_trades=2),
+        as_of=AS_OF,
+    )
+
+    calibration = report["confidence_calibration"]
+    assert calibration["status"] == "INSUFFICIENT_EVIDENCE"
+    assert calibration["direction"] == "HIGHER_OUTPERFORMS"
+    assert calibration["sample_sufficient"] is False
+    assert calibration["higher_confidence_promotion_eligible"] is False
+
+
+def test_confidence_calibration_requires_positive_higher_group_edge():
+    records = [
+        trade(-2.0, confidence=50),
+        trade(-1.0, confidence=55),
+        trade(-0.5, confidence=70),
+        trade(-0.25, confidence=80),
+    ]
+    report = build_measurement_report(
+        records,
+        gates=gates(min_cohort_closed_trades=2),
+        as_of=AS_OF,
+    )
+
+    calibration = report["confidence_calibration"]
+    assert calibration["status"] == "DIRECTIONALLY_ALIGNED"
+    assert calibration["direction"] == "HIGHER_OUTPERFORMS"
+    assert calibration["sample_sufficient"] is True
+    assert calibration["higher_confidence_positive_edge"] is False
+    assert calibration["higher_confidence_promotion_eligible"] is False
+
+
+def test_return_decomposition_reconciles_post_fill_gross_costs_and_net():
+    first = trade(-1.25, fees_percent=0.15)
+    first.gross_pnl_percent = -1.0
+    first.funding_cost_percent = 0.10
+    second = trade(0.7, fees_percent=0.15)
+    second.gross_pnl_percent = 0.8
+    second.funding_cost_percent = -0.05
+
+    report = build_measurement_report(
+        [first, second],
+        gates=gates(min_closed_trades=1),
+        as_of=AS_OF,
+    )
+
+    decomposition = report["return_decomposition"]
+    assert decomposition["status"] == "COMPLETE"
+    assert decomposition["reconciled_trades"] == 2
+    assert decomposition["post_fill_gross_return_percent"] == -0.2
+    assert decomposition["fees_percent"] == 0.3
+    assert decomposition["funding_cost_percent"] == 0.05
+    assert decomposition["total_cost_drag_percent"] == 0.35
+    assert decomposition["net_return_percent"] == -0.55
+    assert decomposition["reconciliation_error_percent"] == 0
+    assert decomposition["cost_share_of_net_loss_percent"] == pytest.approx(63.64)
+    assert decomposition["pre_cost_result"] == "NEGATIVE"
+    assert decomposition["costs_changed_result_sign"] is False
+
+
 def test_cohorts_expose_missing_legacy_context_without_inventing_it():
     legacy = trade(1)
     legacy.mode = None
@@ -190,6 +285,114 @@ def test_cohorts_expose_missing_legacy_context_without_inventing_it():
         "regime": 1,
     }
     assert report["data_quality"]["closed_trades_missing_fee_snapshot"] == 1
+    assert report["data_quality"]["closed_trades_missing_trailing_activation"] == 1
+
+
+def test_measurement_flags_late_time_exit_as_operational_contamination():
+    delayed = trade(-4.0, timeframe="1h")
+    delayed.strategy_id = "REGIME_TREND"
+    delayed.strategy_version = "regime_trend_v1"
+    delayed.exit_reason = "TIME_EXIT"
+    delayed.max_hold_hours = 48
+    delayed.opened_at = AS_OF - timedelta(hours=60)
+    delayed.closed_at = AS_OF
+    delayed.exit_evidence_json = json.dumps(
+        {"observations": {"coverage": "OBSERVED_ONLY"}}
+    )
+
+    report = build_measurement_report(
+        [delayed],
+        gates=gates(min_closed_trades=1),
+        as_of=AS_OF,
+    )
+    quality = report["operational_exit_quality"]
+
+    assert quality["status"] == "DEGRADED"
+    assert quality["late_time_exits"] == 1
+    assert quality["late_time_exit_net_pnl_percent"] == -4.0
+    assert quality["maximum_exit_delay_minutes"] == 720.0
+    assert quality["observed_only_exit_evidence"] == 1
+    assert quality["late_time_exits_by_strategy"] == [
+        {
+            "strategy": "REGIME_TREND@regime_trend_v1",
+            "late_time_exits": 1,
+            "net_pnl_percent": -4.0,
+            "max_delay_minutes": 720.0,
+        }
+    ]
+    assert "remain included" in quality["accounting_policy"]
+    assert report["overall"]["closed_trades"] == 1
+    assert report["evidence_overall"]["closed_trades"] == 0
+    assert report["evaluation"]["excluded_operationally_contaminated_exits"] == 1
+    assert report["evaluation"]["scorecard_scope"] == "CLEAN_OPERATIONAL_EVIDENCE_ONLY"
+    assert report["confidence_calibration"]["evaluated_trades"] == 0
+    assert (
+        report["confidence_calibration"]["excluded_operationally_contaminated_exits"]
+        == 1
+    )
+    assert (
+        report["confidence_calibration"]["evidence_scope"]
+        == "CLEAN_OPERATIONAL_EVIDENCE_ONLY"
+    )
+
+
+def test_measurement_excludes_known_stale_recorded_trigger_from_clean_evidence():
+    delayed = trade(-1.0, timeframe="1h")
+    delayed.exit_reason = "STOP"
+    delayed.exit_evidence_json = json.dumps(
+        {
+            "classification": "INITIAL_STOP",
+            "evidence_kind": "CANDLE_OHLC",
+            "observed_at": AS_OF.isoformat(),
+            "quote_age_seconds": 76.35,
+        }
+    )
+
+    report = build_measurement_report(
+        [delayed],
+        gates=gates(min_closed_trades=1),
+        as_of=AS_OF,
+    )
+
+    quality = report["operational_exit_quality"]
+    assert quality["status"] == "DEGRADED"
+    assert quality["stale_recorded_exit_triggers"] == 1
+    assert quality["maximum_promotion_quote_age_seconds"] == 5.0
+    assert quality["maximum_recorded_trigger_quote_age_seconds"] == 76.35
+    assert report["overall"]["closed_trades"] == 1
+    assert report["evidence_overall"]["closed_trades"] == 0
+
+
+def test_measurement_exit_classification_cohorts_prefer_recorded_evidence():
+    initial = trade(-1.2)
+    initial.exit_reason = "STOP"
+    initial.initial_stop_loss = 95
+    initial.stop_loss = 95
+    initial.target1_hit_at = None
+    initial.exit_evidence_json = None
+
+    protected = trade(0.8)
+    protected.exit_reason = "STOP"
+    protected.initial_stop_loss = 95
+    protected.stop_loss = 102
+    protected.target1_hit_at = None
+    protected.exit_evidence_json = json.dumps(
+        {"classification": "PROTECTED_STOP_AFTER_T1"}
+    )
+
+    report = build_measurement_report(
+        [initial, protected],
+        gates=gates(min_closed_trades=1),
+        as_of=AS_OF,
+    )
+
+    cohorts = {
+        item["value"]: item for item in report["cohorts"]["exit_classification"]
+    }
+    assert cohorts["INITIAL_STOP"]["closed_trades"] == 1
+    assert cohorts["INITIAL_STOP"]["net_pnl_percent"] == -1.2
+    assert cohorts["PROTECTED_STOP_AFTER_T1"]["closed_trades"] == 1
+    assert cohorts["PROTECTED_STOP_AFTER_T1"]["net_pnl_percent"] == 0.8
 
 
 def test_measurement_gates_reject_invalid_configuration():

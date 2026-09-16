@@ -16,6 +16,17 @@ class CandleCollector:
     URL = "https://fapi.binance.com/fapi/v1/klines"
     MAX_PAGE_SIZE = 1500
 
+    def __init__(
+        self,
+        *,
+        timeout_seconds=20,
+        max_attempts=3,
+        retry_delay_seconds=3,
+    ):
+        self.timeout_seconds = max(1, float(timeout_seconds))
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_delay_seconds = max(0, float(retry_delay_seconds))
+
     def get_candles(
         self,
         symbol,
@@ -107,11 +118,15 @@ class CandleCollector:
             params["endTime"] = int(end_time_ms)
         last_error = None
 
-        for attempt in range(3):
+        for attempt in range(self.max_attempts):
 
             try:
 
-                response = requests.get(self.URL, params=params, timeout=20)
+                response = requests.get(
+                    self.URL,
+                    params=params,
+                    timeout=self.timeout_seconds,
+                )
 
                 response.raise_for_status()
 
@@ -122,7 +137,8 @@ class CandleCollector:
 
             except Exception as ex:
                 last_error = ex
-                time.sleep(3)
+                if attempt < self.max_attempts - 1:
+                    time.sleep(self.retry_delay_seconds)
 
         if last_error is not None:
             if not is_transient_network_error(last_error):

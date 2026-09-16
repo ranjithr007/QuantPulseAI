@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from sqlalchemy import and_, func, true
+from sqlalchemy.exc import IntegrityError
 
 from app.database.models.funding_rates import FundingRate
 from app.database.models.futures_mark_prices import FuturesMarkPrice
@@ -95,8 +96,37 @@ class DerivativeRepository:
             funding_time=item["time"],
         )
         db.add(record)
-        commit_or_rollback(db)
-        return record
+        try:
+            commit_or_rollback(db)
+            return record
+        except IntegrityError as exc:
+            # The standalone derivative collector and other pipeline stages can
+            # observe the same Binance funding event concurrently.  The unique
+            # index is the final arbiter; if another worker won the insert race,
+            # load that canonical row instead of failing the whole collection.
+            existing = (
+                db.query(FundingRate)
+                .filter(
+                    FundingRate.symbol == symbol,
+                    FundingRate.funding_time == item["time"],
+                )
+                .first()
+            )
+            if existing is None:
+                # SQL Server can surface the unique-key violation before the
+                # winning concurrent transaction becomes visible to this
+                # session. The constraint proves the canonical event exists;
+                # this collection is therefore already satisfied.
+                message = str(exc).lower()
+                if (
+                    "uq_funding_rates_symbol_event" in message
+                    or "duplicate key" in message
+                ):
+                    return None
+                raise
+            existing.rate = item["rate"]
+            commit_or_rollback(db)
+            return existing
 
     def save_open_interest(self, db, item):
         symbol = str(item["symbol"]).upper()

@@ -25,20 +25,29 @@ $arguments = (
 $action = New-ScheduledTaskAction `
     -Execute $powerShellPath `
     -Argument $arguments
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# A logon-only trigger cannot recover the watchdog after its configured restart
+# attempts are exhausted.  This periodic trigger is safe with IgnoreNew and
+# ensures a stopped supervisor is relaunched without requiring another logon.
+$recoveryTrigger = New-ScheduledTaskTrigger `
+    -Once `
+    -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
+$triggers = @($logonTrigger, $recoveryTrigger)
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
-    -RestartCount 3 `
+    -RestartCount 999 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero)
 
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
-    -Trigger $trigger `
+    -Trigger $triggers `
     -Settings $settings `
     -Description (
         "Keeps QuantPulseAI LocalDB, backend, scheduler, live feed, " +

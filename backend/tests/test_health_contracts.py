@@ -34,6 +34,20 @@ def test_health_contracts_accept_success_and_fallback_shapes():
         available=True,
         ready=True,
         paper_execution_allowed=True,
+        exit_protection={
+            "policy": "FAST_EXIT_SHARED_STREAM_HEARTBEAT_V3",
+            "ready": True,
+            "status": "READY",
+            "max_age_seconds": 5.0,
+            "last_worker_status": "OK",
+            "price_stream": {
+                "policy": "BINANCE_MARK_STREAM_HEALTH_V1",
+                "ready": True,
+                "connected": True,
+                "max_age_seconds": 5.0,
+                "thread_alive": True,
+            },
+        },
         pipeline={
             "id": "pipeline-1",
             "generation_id": "gen-1",
@@ -58,4 +72,5 @@ def test_health_contracts_accept_success_and_fallback_shapes():
     assert dependencies.active_database_scheme == "mssql"
     assert postgres_dependencies.evidence_storage == "POSTGRESQL"
     assert pipeline.lineage.verified is True
+    assert pipeline.exit_protection.ready is True
     assert fallback.paper_execution_allowed is False
