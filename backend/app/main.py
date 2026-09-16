@@ -123,7 +123,7 @@ rate_limiter = SlidingWindowRateLimiter()
 http_logger = build_http_logger()
 
 ALLOWED_ORIGINS = set(settings.allowed_origins)
-PUBLIC_PATHS = {"/health/live", "/health/ready", "/auth/login", "/auth/session", "/auth/logout"}
+PUBLIC_PATHS = {"/health", "/health/live", "/health/ready", "/auth/login", "/auth/session", "/auth/logout"}
 
 app.add_middleware(
     CORSMiddleware,
