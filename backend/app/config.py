@@ -115,6 +115,13 @@ class Settings:
         self.pipeline_retention_batch_size = int(
             os.getenv("QUANTPULSE_PIPELINE_RETENTION_BATCH_SIZE", "2500")
         )
+        # Runtime schema repair performs introspection/DDL and can block an API
+        # process behind database locks. Deployments should apply migrations
+        # before startup and opt in only for local repair workflows.
+        self.auto_schema_repair = _env_bool(
+            "QUANTPULSE_AUTO_SCHEMA_REPAIR",
+            False,
+        )
         self.binance_api_key = os.getenv("QUANTPULSE_BINANCE_API_KEY")
         self.binance_api_secret = os.getenv("QUANTPULSE_BINANCE_API_SECRET")
         self.fred_api_key = (

@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
     # introspection and DDL here can hold the event loop behind a database lock
     # long enough for Railway's startup healthcheck to expire before /health is
     # served. Keep the idempotent repair helpers for local development only.
-    if settings.environment != "production":
+    if settings.auto_schema_repair:
         ensure_paper_execution_schema(db_engine)
 
         if settings.environment == "development":
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
         # before the supervisor evaluates health in local/dev runs.
         recover_abandoned_pipeline_runs()
     else:
-        print("Production startup: schema repair and ledger recovery delegated to migrations")
+        print("Startup schema repair disabled; migrations are authoritative")
 
     if USING_SQLITE_FALLBACK:
         bootstrap_sqlite_demo_data(db_engine)
