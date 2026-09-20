@@ -33,6 +33,7 @@ export default function StrategiesPage() {
   const [ledgerLoadedAt, setLedgerLoadedAt] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [paused, setPaused] = useState(document.visibilityState === "hidden");
+  const [expandedStrategyKeys, setExpandedStrategyKeys] = useState(() => new Set());
   const records = payload?.records || [];
   const strategyPagination = usePaginatedRows(records);
   const initialLoading = loading && !records.length;
@@ -161,6 +162,7 @@ export default function StrategiesPage() {
           </div>
         ) : null}
         <ComparisonBanner comparison={payload?.comparison} />
+        <StrategyMinimumsTable records={records} />
         <EntryHoldoutBanner
           holdout={payload?.entry_strategy_holdout}
           outcome={payload?.entry_strategy_holdout_outcome}
@@ -176,6 +178,14 @@ export default function StrategiesPage() {
               key={`${strategy.id}:${strategy.version}`}
               strategy={strategy}
               ledgerLoading={ledgerLoading && strategy.ledger_loaded === false}
+              expanded={expandedStrategyKeys.has(strategyKey(strategy))}
+              onToggle={() => setExpandedStrategyKeys((current) => {
+                const next = new Set(current);
+                const key = strategyKey(strategy);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+              })}
             />
           ))}
           {!loading && !error && !records.length ? (
@@ -386,7 +396,61 @@ function ComparisonBanner({ comparison }) {
   );
 }
 
-function StrategyPanel({ strategy, ledgerLoading }) {
+function StrategyMinimumsTable({ records }) {
+  if (!records.length) return null;
+  return (
+    <section className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-slate-900/70" aria-label="Strategy minimum requirements and win rates">
+      <div className="border-b border-white/10 bg-slate-950/45 px-4 py-3">
+        <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Minimums and current results</div>
+        <div className="mt-1 text-sm font-medium text-white">Strategy promotion requirements at a glance</div>
+        <div className="mt-1 text-xs text-slate-500">Minimums come from each strategy’s readiness gate. Current values use its clean Strategy Paper evidence.</div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-[980px] w-full text-left text-xs">
+          <thead className="bg-slate-950/40 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+            <tr>
+              <th className="px-4 py-2.5">Strategy</th>
+              <th>Gate status</th>
+              <th>Closed trades</th>
+              <th>Win rate</th>
+              <th>Profit factor</th>
+              <th>Max drawdown</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {records.map((strategy) => {
+              const performance = strategy.strategy_paper_performance || strategy.performance || {};
+              const readiness = strategy.forward_test_readiness || {};
+              const closedTrades = performance.closed_trades ?? performance.total_closed_trades ?? performance.total_trades ?? 0;
+              const minimumTrades = readiness.minimum_closed_trades || 30;
+              const winRate = performance.win_rate ?? 0;
+              const minimumWinRate = readiness.minimum_win_rate || 55;
+              const profitFactor = performance.profit_factor;
+              const minimumProfitFactor = readiness.minimum_profit_factor || 1.3;
+              const drawdown = performance.max_drawdown_percent ?? 0;
+              const maximumDrawdown = readiness.maximum_drawdown_percent || 10;
+              return (
+                <tr key={strategyKey(strategy)} className="text-slate-300">
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-white">{strategy.name}</div>
+                    <div className="mt-0.5 font-mono text-[10px] text-slate-500">{strategy.id}</div>
+                  </td>
+                  <td><StatusBadge label={(readiness.status || "COLLECTING").replaceAll("_", " ")} tone={readiness.status === "PROMOTION_CANDIDATE" ? "emerald" : readiness.status === "EVIDENCE_COMPLETE_FAILED" ? "rose" : "amber"} /></td>
+                  <td><span className={closedTrades >= minimumTrades ? "text-emerald-300" : "text-amber-300"}>{closedTrades}</span><span className="text-slate-500"> / {minimumTrades} min</span></td>
+                  <td><span className={winRate >= minimumWinRate ? "text-emerald-300" : "text-amber-300"}>{formatPercent(winRate, 1)}</span><span className="text-slate-500"> / {formatPercent(minimumWinRate, 0)} min</span></td>
+                  <td><span className={profitFactor != null && profitFactor >= minimumProfitFactor ? "text-emerald-300" : "text-amber-300"}>{profitFactor == null ? "—" : number(profitFactor, 2)}</span><span className="text-slate-500"> / {number(minimumProfitFactor, 2)} min</span></td>
+                  <td><span className={drawdown <= maximumDrawdown ? "text-emerald-300" : "text-rose-300"}>{formatPercent(drawdown, 2)}</span><span className="text-slate-500"> / {formatPercent(maximumDrawdown, 0)} max</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function StrategyPanel({ strategy, ledgerLoading, expanded, onToggle }) {
   const performance = strategy.strategy_paper_performance || strategy.performance || {};
   const officialPerformance = strategy.official_performance || {};
   const wallet = strategy.strategy_paper_wallet || {};
@@ -422,13 +486,27 @@ function StrategyPanel({ strategy, ledgerLoading }) {
             <p className="mt-1 max-w-3xl text-sm text-slate-400">{strategy.description}</p>
             <div className="mt-2 font-mono text-[11px] text-slate-500">{strategy.id} · {strategy.version}</div>
           </div>
-          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-slate-950/55 px-3 py-2 text-xs text-slate-300">
-            <ShieldCheck className="h-4 w-4 text-cyan-300" /> One active trade per coin
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="rounded-lg border border-white/10 bg-slate-950/55 px-3 py-2 text-xs text-slate-300">
+              <span className="text-slate-500">Win rate</span> <span className="font-semibold text-emerald-300">{formatPercent(performance.win_rate || 0, 1)}</span>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-slate-950/55 px-3 py-2 text-xs text-slate-300">
+              <ShieldCheck className="mr-1 inline h-4 w-4 text-cyan-300" /> One active trade per coin
+            </div>
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              aria-controls={`strategy-details-${strategy.id}-${strategy.version}`}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20"
+            >
+              {expanded ? "Collapse details" : "Expand details"}
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="p-4">
+      {expanded ? <div id={`strategy-details-${strategy.id}-${strategy.version}`} className="p-4">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <Metric label="Evaluations" value={coverage.decision_snapshots || 0} icon={Activity} />
           <Metric label="Eligible scans" value={coverage.eligible_signals || 0} icon={CheckCircle2} tone="emerald" />
@@ -474,7 +552,7 @@ function StrategyPanel({ strategy, ledgerLoading }) {
 
         <CandidateTable candidates={strategy.candidates || []} />
         <StrategyPaperHistory trades={strategy.strategy_paper_history || []} loading={ledgerLoading} />
-      </div>
+      </div> : null}
     </article>
   );
 }
