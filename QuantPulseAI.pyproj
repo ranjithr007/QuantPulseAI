@@ -996,13 +996,16 @@
     <Content Include="frontend\quantpulse-dashboard\src\pages\BacktestPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\CoinDetailsPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\DashboardHomePage.jsx" />
+    <Content Include="frontend\quantpulse-dashboard\src\pages\MarketMovePage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\MarketScanPage.jsx" />
+    <Content Include="frontend\quantpulse-dashboard\src\pages\MarketTrendPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\PnlPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\RiskControlsPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\RotationPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\RsRankingPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\SignalsPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\StageAnalysisPage.jsx" />
+    <Content Include="frontend\quantpulse-dashboard\src\pages\StrategiesPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\pages\TradingDetailsPage.jsx" />
     <Content Include="frontend\quantpulse-dashboard\src\styles.css" />
     <Content Include="frontend\quantpulse-dashboard\src\utils\eligibility.js" />
