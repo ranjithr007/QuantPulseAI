@@ -29,7 +29,7 @@ export default function SignalScannerSection({ view, filters, setView, setFilter
           <div>
             <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Signal Scanner</div>
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-white sm:text-xl">Actionable signals</h2>
-            <p className="mt-1 text-sm text-slate-500">Current BUY/SELL setups only. Neutral and WAIT coins remain in the Market overview.</p>
+            <p className="mt-1 text-sm text-slate-500">Directional signals only. A LONG/SHORT bias is shown separately from the entry and executor gates.</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
@@ -50,8 +50,8 @@ export default function SignalScannerSection({ view, filters, setView, setFilter
 
         <div className="mt-3.5 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
           <SignalSummary label="Actionable" value={actionableRows.length} note="BUY + SELL" tone="cyan" />
-          <SignalSummary label="Long" value={longCount} note="Current BUY setups" tone="emerald" />
-          <SignalSummary label="Short" value={shortCount} note="Current SELL setups" tone="rose" />
+          <SignalSummary label="Long" value={longCount} note="BUY or LONG bias" tone="emerald" />
+          <SignalSummary label="Short" value={shortCount} note="SELL or SHORT bias" tone="rose" />
           <SignalSummary label="Executor" value={executorReadyCount} note={`${blockedCount} blocked`} tone={executorReadyCount ? "emerald" : "amber"} />
         </div>
 
@@ -112,7 +112,7 @@ function SignalCard({ row, active, onClick }) {
           <div className="text-base font-semibold text-white sm:text-lg">{row.symbol}</div>
           <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500">{row.regime}</div>
         </div>
-        <SignalBadge type={row.type} />
+        <SignalBadge type={row.displayType || row.type} />
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2">
@@ -127,6 +127,7 @@ function SignalCard({ row, active, onClick }) {
       <div className="mt-3 space-y-1.5">
         <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Targets</div>
         <div className="text-sm text-slate-300">{formatTargets(row.targets)}</div>
+        {row.signalContext ? <div className="text-xs leading-5 text-amber-300">{row.signalContext}</div> : null}
         <div className="line-clamp-2 text-xs leading-5 text-slate-400">{row.reason}</div>
       </div>
 
@@ -154,6 +155,8 @@ function SignalBadge({ type }) {
       ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-200"
       : type === "SELL"
         ? "border-rose-400/25 bg-rose-500/10 text-rose-200"
+        : String(type).includes("BIAS")
+          ? "border-amber-400/25 bg-amber-500/10 text-amber-200"
         : "border-white/10 bg-slate-950/70 text-slate-200";
 
   return <span className={clsx("inline-flex items-center rounded-full px-3 py-1 text-xs font-medium", toneClass)}>{type}</span>;

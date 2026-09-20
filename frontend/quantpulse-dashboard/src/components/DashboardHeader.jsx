@@ -302,7 +302,7 @@ function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
               <Link
                 key={row.symbol}
                 to={getPageHref("coin-details", { ...view, symbol: row.symbol })}
-                title={row.reason || `${row.symbol} ${row.type}`}
+                title={row.signalContext || row.reason || `${row.symbol} ${row.type}`}
                 className="flex h-14 min-w-[132px] shrink-0 flex-col justify-center rounded-lg border border-white/5 bg-slate-950/70 px-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-w-[150px]"
               >
                 <div className="flex items-center justify-between gap-2">
@@ -310,10 +310,10 @@ function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
                   <span
                     className={clsx(
                       "text-[10px] font-semibold uppercase tracking-[0.14em]",
-                      row.type === "BUY" ? "text-emerald-300" : row.type === "SELL" ? "text-rose-300" : "text-slate-400"
+                      (row.displayType || row.type) === "BUY" ? "text-emerald-300" : (row.displayType || row.type) === "SELL" ? "text-rose-300" : (row.displayType || row.type).includes("BIAS") ? "text-amber-300" : "text-slate-400"
                     )}
                   >
-                    {row.type}
+                    {row.displayType || row.type}
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px]">
@@ -323,7 +323,7 @@ function MarketTicker({ signalRows = [], watchlist, view, getPageHref }) {
                   </span>
                 </div>
                 <div className="mt-0.5 max-w-[132px] truncate text-[9px] text-slate-500 sm:max-w-[150px]">
-                  {row.type === "WAIT" ? row.reason || "No executable confirmation" : "Executable signal"}
+                  {row.signalContext || (row.type === "WAIT" ? row.reason || "No executable confirmation" : "Executable signal")}
                 </div>
               </Link>
             ))}

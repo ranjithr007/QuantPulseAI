@@ -56,7 +56,7 @@ export default function MarketSignalTable({
               <th className="px-3 py-2.5">Symbol</th>
               <th className="px-3 py-2.5">Timeframe</th>
               <th className="px-3 py-2.5">Live price</th>
-              <th className="px-3 py-2.5">AI signal</th>
+              <th className="px-3 py-2.5">Signal / bias</th>
               <th className="px-3 py-2.5">Confidence</th>
               <th className="px-3 py-2.5">RS score</th>
               <th className="px-3 py-2.5">Stage</th>
@@ -103,7 +103,8 @@ export default function MarketSignalTable({
                   </div>
                 </td>
                 <td className="px-2.5 py-2.5 sm:px-3">
-                  <Pill tone={signalTone(row.type)}>{row.type}</Pill>
+                  <Pill tone={signalTone(row.displayType || row.type)}>{row.displayType || row.type}</Pill>
+                  {row.signalContext ? <div className="mt-1 max-w-[10rem] text-[10px] leading-4 text-amber-300" title={row.signalContext}>{row.signalContext}</div> : null}
                 </td>
                 <td className="px-2.5 py-2.5 text-slate-300 sm:px-3">{formatPercent(row.confidence, 0, "-")}</td>
                 <td className="px-2.5 py-2.5 sm:px-3">
@@ -180,7 +181,15 @@ function MobileSignalCard({ row, active, minConfidence, onOpenSymbol, getSymbolH
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <MobileDatum label="Signal" value={<Pill tone={signalTone(row.type)}>{row.type}</Pill>} />
+        <MobileDatum
+          label="Signal"
+          value={
+            <div>
+              <Pill tone={signalTone(row.displayType || row.type)}>{row.displayType || row.type}</Pill>
+              {row.signalContext ? <div className="mt-1 text-[10px] leading-4 text-amber-300">{row.signalContext}</div> : null}
+            </div>
+          }
+        />
         <MobileDatum label="Confidence" value={formatPercent(row.confidence, 0, "-")} />
         <MobileDatum label="Regime" value={row.regime} />
         <MobileDatum
@@ -248,6 +257,7 @@ export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperT
   const rotation = watchRow.rotation || {};
   const stage = resolveStage(selectedRow, watchRow, stageAnalysis);
   const risk = deriveRowEligibilityState({ row: selectedRow, watchRow, minConfidence });
+  const signalPresentation = deriveSignalPresentation(selectedRow, watchRow);
   const hasLiveRecord = Boolean(row.liveUpdatedAt);
   const liveState = getLiveMarketState({ liveStatus, updatedAt: row.liveUpdatedAt, hasLiveRecord });
   const executor = deriveExecutorState(selectedRow, paperTradeCandidates);
@@ -255,6 +265,8 @@ export function enrichRow(row, watchlist, liveStatus, minConfidence = 40, paperT
 
   return {
     ...selectedRow,
+    displayType: signalPresentation.displayType,
+    signalContext: signalPresentation.signalContext,
     currentPrice: nullableNumberFrom(row.currentPrice, watchRow.current_price),
     priceSource: liveState.source,
     liveState,
@@ -303,7 +315,7 @@ export function selectWatchlistSignal(row, watchRow) {
     (value) => value !== null && value !== undefined
   );
 
-  return {
+  const selected = {
     ...row,
     timeframe: watchRow.entry_timeframe || row.timeframe,
     type: side === "LONG" ? "BUY" : "SELL",
@@ -317,6 +329,33 @@ export function selectWatchlistSignal(row, watchRow) {
     riskReward: nullableNumberFrom(watchRow.risk_reward, row.riskReward),
     selectedFromWatchlist: true,
   };
+  const presentation = deriveSignalPresentation(selected, watchRow);
+  return {
+    ...selected,
+    displayType: presentation.displayType,
+    signalContext: presentation.signalContext,
+  };
+}
+
+function deriveSignalPresentation(row, watchRow) {
+  const type = String(row?.type || "WAIT").toUpperCase();
+  const selectedTimeframe = String(watchRow?.entry_timeframe || row?.timeframe || "").toLowerCase();
+  const oneHourBias = String(watchRow?.bias_1h || "").toUpperCase();
+  const oneHourScore = Number(watchRow?.score_1h);
+  const higherTimeframe = ["2h", "4h", "1d"].includes(selectedTimeframe);
+  const longConflict = type === "BUY" && (oneHourBias.includes("SHORT") || (Number.isFinite(oneHourScore) && oneHourScore <= -40));
+  const shortConflict = type === "SELL" && (oneHourBias.includes("LONG") || (Number.isFinite(oneHourScore) && oneHourScore >= 40));
+
+  if (higherTimeframe && (longConflict || shortConflict)) {
+    const side = type === "BUY" ? "LONG" : "SHORT";
+    const lowerSide = oneHourBias.includes("SHORT") || oneHourScore <= -40 ? "SHORT" : "LONG";
+    return {
+      displayType: `${side} BIAS`,
+      signalContext: `${selectedTimeframe} bias · 1h ${lowerSide} pullback`,
+    };
+  }
+
+  return { displayType: type, signalContext: null };
 }
 
 export function deriveExecutorState(row, candidates = []) {
@@ -380,6 +419,7 @@ function normalizeTradeSide(value) {
 function signalTone(type) {
   if (type === "BUY") return "emerald";
   if (type === "SELL") return "rose";
+  if (String(type).includes("BIAS")) return "amber";
   return "slate";
 }
 
