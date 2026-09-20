@@ -65,7 +65,11 @@ from app.strategies.registry import CORE_FUSION_STRATEGY_ID
 from app.strategies.registry import CORE_FUSION_STRATEGY_VERSION
 from app.strategies.registry import CORE_FUSION_DECISION_VERSION
 from app.strategies.registry import CORE_SIGNAL_STRATEGY_ID
-from app.strategies.registry import CORE_SIGNAL_ENTRY_STRATEGY_ID, CORE_SIGNAL_EXIT_STRATEGY_ID
+from app.strategies.registry import (
+    CORE_SIGNAL_ENTRY_STRATEGY_ID,
+    CORE_SIGNAL_EXIT_PROTECTION_STRATEGY_ID,
+    CORE_SIGNAL_EXIT_STRATEGY_ID,
+)
 from app.strategies.registry import REGIME_TREND_EXIT_STRATEGY_ID
 from app.strategies.registry import CORE_SIGNAL_DECISION_VERSION
 from app.strategies.registry import LIQUIDATION_CARRY_STRATEGY_ID
@@ -2182,6 +2186,7 @@ def _persist_strategy_candidates(db, payload, market_participation):
         (CORE_SIGNAL_ENTRY_STRATEGY_ID, payload,
          lambda gate: rebuild_core_entry_payload(payload, gate)),
         (CORE_SIGNAL_EXIT_STRATEGY_ID, payload, None),
+        (CORE_SIGNAL_EXIT_PROTECTION_STRATEGY_ID, payload, None),
         (REGIME_TREND_EXIT_STRATEGY_ID, regime_trend_payload, None),
     ):
         definition = strategy_definition(experiment_id)

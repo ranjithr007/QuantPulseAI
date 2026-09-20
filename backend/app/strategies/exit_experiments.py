@@ -17,20 +17,28 @@ def build_exit_experiment_payload(base_payload, definition):
     No plan or entry eligibility is invented when the baseline has none.
     """
     payload = copy.deepcopy(base_payload)
+    exit_profile = definition.get("exit_management_profile", DELAYED_TRAIL_PROFILE)
+    trailing_activation_r = float(
+        definition.get("trailing_activation_r", TRAILING_ACTIVATION_R)
+    )
     experiment = {
         "entry_quality_profile": BASELINE_ENTRY_PROFILE,
-        "exit_management_profile": DELAYED_TRAIL_PROFILE,
+        "exit_management_profile": exit_profile,
         "experiment_version": definition["version"],
         "paper_only": True,
     }
-    payload["trailing_activation_r"] = TRAILING_ACTIVATION_R
+    if "locked_profit_fraction" in definition:
+        experiment["locked_profit_fraction"] = float(
+            definition["locked_profit_fraction"]
+        )
+    payload["trailing_activation_r"] = trailing_activation_r
     payload["execution_evidence"] = {
         **(payload.get("execution_evidence") or {}),
         **experiment,
     }
     plan = payload.get("trade_plan")
     if plan is not None:
-        plan["trailing_activation_r"] = TRAILING_ACTIVATION_R
+        plan["trailing_activation_r"] = trailing_activation_r
         plan["execution_evidence"] = {
             **(plan.get("execution_evidence") or {}),
             **experiment,

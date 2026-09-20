@@ -1,4 +1,5 @@
 import copy
+import json
 import math
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from app.repositories.strategy_shadow_trade_repository import StrategyShadowTrad
 from app.strategies.exit_experiments import build_exit_experiment_payload
 from app.strategies.registry import (
     CORE_SIGNAL_ENTRY_STRATEGY,
+    CORE_SIGNAL_EXIT_PROTECTION_STRATEGY,
     CORE_SIGNAL_EXIT_STRATEGY,
     CORE_SIGNAL_STRATEGY,
     MARKET_MOVE_ENTRY_STRATEGY,
@@ -27,6 +29,7 @@ from test_strategy_shadow_trading import _candidate, _session
 
 EXIT_DEFINITIONS = [
     CORE_SIGNAL_EXIT_STRATEGY,
+    CORE_SIGNAL_EXIT_PROTECTION_STRATEGY,
     MARKET_MOVE_EXIT_STRATEGY,
     REGIME_TREND_EXIT_STRATEGY,
 ]
@@ -82,6 +85,7 @@ def _trade(payload, **overrides):
         "risk_reward": 3,
         "opened_at": OPENED_AT,
         "trailing_activation_r": payload.get("trailing_activation_r"),
+        "execution_evidence_json": json.dumps(payload.get("execution_evidence") or {}),
     } | overrides))
 
 
@@ -101,14 +105,18 @@ def test_exit_clone_changes_only_execution_metadata(definition, side):
     result = build_exit_experiment_payload(baseline, definition)
     assert baseline == original
     expected = copy.deepcopy(original)
+    profile = definition.get("exit_management_profile", "DELAYED_TRAIL_1R_V1")
+    activation = definition.get("trailing_activation_r", 1.0)
     experiment = {
         "entry_quality_profile": "BASELINE_ENTRY_V1",
-        "exit_management_profile": "DELAYED_TRAIL_1R_V1",
+        "exit_management_profile": profile,
         "experiment_version": definition["version"],
         "paper_only": True,
     }
+    if "locked_profit_fraction" in definition:
+        experiment["locked_profit_fraction"] = definition["locked_profit_fraction"]
     for scope in (expected, expected["trade_plan"]):
-        scope["trailing_activation_r"] = 1.0
+        scope["trailing_activation_r"] = activation
         scope["execution_evidence"].update(experiment)
     assert result == expected
     result["trigger"]["status"] = "WAIT"
@@ -165,15 +173,19 @@ def test_exit_metadata_survives_existing_ledger_creation(definition, repository)
         row = repository().save_candidate(db, candidate)
         db.expire_all()
         evidence = read_evidence(row.execution_evidence_json)
-        assert row.trailing_activation_r == 1.0
+        assert row.trailing_activation_r == definition.get("trailing_activation_r", 1.0)
         assert row.strategy_id == definition["id"]
         assert row.strategy_version == definition["version"]
         assert evidence["baseline_source"] == "retained"
         assert evidence["entry_quality_profile"] == "BASELINE_ENTRY_V1"
-        assert evidence["exit_management_profile"] == "DELAYED_TRAIL_1R_V1"
+        assert evidence["exit_management_profile"] == definition.get(
+            "exit_management_profile", "DELAYED_TRAIL_1R_V1"
+        )
         assert evidence["experiment_version"] == definition["version"]
         assert evidence["paper_only"] is True
-        assert evidence["trailing_activation_r"] == 1.0
+        assert evidence["trailing_activation_r"] == definition.get(
+            "trailing_activation_r", 1.0
+        )
     assert baseline == original
 
 
@@ -189,10 +201,24 @@ def test_continuous_trail_starts_at_exact_one_r_not_just_before(definition, side
     assert evaluate_paper_trade_exit(_trade(candidate), _mark(just_before))["action"] == "HOLD"
     at_one_r = evaluate_paper_trade_exit(_trade(candidate), _mark(activation_price))
     assert at_one_r["action"] == "MOVE_STOP"
-    assert at_one_r["new_stop_loss"] == 100.0
+    cost_safe = definition.get("exit_management_profile") == "COST_SAFE_PROTECTION_1R_V1"
+    expected_stop = 100.0 + sign * (1.0 if cost_safe else 0.0)
+    assert at_one_r["new_stop_loss"] == expected_stop
     assert at_one_r["reason"] == "FAVORABLE_PRICE_TRAIL"
-    advanced = _trade(candidate, stop_loss=100.0 + sign)
-    assert evaluate_paper_trade_exit(advanced, _mark(100.0 + sign * 2.5))["action"] == "HOLD"
+    advanced = _trade(
+        candidate,
+        stop_loss=expected_stop if cost_safe else 100.0 + sign,
+    )
+    advanced_decision = evaluate_paper_trade_exit(
+        advanced, _mark(100.0 + sign * 2.5)
+    )
+    if cost_safe:
+        assert advanced_decision["action"] == "MOVE_STOP"
+        assert advanced_decision["new_stop_loss"] == (
+            101.25 if side == "LONG" else 98.75
+        )
+    else:
+        assert advanced_decision["action"] == "HOLD"
 
 
 @pytest.mark.parametrize("definition", EXIT_DEFINITIONS, ids=lambda item: item["id"])

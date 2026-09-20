@@ -17,6 +17,9 @@ CORE_SIGNAL_ENTRY_DECISION_VERSION = "core_signal_entry_strategy_v1"
 CORE_SIGNAL_EXIT_STRATEGY_ID = "CORE_SIGNAL_EXIT"
 CORE_SIGNAL_EXIT_STRATEGY_VERSION = "core_signal_exit_v1"
 CORE_SIGNAL_EXIT_DECISION_VERSION = "core_signal_exit_strategy_v1"
+CORE_SIGNAL_EXIT_PROTECTION_STRATEGY_ID = "CORE_SIGNAL_EXIT_PROTECTION"
+CORE_SIGNAL_EXIT_PROTECTION_STRATEGY_VERSION = "core_signal_exit_protection_v1"
+CORE_SIGNAL_EXIT_PROTECTION_DECISION_VERSION = "core_signal_exit_protection_strategy_v1"
 MARKET_MOVE_STRATEGY_ID = "MARKET_MOVE"
 MARKET_MOVE_STRATEGY_VERSION = "market_move_v1"
 MARKET_MOVE_DECISION_VERSION = "market_move_strategy_v1"
@@ -97,6 +100,26 @@ CORE_SIGNAL_EXIT_STRATEGY = {
     "execution_scope": "PAPER_ONLY",
     "official_execution_enabled": False,
     "immutable_experiment": True,
+}
+
+CORE_SIGNAL_EXIT_PROTECTION_STRATEGY = {
+    **CORE_SIGNAL_STRATEGY,
+    "id": CORE_SIGNAL_EXIT_PROTECTION_STRATEGY_ID,
+    "version": CORE_SIGNAL_EXIT_PROTECTION_STRATEGY_VERSION,
+    "decision_version": CORE_SIGNAL_EXIT_PROTECTION_DECISION_VERSION,
+    "name": "Core Signal Exit Protection Candidate",
+    "description": (
+        "Exit-only paper experiment: unchanged Core Signal entries, stops, "
+        "targets and hold horizon; after a one-risk-unit move, protect half "
+        "of the favorable move instead of using one-for-one trailing."
+    ),
+    "strategy_type": "EXIT_CANDIDATE",
+    "execution_scope": "PAPER_ONLY",
+    "official_execution_enabled": False,
+    "immutable_experiment": True,
+    "exit_management_profile": "COST_SAFE_PROTECTION_1R_V1",
+    "trailing_activation_r": 1.0,
+    "locked_profit_fraction": 0.5,
 }
 
 MARKET_MOVE_STRATEGY = {
@@ -327,6 +350,7 @@ STRATEGY_REGISTRY = {
     CORE_SIGNAL_STRATEGY_ID: CORE_SIGNAL_STRATEGY,
     CORE_SIGNAL_ENTRY_STRATEGY_ID: CORE_SIGNAL_ENTRY_STRATEGY,
     CORE_SIGNAL_EXIT_STRATEGY_ID: CORE_SIGNAL_EXIT_STRATEGY,
+    CORE_SIGNAL_EXIT_PROTECTION_STRATEGY_ID: CORE_SIGNAL_EXIT_PROTECTION_STRATEGY,
     MARKET_MOVE_STRATEGY_ID: MARKET_MOVE_STRATEGY,
     MARKET_MOVE_ENTRY_STRATEGY_ID: MARKET_MOVE_ENTRY_STRATEGY,
     MARKET_MOVE_EXIT_STRATEGY_ID: MARKET_MOVE_EXIT_STRATEGY,

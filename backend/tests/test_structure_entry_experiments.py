@@ -208,7 +208,7 @@ def test_ineligible_baseline_is_not_rescued():
     assert result["trigger"]["reason"] == core["trigger"]["reason"]
 
 
-def test_persist_pipeline_contains_six_separate_frozen_experiments(monkeypatch):
+def test_persist_pipeline_contains_separate_frozen_experiments(monkeypatch):
     core, raw, now = inputs()
     def persisted(*args, **kwargs):
         return {"persisted": True, "decision": "ELIGIBLE", "id": 1}
@@ -218,7 +218,13 @@ def test_persist_pipeline_contains_six_separate_frozen_experiments(monkeypatch):
     monkeypatch.setattr(signals_api, "active_candidate_definitions", lambda db: [])
     records = signals_api._persist_strategy_candidates(None, core, raw)
     experiments = {r["definition"]["id"]: r for r in records if r["definition"].get("immutable_experiment")}
-    assert set(experiments) == {f+suffix for f in ("CORE_SIGNAL", "REGIME_TREND", "MARKET_MOVE") for suffix in ("_ENTRY","_EXIT")}
+    assert set(experiments) == {
+        *(f + suffix for f in ("CORE_SIGNAL", "REGIME_TREND", "MARKET_MOVE") for suffix in ("_ENTRY", "_EXIT")),
+        "CORE_SIGNAL_EXIT_PROTECTION",
+    }
     for key, record in experiments.items():
         assert record["definition"]["official_execution_enabled"] is False
-        assert record["payload"]["trailing_activation_r"] == (1 if key.endswith("_EXIT") else 0)
+        expected_activation = 1 if (
+            key.endswith("_EXIT") or key == "CORE_SIGNAL_EXIT_PROTECTION"
+        ) else 0
+        assert record["payload"]["trailing_activation_r"] == expected_activation

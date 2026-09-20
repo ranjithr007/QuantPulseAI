@@ -6,6 +6,11 @@ from app.paper_trading.exit_policy import is_staged_exit_policy
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.exit_policy import target2_trail_trigger
 from app.paper_trading.exit_evidence import exit_context
+from app.paper_trading.exit_evidence import read_evidence
+
+
+COST_SAFE_PROTECTION_PROFILE = "COST_SAFE_PROTECTION_1R_V1"
+DEFAULT_LOCKED_PROFIT_FRACTION = 0.5
 
 
 def evaluate_paper_trade_exit(trade, candle):
@@ -146,7 +151,11 @@ def _evaluate_staged_exit(trade, candle, high, low):
                 "low_price": low,
             }
 
-    trailing_stop = _favorable_price_trailing_stop(trade, candle)
+    trailing_stop = (
+        _cost_safe_profit_protection_stop(trade, candle)
+        if _uses_cost_safe_protection(trade)
+        else _favorable_price_trailing_stop(trade, candle)
+    )
     if trailing_stop is not None:
         current_stop = float(trade.stop_loss)
         improves_protection = (
@@ -230,6 +239,49 @@ def _favorable_price_trailing_stop(trade, candle):
 
     favorable_move = max(0.0, entry - close)
     return round(initial - favorable_move, precision)
+
+
+def _uses_cost_safe_protection(trade):
+    evidence = read_evidence(getattr(trade, "execution_evidence_json", None))
+    return evidence.get("exit_management_profile") == COST_SAFE_PROTECTION_PROFILE
+
+
+def _cost_safe_profit_protection_stop(trade, candle):
+    """Lock half of the favorable move after the configured one-R activation.
+
+    This keeps the candidate's original hard stop until activation, then moves
+    the stop at half the favorable pace. It preserves the existing staged T1/T2
+    rules while avoiding the baseline's one-for-one giveback behavior.
+    """
+    initial_stop = getattr(trade, "initial_stop_loss", None)
+    close_price = getattr(candle, "close_price", None)
+    if initial_stop is None or close_price is None:
+        return None
+
+    entry = float(trade.entry_price)
+    initial = float(initial_stop)
+    close = float(close_price)
+    side = str(trade.side).upper()
+    sign = 1 if side == "LONG" else -1
+    favorable = sign * (close - entry)
+    risk = abs(entry - initial)
+    activation_r = float(getattr(trade, "trailing_activation_r", None) or 0)
+    if risk <= 0 or activation_r <= 0 or favorable < risk * activation_r:
+        return None
+
+    evidence = read_evidence(getattr(trade, "execution_evidence_json", None))
+    try:
+        locked_fraction = float(
+            evidence.get("locked_profit_fraction", DEFAULT_LOCKED_PROFIT_FRACTION)
+        )
+    except (TypeError, ValueError):
+        locked_fraction = DEFAULT_LOCKED_PROFIT_FRACTION
+    if not 0 < locked_fraction < 1:
+        locked_fraction = DEFAULT_LOCKED_PROFIT_FRACTION
+
+    protected_move = favorable * locked_fraction
+    precision = _price_precision(entry)
+    return round(entry + sign * protected_move, precision)
 
 
 def _price_precision(price):

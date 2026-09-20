@@ -16,7 +16,7 @@ from test_strategy_shadow_trading import _automation, _candidate, _session
 
 
 FROZEN_IDS = [
-    "CORE_SIGNAL_ENTRY", "CORE_SIGNAL_EXIT", "MARKET_MOVE_ENTRY",
+    "CORE_SIGNAL_ENTRY", "CORE_SIGNAL_EXIT", "CORE_SIGNAL_EXIT_PROTECTION", "MARKET_MOVE_ENTRY",
     "MARKET_MOVE_EXIT", "REGIME_TREND_ENTRY", "REGIME_TREND_EXIT",
 ]
 UPGRADED_ENTRY_IDS = ["MARKET_MOVE_ENTRY", "REGIME_TREND_ENTRY"]
@@ -56,7 +56,11 @@ def test_numbered_frozen_revisions_share_lock_but_auto_and_baseline_books_do_not
     assert lock_key(strategy_id, strategy_id.lower() + "_v2") == original
     assert lock_key(strategy_id, strategy_id.lower() + "_auto_m30_1") != original
     assert lock_key(strategy_id, strategy_id.lower() + "_v1_candidate_test") != original
-    baseline_id = strategy_id.rsplit("_", 1)[0]
+    baseline_id = (
+        "CORE_SIGNAL"
+        if strategy_id == "CORE_SIGNAL_EXIT_PROTECTION"
+        else strategy_id.rsplit("_", 1)[0]
+    )
     baseline = lock_key(baseline_id, baseline_id.lower() + "_v1")
     assert baseline != original
     assert lock_key(baseline_id, baseline_id.lower() + "_v2") != baseline
