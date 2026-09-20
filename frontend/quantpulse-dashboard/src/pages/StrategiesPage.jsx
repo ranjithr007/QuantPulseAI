@@ -162,7 +162,7 @@ export default function StrategiesPage() {
           </div>
         ) : null}
         <ComparisonBanner comparison={payload?.comparison} />
-        <StrategyMinimumsTable records={records} />
+        <StrategyMetricsTable records={records} />
         <EntryHoldoutBanner
           holdout={payload?.entry_strategy_holdout}
           outcome={payload?.entry_strategy_holdout_outcome}
@@ -396,50 +396,50 @@ function ComparisonBanner({ comparison }) {
   );
 }
 
-function StrategyMinimumsTable({ records }) {
+function StrategyMetricsTable({ records }) {
   if (!records.length) return null;
   return (
-    <section className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-slate-900/70" aria-label="Strategy minimum requirements and win rates">
+    <section className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-slate-900/70" aria-label="Strategy metrics summary">
       <div className="border-b border-white/10 bg-slate-950/45 px-4 py-3">
-        <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Minimums and current results</div>
-        <div className="mt-1 text-sm font-medium text-white">Strategy promotion requirements at a glance</div>
-        <div className="mt-1 text-xs text-slate-500">Minimums come from each strategy’s readiness gate. Current values use its clean Strategy Paper evidence.</div>
+        <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Strategy metrics</div>
+        <div className="mt-1 text-sm font-medium text-white">Current performance by strategy</div>
+        <div className="mt-1 text-xs text-slate-500">Use “Expand details” on any strategy below to inspect its full metrics, candidates, learning evidence, and trade history.</div>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-[980px] w-full text-left text-xs">
+        <table className="min-w-[900px] w-full text-left text-xs">
           <thead className="bg-slate-950/40 text-[10px] uppercase tracking-[0.14em] text-slate-500">
             <tr>
               <th className="px-4 py-2.5">Strategy</th>
-              <th>Gate status</th>
-              <th>Closed trades</th>
+              <th>Evaluations</th>
+              <th>Eligible scans</th>
+              <th>Blocked scans</th>
+              <th>Paper trades</th>
               <th>Win rate</th>
-              <th>Profit factor</th>
-              <th>Max drawdown</th>
+              <th>Drawdown</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
             {records.map((strategy) => {
               const performance = strategy.strategy_paper_performance || strategy.performance || {};
-              const readiness = strategy.forward_test_readiness || {};
-              const closedTrades = performance.closed_trades ?? performance.total_closed_trades ?? performance.total_trades ?? 0;
-              const minimumTrades = readiness.minimum_closed_trades || 30;
+              const coverage = strategy.coverage || {};
+              const evaluations = coverage.decision_snapshots || 0;
+              const eligibleScans = coverage.eligible_signals || 0;
+              const blockedScans = coverage.blocked_signals || 0;
+              const paperTrades = performance.total_trades || 0;
               const winRate = performance.win_rate ?? 0;
-              const minimumWinRate = readiness.minimum_win_rate || 55;
-              const profitFactor = performance.profit_factor;
-              const minimumProfitFactor = readiness.minimum_profit_factor || 1.3;
               const drawdown = performance.max_drawdown_percent ?? 0;
-              const maximumDrawdown = readiness.maximum_drawdown_percent || 10;
               return (
                 <tr key={strategyKey(strategy)} className="text-slate-300">
                   <td className="px-4 py-3">
                     <div className="font-semibold text-white">{strategy.name}</div>
                     <div className="mt-0.5 font-mono text-[10px] text-slate-500">{strategy.id}</div>
                   </td>
-                  <td><StatusBadge label={(readiness.status || "COLLECTING").replaceAll("_", " ")} tone={readiness.status === "PROMOTION_CANDIDATE" ? "emerald" : readiness.status === "EVIDENCE_COMPLETE_FAILED" ? "rose" : "amber"} /></td>
-                  <td><span className={closedTrades >= minimumTrades ? "text-emerald-300" : "text-amber-300"}>{closedTrades}</span><span className="text-slate-500"> / {minimumTrades} min</span></td>
-                  <td><span className={winRate >= minimumWinRate ? "text-emerald-300" : "text-amber-300"}>{formatPercent(winRate, 1)}</span><span className="text-slate-500"> / {formatPercent(minimumWinRate, 0)} min</span></td>
-                  <td><span className={profitFactor != null && profitFactor >= minimumProfitFactor ? "text-emerald-300" : "text-amber-300"}>{profitFactor == null ? "—" : number(profitFactor, 2)}</span><span className="text-slate-500"> / {number(minimumProfitFactor, 2)} min</span></td>
-                  <td><span className={drawdown <= maximumDrawdown ? "text-emerald-300" : "text-rose-300"}>{formatPercent(drawdown, 2)}</span><span className="text-slate-500"> / {formatPercent(maximumDrawdown, 0)} max</span></td>
+                  <td>{number(evaluations, 0)}</td>
+                  <td className="text-emerald-300">{number(eligibleScans, 0)}</td>
+                  <td className="text-amber-300">{number(blockedScans, 0)}</td>
+                  <td>{number(paperTrades, 0)}</td>
+                  <td className="font-semibold text-emerald-300">{formatPercent(winRate, 1)}</td>
+                  <td className="text-rose-300">{formatPercent(drawdown, 2)}</td>
                 </tr>
               );
             })}
