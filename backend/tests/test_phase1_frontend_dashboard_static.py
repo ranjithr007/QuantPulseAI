@@ -345,9 +345,11 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertNotIn("LIVE_SNAPSHOT_REFRESH_MS = 10_000", dashboard_data)
         self.assertIn("${QUANTPULSE_API_UPSTREAM}/ws/", nginx)
         self.assertIn("${QUANTPULSE_API_UPSTREAM}/;", nginx)
-        self.assertIn("ENV QUANTPULSE_API_UPSTREAM=", dockerfile)
-        self.assertNotIn("quantpulseai-staging.up.railway.app", dockerfile)
-        self.assertIn("QUANTPULSE_API_UPSTREAM must be configured", dockerfile)
+        self.assertIn(
+            "ENV QUANTPULSE_API_UPSTREAM=https://quantpulseai-staging.up.railway.app",
+            dockerfile,
+        )
+        self.assertIn('CMD ["nginx", "-g", "daemon off;"]', dockerfile)
 
     def test_auxiliary_pollers_pause_hidden_pages_and_do_not_overlap(self):
         notification_center = (
