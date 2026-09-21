@@ -461,3 +461,12 @@ It must retain the frozen signal rules, include fees and conservative simulated
 fills, enforce account/cash/exposure/freshness gates, persist all decisions and
 loss evidence, deduplicate entries, and block new risk after monitoring gaps.
 Forward paper fills must never be described as actual exchange executions.
+
+## QP-TI-007: Explicitly enabled Market Move Entry paper experiment
+
+The `MARKET_MOVE_ENTRY` candidate may be enabled for the cloud's official paper
+execution path only through `QUANTPULSE_ENABLE_MARKET_MOVE_ENTRY_PAPER=true`.
+The default remains disabled. The strategy remains `PAPER_ONLY`, retains its
+immutable experiment identity, and has `live_execution_enabled=False`; this flag
+must never be interpreted as live-trading authorization. Removing the flag must
+disable new paper entries after the service restarts.

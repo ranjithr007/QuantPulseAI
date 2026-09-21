@@ -5,6 +5,8 @@ existing identifier/version pair must never be repurposed for different trading
 rules. New behavior requires a new version.
 """
 
+import os
+
 CORE_FUSION_STRATEGY_ID = "CORE_FUSION"
 CORE_FUSION_STRATEGY_VERSION = "core_fusion_v1"
 CORE_FUSION_DECISION_VERSION = "core_fusion_strategy_v1"
@@ -25,6 +27,15 @@ MARKET_MOVE_STRATEGY_VERSION = "market_move_v1"
 MARKET_MOVE_DECISION_VERSION = "market_move_strategy_v1"
 MARKET_MOVE_ENTRY_STRATEGY_ID = "MARKET_MOVE_ENTRY"
 MARKET_MOVE_EXIT_STRATEGY_ID = "MARKET_MOVE_EXIT"
+
+
+def _paper_market_move_entry_enabled():
+    return os.getenv("QUANTPULSE_ENABLE_MARKET_MOVE_ENTRY_PAPER", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 REGIME_TREND_STRATEGY_ID = "REGIME_TREND"
 REGIME_TREND_STRATEGY_VERSION = "regime_trend_v1"
 REGIME_TREND_DECISION_VERSION = "regime_trend_strategy_v1"
@@ -157,7 +168,8 @@ MARKET_MOVE_ENTRY_STRATEGY = {
     ),
     "strategy_type": "ENTRY_CANDIDATE",
     "execution_scope": "PAPER_ONLY",
-    "official_execution_enabled": False,
+    "official_execution_enabled": _paper_market_move_entry_enabled(),
+    "live_execution_enabled": False,
     "immutable_experiment": True,
 }
 
