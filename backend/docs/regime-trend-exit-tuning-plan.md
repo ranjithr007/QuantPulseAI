@@ -1,0 +1,60 @@
+# Regime Trend exit tuning plan
+
+Status: research-only; no operational parameter change is authorized by this
+document.
+
+## Problem statement
+
+The current `REGIME_TREND@regime_trend_v1` paper evidence contains many
+pre-Target-1 trailing stops and a low win rate. The first experiment therefore
+holds entry generation constant and tests exit management separately.
+
+## Frozen candidates
+
+| Candidate | Exit change | Exposure |
+| --- | --- | --- |
+| `BASELINE` | Current exit policy, recorded for comparison | 1x |
+| `TRAIL_075R` | Do not advance the protective trail until price reaches 0.75R | 1x |
+| `TRAIL_100R` | Do not advance the protective trail until price reaches 1.00R | 1x |
+| `STRUCTURE_STOP` | Use the confirmed structure boundary plus an ATR buffer, with a hard maximum loss cap | 1x |
+
+The entry signal, timeframe selection, regime routing, symbol universe, data
+cutoff, and position-risk fraction remain unchanged. The variants are fixed
+before evaluating the outcome period; no per-symbol or per-regime retuning is
+allowed.
+
+## Validation
+
+- Use chronological walk-forward windows with a separate untouched evaluation
+  period.
+- Include fees, conservative entry/exit slippage, and missing-data handling.
+- Require at least 30 mature trades for each candidate before ranking it.
+- Report win rate, profit factor, expectancy, maximum drawdown, stop-out rate,
+  Target-1 rate, Target-2 rate, and results by symbol and regime.
+- A candidate must improve profit factor and drawdown out of sample while
+  remaining positive after costs. A higher win rate alone is insufficient.
+- The existing version remains frozen and available for comparison.
+
+## Hardening controls for any successor
+
+Every successor must fail closed when any of these conditions is missing:
+
+- finalized candles and regime/feature inputs are fresh and timestamp-aligned;
+- at least two governed timeframes agree on direction and the selected regime
+  is one of `TRENDING_BULL`, `BULL_PULLBACK`, `TRENDING_BEAR`, or `BEAR_RALLY`;
+- a confirmed structure event and ATR-based stop are present at execution;
+- simulated exposure is spot-like 1x with a fixed per-trade risk cap, daily loss
+  cap, weekly loss cap, and one-position-per-symbol limit;
+- fees, slippage, spread, and missing-feed behavior are represented in the
+  result; and
+- a monitoring gap, stale quote, or data contradiction blocks new entries and
+  records the reason.
+
+No adaptive threshold, loss-triggered retuning, symbol-specific exception, or
+confidence-based size increase may be introduced during the evaluation window.
+
+## Promotion boundary
+
+This plan cannot enable a new strategy version, alter the official paper wallet,
+or authorize live execution. A passing result requires a separately versioned
+strategy definition, recorded evidence, and an explicit governance decision.
