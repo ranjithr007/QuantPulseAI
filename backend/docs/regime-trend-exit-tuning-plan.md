@@ -58,3 +58,14 @@ confidence-based size increase may be introduced during the evaluation window.
 This plan cannot enable a new strategy version, alter the official paper wallet,
 or authorize live execution. A passing result requires a separately versioned
 strategy definition, recorded evidence, and an explicit governance decision.
+
+## Entry replay result
+
+The 30-day Binance replay (28 August through 22 September 2026) paired 624 mature
+trades. The recorded current exit produced a 27.7% win rate, 0.37 profit factor,
+and -0.386% average return after costs. The signal was already negative before
+execution costs (-0.079% average gross signal return), and 58.5% of resolved
+trades reached 0.25R adverse excursion before favourable excursion. Entry slippage
+contributes to the loss but is not the primary cause. No entry or exit candidate
+is promoted from this sample; a future entry study should test delayed
+confirmation and a strict entry-slippage cap on a fresh chronological holdout.
