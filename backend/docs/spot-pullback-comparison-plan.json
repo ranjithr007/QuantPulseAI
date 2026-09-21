@@ -1,0 +1,34 @@
+{
+  "experiment_id": "SPOT_HORIZON_COMPARISON_20260921_V1",
+  "registered_date": "2026-09-21",
+  "status": "EXPLORATORY_REUSED_DEVELOPMENT_DATA_NOT_HOLDOUT",
+  "rationale": "Test the economic compatibility of ATR horizon and entry-price cap with spot costs. No optimization to an 80% historical win rate.",
+  "data": {
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "history_start": "2023-04-01T00:00:00Z",
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2026-01-01T00:00:00Z",
+    "reserved_unread_in_this_research": "2026 onward and all non-BTC/ETH assets; prior access elsewhere unknown"
+  },
+  "cost_assumptions": {
+    "fee_bps_per_side": 10,
+    "execution_bps_per_side": 5,
+    "fee_source": "https://www.binance.com/en/fee/trading",
+    "fee_checked": "2026-09-21",
+    "execution_cost_status": "ASSUMPTION_NOT_MEASURED",
+    "note": "Published regular-user rate used as current decision scenario, not reconstructed historical fees. No BNB discount, maker fills or zero-fee promotions assumed. User venue/tier unconfirmed."
+  },
+  "candidates": [
+    {"id": "C1_15M_CAP01", "entry_minutes": 15, "context_hours": 1, "entry_cap_atr": 0.1, "max_hold_hours": 6, "setup": "pullback"},
+    {"id": "C2_15M_CAP05", "entry_minutes": 15, "context_hours": 1, "entry_cap_atr": 0.5, "max_hold_hours": 6, "setup": "pullback"},
+    {"id": "C3_1H_CAP01", "entry_minutes": 60, "context_hours": 4, "entry_cap_atr": 0.1, "max_hold_hours": 24, "setup": "pullback"},
+    {"id": "C4_1H_CAP05", "entry_minutes": 60, "context_hours": 4, "entry_cap_atr": 0.5, "max_hold_hours": 24, "setup": "pullback"},
+    {"id": "B1_TREND_ONLY", "entry_minutes": 60, "context_hours": 4, "entry_cap_atr": 0.5, "max_hold_hours": 24, "setup": "trend_transition"}
+  ],
+  "fixed_stress_candidate": "C4_1H_CAP05",
+  "stress_scenarios": ["double_execution_cost", "delay_15_minutes"],
+  "unchanged": ["0.25% risk", "0.5% aggregate risk", "50% gross exposure", "3% maximum price stop", "15% cost-to-risk limit", "1.5R target", "daily/weekly/drawdown circuit breakers", "no leverage"],
+  "benchmarks": ["cash", "50% initial BTC/ETH buy-and-hold allocation", "100% initial BTC/ETH buy-and-hold allocation"],
+  "analysis": "Report all seven runs, first-failure gates, asset attribution and yearly results without resets. Weekly-block bootstrap of daily mean return is descriptive and unadjusted for selection; no statistical promotion claim.",
+  "decision": "No deployment or auto-promotion. Fewer than 500 trades, negative net expectancy, profit factor below 1.25, excessive drawdown or missing validation blocks promotion. At most identify a hypothesis for a separate locked test; do not retune after these results."
+}

@@ -1,0 +1,32 @@
+{
+  "experiment_id": "SPOT_TREND_TRANSFER_20260921_V1",
+  "registered_date": "2026-09-21",
+  "purpose": "Test the previously selected, frozen B1 trend comparator on a later period and additional assets without retuning.",
+  "policy": {"id": "B1_TREND_ONLY", "entry_minutes": 60, "context_hours": 4, "entry_cap_atr": 0.5, "max_hold_hours": 24, "setup": "trend_transition"},
+  "data": {
+    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT"],
+    "first_archive_month": "2025-04",
+    "last_archive_month": "2026-08",
+    "history_start": "2025-04-01T00:00:00Z",
+    "start": "2026-01-01T00:00:00Z",
+    "end": "2026-09-01T00:00:00Z",
+    "source": "Binance public spot monthly 15m candle archives with publisher SHA256 checksums",
+    "selection": "Fixed purposive sample of BTC/ETH plus SOL/XRP/BNB chosen before price access. This is not a point-in-time reconstructed universe; survival/selection bias remains.",
+    "novelty": "2026 and additional coins were not loaded in the preceding two research experiments. Prior access elsewhere in this application is unknown; not claimed pristine or prospective.",
+    "missing_data_policy": "Fail affected cohort visibly; no forward-fill, replacement coin or outcome-dependent date changes. Warm-up only precedes start."
+  },
+  "cohorts": [
+    {"id": "majors_2026", "traded_symbols": ["BTCUSDT", "ETHUSDT"], "context_symbols": ["BTCUSDT"]},
+    {"id": "additional_coins_2026", "traded_symbols": ["SOLUSDT", "XRPUSDT", "BNBUSDT"], "context_symbols": ["BTCUSDT"]}
+  ],
+  "scenarios": [
+    {"id": "baseline", "fee_bps": 10, "execution_bps": 5, "entry_delay_bars": 0},
+    {"id": "double_execution_cost", "fee_bps": 10, "execution_bps": 10, "entry_delay_bars": 0},
+    {"id": "delay_15_minutes", "fee_bps": 10, "execution_bps": 5, "entry_delay_bars": 1}
+  ],
+  "risk": "Unchanged: 0.25% per trade, 0.5% aggregate risk, 50% gross notional, two positions, three entries per UTC day, 1% daily/3% weekly/5% drawdown circuit breakers; no leverage.",
+  "independence": "Cohorts have separate hypothetical wallets. Results are not summed into one investable return. Stress scenarios overlap and are not independent trades or evidence.",
+  "analysis": "Keep all six trials, asset attribution, marked daily returns, first-failure gates and stop reviews. Report descriptive weekly-block uncertainty, no causal news labels. Stress reruns admission, so populations differ.",
+  "acceptance": {"minimum_trades_per_cohort": 500, "minimum_profit_factor": 1.25, "positive_net_expectancy_each_scenario": true, "maximum_drawdown_percent": 5, "all_assets_positive": true},
+  "decision": "No deployment even if numerical gates pass: execution/universe data, dependence/selection-aware inference and prospective paper evidence remain required. No substitutions, retuning, pooled stress sample or 80% claim. Loading this period consumes it as validation evidence; it cannot be reused as unseen."
+}

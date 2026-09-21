@@ -212,6 +212,25 @@ def test_cloud_compose_separates_api_worker_migration_and_frontend():
     )
 
 
+def test_cloud_compose_has_isolated_range_paper_service():
+    from pathlib import Path
+
+    project_root = Path(__file__).parents[2]
+    compose = (project_root / "docker-compose.cloud.yml").read_text(encoding="utf-8")
+
+    assert "range-paper:" in compose
+    assert (
+        '["python", "scripts/run_range_paper.py", "run", "--directory", "/data/range_forward_paper"]'
+        in compose
+    )
+    assert "range-paper-data:/data" in compose
+    assert "range-paper-data:" in compose
+    range_section = compose.split("  range-paper:\n", 1)[1].split("\n  frontend:", 1)[0]
+    assert "QUANTPULSE_DATABASE_URL" not in range_section
+    assert "QUANTPULSE_ADMIN_API_KEY" not in range_section
+    assert "QUANTPULSE_START_LIVE_MARKET" not in range_section
+
+
 def test_cloud_images_and_spa_configuration_are_present():
     from pathlib import Path
 

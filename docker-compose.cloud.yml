@@ -67,6 +67,18 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  range-paper:
+    build:
+      context: ./backend
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TZ: UTC
+    command:
+      ["python", "scripts/run_range_paper.py", "run", "--directory", "/data/range_forward_paper"]
+    volumes:
+      - range-paper-data:/data
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend/quantpulse-dashboard
@@ -81,3 +93,6 @@ services:
       api:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  range-paper-data:

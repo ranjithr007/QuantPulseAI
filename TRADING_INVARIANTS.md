@@ -403,3 +403,61 @@ the legacy 0.75% assumption.
 - Contract prices may remain USDT-quoted market references, but INR capital is
   never divided directly by a USDT price. INR notional, margin and P&L remain
   separate from quote-price data until an exchange conversion rate is present.
+
+## QP-TI-005: Isolated spot research experiment (2026-09-21)
+
+The user-authorized `SPOT_TREND_PULLBACK_RESEARCH_V1` experiment is a standalone,
+offline numerical research lane described in `backend/docs/spot-pullback-research.md`.
+It may evaluate the separately versioned 1h-context/15m-entry, unleveraged
+quote-currency policy with conservative per-trade and portfolio loss limits.
+This scoped research exception does not modify QP-TI-001 through QP-TI-004 or the
+INR paper wallet. It must not register with their signal, paper execution,
+scheduler, automatic learning or live execution paths. Results must identify
+unverified execution/data assumptions and must never authorize promotion or
+claim validated win-rate targets. Any later operational integration requires a
+separate versioned governance decision and the missing validation evidence.
+
+The user-authorized next research step also permits the finite policies under
+`SPOT_COMPARISON_V1_`, defined in
+`backend/docs/spot-pullback-comparison-plan.json`. These offline variants may
+compare the registered 15m/1h entry horizons, corresponding 1h/4h context and
+6h/24h hold, and 0.1/0.5 ATR entry caps, including the simple trend comparator.
+They retain the experiment's risk/exposure limits and every operational isolation
+and no-promotion restriction above. No statistical result can itself override
+these restrictions.
+
+The frozen `B1_TREND_ONLY` temporal/asset validation defined in
+`backend/docs/spot-trend-validation-plan.json` may use separate research wallets
+for BTC/ETH and SOL/XRP/BNB. BTC is context-only in the latter cohort and must
+never enter it. The policy and signal implementation are checked against the
+preceding comparison before new data acquisition. Separate wallets and stress
+trials cannot be pooled to inflate validation sample size. Accessed validation
+periods are consumed evidence, not reusable untouched holdouts. All existing
+isolation, risk limits and prohibitions on automatic promotion remain binding.
+
+The user-authorized `SPOT_RANGE_REVERSION_HYPOTHESIS_V1` development screen may
+evaluate the separately frozen rules in
+`backend/docs/spot-range-reversion-hypothesis-v1.md`, implemented as documented
+in `backend/docs/spot-range-reversion-screen.md`. This is distinct from the
+operational `RANGE_REVERSION` strategy. It retains the offline cash/risk limits,
+uses a signal-time fixed mean target and conservative net reward/risk gate,
+and must not modify any operational strategy registry, paper wallet, scheduler
+or live setting. Existing consumed data remains development evidence, and all
+failed or zero-trade scenarios must be retained without automatic retuning.
+
+## QP-TI-006: Explicitly authorized isolated forward-paper research
+
+On 2026-09-21 the user explicitly requested paper trading of the frozen range
+candidate despite its failed development screen and authorized implementation.
+`SPOT_RANGE_FORWARD_PAPER_V1` may therefore collect forward evidence in a separate
+10,000 virtual-USDT SQLite wallet with 0.10% per-trade risk, BTC/ETH only and no
+leverage. This exception permits exploratory paper observation; it does NOT
+constitute performance approval or override any official strategy/wallet rules.
+See `backend/docs/range-forward-paper.md` for the execution and monitoring limits.
+
+The worker must have no account/order capability, no application scheduler or
+operational wallet integration, and no automatic strategy promotion or retuning.
+It must retain the frozen signal rules, include fees and conservative simulated
+fills, enforce account/cash/exposure/freshness gates, persist all decisions and
+loss evidence, deduplicate entries, and block new risk after monitoring gaps.
+Forward paper fills must never be described as actual exchange executions.
