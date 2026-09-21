@@ -29,8 +29,8 @@ MARKET_MOVE_ENTRY_STRATEGY_ID = "MARKET_MOVE_ENTRY"
 MARKET_MOVE_EXIT_STRATEGY_ID = "MARKET_MOVE_EXIT"
 
 
-def _paper_market_move_entry_enabled():
-    return os.getenv("QUANTPULSE_ENABLE_MARKET_MOVE_ENTRY_PAPER", "false").strip().lower() in {
+def _paper_experiment_enabled(environment_name):
+    return os.getenv(environment_name, "false").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -92,7 +92,10 @@ CORE_SIGNAL_ENTRY_STRATEGY = {
     ),
     "strategy_type": "ENTRY_CANDIDATE",
     "execution_scope": "PAPER_ONLY",
-    "official_execution_enabled": False,
+    "official_execution_enabled": _paper_experiment_enabled(
+        "QUANTPULSE_ENABLE_CORE_SIGNAL_ENTRY_PAPER"
+    ),
+    "live_execution_enabled": False,
     "immutable_experiment": True,
 }
 
@@ -168,7 +171,9 @@ MARKET_MOVE_ENTRY_STRATEGY = {
     ),
     "strategy_type": "ENTRY_CANDIDATE",
     "execution_scope": "PAPER_ONLY",
-    "official_execution_enabled": _paper_market_move_entry_enabled(),
+    "official_execution_enabled": _paper_experiment_enabled(
+        "QUANTPULSE_ENABLE_MARKET_MOVE_ENTRY_PAPER"
+    ),
     "live_execution_enabled": False,
     "immutable_experiment": True,
 }
@@ -223,7 +228,10 @@ REGIME_TREND_ENTRY_STRATEGY = {
     ),
     "strategy_type": "ENTRY_CANDIDATE",
     "execution_scope": "PAPER_ONLY",
-    "official_execution_enabled": False,
+    "official_execution_enabled": _paper_experiment_enabled(
+        "QUANTPULSE_ENABLE_REGIME_TREND_ENTRY_PAPER"
+    ),
+    "live_execution_enabled": False,
     "immutable_experiment": True,
 }
 

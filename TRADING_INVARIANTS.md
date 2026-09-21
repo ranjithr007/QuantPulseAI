@@ -470,3 +470,8 @@ The default remains disabled. The strategy remains `PAPER_ONLY`, retains its
 immutable experiment identity, and has `live_execution_enabled=False`; this flag
 must never be interpreted as live-trading authorization. Removing the flag must
 disable new paper entries after the service restarts.
+
+The current `CORE_SIGNAL_ENTRY` and `REGIME_TREND_ENTRY` candidates use their
+own explicit paper flags in the same way. Historical versions, including
+`(v1 history)` display records, remain retired and read-only; they cannot open
+new paper trades.

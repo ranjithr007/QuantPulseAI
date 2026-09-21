@@ -206,6 +206,8 @@ def test_cloud_compose_separates_api_worker_migration_and_frontend():
         assert service in compose
     assert 'QUANTPULSE_PROCESS_ROLE: worker' in compose
     assert 'QUANTPULSE_ENABLE_MARKET_MOVE_ENTRY_PAPER: "true"' in compose
+    assert 'QUANTPULSE_ENABLE_CORE_SIGNAL_ENTRY_PAPER: "true"' in compose
+    assert 'QUANTPULSE_ENABLE_REGIME_TREND_ENTRY_PAPER: "true"' in compose
     assert 'command: ["python", "-m", "app.worker"]' in compose
     assert (
         'command: ["alembic", "-c", "alembic.postgresql.ini", "upgrade", "head"]'
