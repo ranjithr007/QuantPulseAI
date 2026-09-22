@@ -2305,6 +2305,19 @@ def _execute_strategy_shadow_candidates(db, records, auto):
                 }
             )
             continue
+        definition = strategy_definition(strategy_id) or {}
+        if definition.get("shadow_execution_enabled") is False:
+            skipped.append(
+                {
+                    "symbol": candidate.get("symbol"),
+                    "strategy_id": strategy_id,
+                    "action": "skipped_shadow_strategy_disabled",
+                    "blocked_reasons": [
+                        "Strategy paper entries are paused by its explicit safety flag"
+                    ],
+                }
+            )
+            continue
         repo.acquire_book_execution_lock(db, strategy_id, strategy_version)
         reservation = _capture_entry_reservation(db)
         strategy_key = (strategy_id, strategy_version)

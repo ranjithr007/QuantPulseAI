@@ -29,8 +29,8 @@ MARKET_MOVE_ENTRY_STRATEGY_ID = "MARKET_MOVE_ENTRY"
 MARKET_MOVE_EXIT_STRATEGY_ID = "MARKET_MOVE_EXIT"
 
 
-def _paper_experiment_enabled(environment_name):
-    return os.getenv(environment_name, "false").strip().lower() in {
+def _paper_experiment_enabled(environment_name, *, default=False):
+    return os.getenv(environment_name, "true" if default else "false").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -134,6 +134,9 @@ CORE_SIGNAL_EXIT_PROTECTION_STRATEGY = {
     "exit_management_profile": "COST_SAFE_PROTECTION_1R_V1",
     "trailing_activation_r": 1.0,
     "locked_profit_fraction": 0.5,
+    "shadow_execution_enabled": _paper_experiment_enabled(
+        "QUANTPULSE_ENABLE_CORE_SIGNAL_EXIT_PROTECTION_PAPER", default=True
+    ),
 }
 
 MARKET_MOVE_STRATEGY = {
