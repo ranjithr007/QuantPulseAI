@@ -69,3 +69,13 @@ trades reached 0.25R adverse excursion before favourable excursion. Entry slippa
 contributes to the loss but is not the primary cause. No entry or exit candidate
 is promoted from this sample; a future entry study should test delayed
 confirmation and a strict entry-slippage cap on a fresh chronological holdout.
+
+## Next research candidate (not enabled)
+
+Define an immutable `regime_trend_entry_confirmed_v1` research candidate with
+the existing signal, regime, symbol, and risk inputs unchanged. It may enter
+only after the next finalized candle confirms the same direction and the
+estimated entry slippage is at or below 0.05%. The candidate must be compared
+with the unchanged control on a chronological holdout; the slippage cap is an
+execution guard, not a signal-quality claim. It cannot be enabled from the
+current replay because the low-slippage cohort remained negative.
