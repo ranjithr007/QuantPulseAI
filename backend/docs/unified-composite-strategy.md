@@ -26,12 +26,41 @@ Each coin has a profile. Every engine is independently `OFF`, `CONFIRM`, or
 - funding rate and open-interest change;
 - liquidation heatmap;
 - volume and liquidity quality.
+- macro bias (risk-on/risk-off, USD/rates/news context when available);
+- regime bias (trend, pullback, range, distribution, or high-volatility state);
+- spot bias on each governed timeframe: `1h`, `2h`, `4h`, and `1d`.
 
 `REQUIRED` blocks an entry when the input is missing, stale, contradictory, or
 opposite to the proposed direction. `CONFIRM` contributes evidence when fresh and
 blocks only when it produces a high-severity contradiction. `OFF` is excluded and
 is recorded in the decision audit. No missing input is silently treated as a
 positive signal.
+
+## Direction and timeframe bias
+
+The decision records separate `LONG`, `SHORT`, and `WAIT` bias for every enabled
+layer. A direction is actionable only when it passes the profile's alignment
+policy. Profiles can require, for example, a long 1h spot bias confirmed by 2h
+and 4h, with the 1d bias used as a macro trend filter. A short setup follows the
+same rules in the opposite direction.
+
+The default alignment policy is:
+
+- `1d`: context filter; an opposite daily bias blocks a trend entry;
+- `4h`: primary structural direction;
+- `2h`: confirmation direction;
+- `1h`: execution timing and pullback/breakout trigger.
+
+The profile may choose a different set of required timeframes, but it cannot
+ignore an explicitly `REQUIRED` timeframe when that timeframe is stale or
+contradictory. The report must show each timeframe's bias, freshness, source,
+and reason so a manual trader can override the entry only through an explicit
+confirmation action.
+
+Macro and regime are separate filters. Macro describes broad risk conditions;
+regime describes the coin's current market state. A bullish macro context does
+not override a bearish coin regime, and neither overrides a hard liquidation,
+data-quality, or risk-control block.
 
 ## Decision contract
 
