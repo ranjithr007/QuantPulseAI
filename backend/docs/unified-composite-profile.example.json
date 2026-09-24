@@ -1,0 +1,58 @@
+{
+  "strategy_id": "UNIFIED_COMPOSITE",
+  "mode": "MANUAL_REVIEW",
+  "execution": {
+    "paper_only": true,
+    "live_enabled": false,
+    "allowed_symbols": ["BTCUSDT", "ETHUSDT"]
+  },
+  "engines": {
+    "technical": "REQUIRED",
+    "ai": "CONFIRM",
+    "orderflow": "CONFIRM",
+    "smc": "REQUIRED",
+    "whale": "CONFIRM",
+    "funding_oi": "CONFIRM",
+    "liquidation": "CONFIRM",
+    "volume": "REQUIRED",
+    "macro": "CONFIRM",
+    "regime": "REQUIRED",
+    "spot_bias": {
+      "1h": "REQUIRED",
+      "2h": "REQUIRED",
+      "4h": "REQUIRED",
+      "1d": "CONFIRM"
+    }
+  },
+  "bias_policy": {
+    "required_direction": "ALIGN",
+    "minimum_confirmations": 3,
+    "daily_opposite_blocks": true,
+    "macro_opposite_blocks": false,
+    "stale_input_action": "WAIT",
+    "contradiction_action": "WAIT"
+  },
+  "entry": {
+    "mode": "BREAKOUT_RETEST",
+    "minimum_confidence": 70,
+    "maximum_entry_slippage_percent": 0.05
+  },
+  "exit": {
+    "target1_reward_to_risk": 1.0,
+    "target1_close_fraction": 0.5,
+    "target2_reward_to_risk": 2.0,
+    "trailing_activation_r": 1.0,
+    "protection_mode": "BREAKEVEN_AFTER_T1",
+    "maximum_hold_hours": 48
+  },
+  "risk": {
+    "stop_mode": "STRUCTURE_ATR",
+    "atr_multiplier": 1.5,
+    "risk_per_trade_percent": 0.25,
+    "maximum_leverage": 1,
+    "maximum_open_positions": 2,
+    "daily_loss_limit_percent": 1.0,
+    "weekly_loss_limit_percent": 3.0,
+    "one_position_per_symbol": true
+  }
+}
