@@ -381,8 +381,16 @@ function Repair-OpportunityCoverage {
         -MissingBefore $Health.opportunity_coverage_missing
 
     try {
+        $missingGaps = @($gapSignature | ConvertFrom-Json)
+        if ($missingGaps.Count -gt 48) {
+            Write-SupervisorLog (
+                "Bounding opportunity coverage retry from " +
+                "$($missingGaps.Count) hourly gaps to the 48-gap API limit."
+            ) "WARN"
+            $missingGaps = @($missingGaps | Select-Object -First 48)
+        }
         $recoveryPayload = @{
-            missing = @($gapSignature | ConvertFrom-Json)
+            missing = $missingGaps
         }
         Invoke-RestMethod `
             -Uri "$ApiBaseUrl/signals/watchlist/recover-opportunity-gaps" `
