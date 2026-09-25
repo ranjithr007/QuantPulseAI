@@ -22,6 +22,7 @@ EXIT_MONITOR_BOOTSTRAP_CANDLES = 600
 MARKET_FETCH_WORKERS = 8
 MARKET_PROVIDER_TIMEOUT_SECONDS = 5
 MARKET_PROVIDER_MAX_ATTEMPTS = 1
+MARKET_FETCH_RESULT_TIMEOUT_SECONDS = 30
 
 
 def run_market_job():
@@ -161,7 +162,9 @@ def run_market_job():
                 skipped_count = 0
                 latest_candle = None
                 try:
-                    source, candles = futures[id(item)].result()
+                    source, candles = futures[id(item)].result(
+                        timeout=MARKET_FETCH_RESULT_TIMEOUT_SECONDS
+                    )
                     candles = candles or []
                     if not candles:
                         total_failed += 1
