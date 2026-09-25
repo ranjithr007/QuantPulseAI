@@ -75,11 +75,14 @@ async def lifespan(app: FastAPI):
 
         ensure_trade_thesis_lineage_schema(db_engine)
 
-        # A terminated worker cannot finish its RUNNING ledger rows. Repair them
-        # before the supervisor evaluates health in local/dev runs.
-        recover_abandoned_pipeline_runs()
     else:
         print("Startup schema repair disabled; migrations are authoritative")
+
+    # A terminated worker cannot finish its RUNNING ledger rows. Recovery is
+    # safe with schema repair disabled because it only updates stale ledger
+    # records; keeping it outside the DDL block prevents restart loops in
+    # production when the previous process died during a pipeline run.
+    recover_abandoned_pipeline_runs()
 
     if USING_SQLITE_FALLBACK:
         bootstrap_sqlite_demo_data(db_engine)
