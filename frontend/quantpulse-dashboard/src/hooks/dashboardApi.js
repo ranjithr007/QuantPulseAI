@@ -26,6 +26,7 @@ const PAGE_DATA_NEEDS = {
   "market-trend": { watchlist: true, signals: false },
   "market-move": { signals: true },
   strategies: { watchlist: true, signals: false },
+  "unified-strategy": { watchlist: false, signals: false },
   "coin-details": { signals: true },
   "risk-controls": { paper: true, paperCandidates: false, risk: true, signals: true },
   "auto-trading": { paper: true, risk: true, signals: true },

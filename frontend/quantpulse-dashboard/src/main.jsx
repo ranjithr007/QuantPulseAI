@@ -21,6 +21,7 @@ const importRsRankingPage = () => import("./pages/RsRankingPage");
 const importSignalsPage = () => import("./pages/SignalsPage");
 const importStageAnalysisPage = () => import("./pages/StageAnalysisPage");
 const importStrategiesPage = () => import("./pages/StrategiesPage");
+const importUnifiedStrategyPage = () => import("./pages/UnifiedStrategyPage");
 
 const AutoTradingPage = React.lazy(importAutoTradingPage);
 const BacktestPage = React.lazy(importBacktestPage);
@@ -36,6 +37,7 @@ const RsRankingPage = React.lazy(importRsRankingPage);
 const SignalsPage = React.lazy(importSignalsPage);
 const StageAnalysisPage = React.lazy(importStageAnalysisPage);
 const StrategiesPage = React.lazy(importStrategiesPage);
+const UnifiedStrategyPage = React.lazy(importUnifiedStrategyPage);
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
 // Entry scanning and active trading decisions use the higher-timeframe stack.
@@ -63,6 +65,7 @@ const PAGES = [
   "rs-ranking",
   "stage-analysis",
   "strategies",
+  "unified-strategy",
 ];
 
 const ROUTE_PRELOADERS = {
@@ -80,6 +83,7 @@ const ROUTE_PRELOADERS = {
   "rs-ranking": importRsRankingPage,
   "stage-analysis": importStageAnalysisPage,
   strategies: importStrategiesPage,
+  "unified-strategy": importUnifiedStrategyPage,
 };
 
 function normalizeView(view) {
@@ -122,6 +126,7 @@ function getPageFromPath(pathname) {
   if (path.startsWith("/rs-ranking")) return "rs-ranking";
   if (path.startsWith("/stage-analysis")) return "stage-analysis";
   if (path.startsWith("/strategies")) return "strategies";
+  if (path.startsWith("/unified-strategy")) return "unified-strategy";
   if (path.startsWith("/signals")) return "signals";
   if (path.startsWith("/market-trend")) return "market-trend";
   if (path.startsWith("/market-move")) return "market-move";
@@ -151,6 +156,7 @@ function buildPageUrl(page, view) {
   if (page === "rs-ranking") return `/rs-ranking?${params.toString()}`;
   if (page === "stage-analysis") return `/stage-analysis?${params.toString()}`;
   if (page === "strategies") return `/strategies?${params.toString()}`;
+  if (page === "unified-strategy") return `/unified-strategy?${params.toString()}`;
   if (page === "signals") return `/signals?${params.toString()}`;
   if (page === "market-trend") return `/market-trend?${params.toString()}`;
   if (page === "market-move") return `/market-move?${params.toString()}`;
@@ -606,6 +612,7 @@ function DashboardLayout({
               }
             />
             <Route path="/strategies" element={<StrategiesPage />} />
+            <Route path="/unified-strategy" element={<UnifiedStrategyPage />} />
             <Route
               path="/contracts/:symbol"
               element={
