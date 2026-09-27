@@ -35,6 +35,31 @@ class UnifiedEnginePolicy(BaseModel):
     spot_bias: SpotBiasPolicy
 
 
+class UnifiedEngineWeights(BaseModel):
+    """Relative contribution weights used by the composite execution profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    technical: float = Field(ge=0, le=100)
+    ai: float = Field(ge=0, le=100)
+    orderflow: float = Field(ge=0, le=100)
+    smc: float = Field(ge=0, le=100)
+    whale: float = Field(ge=0, le=100)
+    funding_oi: float = Field(ge=0, le=100)
+    liquidation: float = Field(ge=0, le=100)
+    volume: float = Field(ge=0, le=100)
+    macro: float = Field(ge=0, le=100)
+    regime: float = Field(ge=0, le=100)
+    spot_bias: float = Field(ge=0, le=100)
+
+    @model_validator(mode="after")
+    def weights_sum_to_100(self):
+        total = sum(self.model_dump().values())
+        if abs(total - 100) > 0.01:
+            raise ValueError(f"engine weights must total 100%; received {total:g}%")
+        return self
+
+
 class UnifiedBiasPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -99,6 +124,7 @@ class UnifiedCompositeProfile(BaseModel):
     mode: ExecutionMode = "MANUAL_REVIEW"
     execution: UnifiedExecutionPolicy
     engines: UnifiedEnginePolicy
+    engine_weights: UnifiedEngineWeights
     bias_policy: UnifiedBiasPolicy
     entry: UnifiedEntryPolicy
     exit: UnifiedExitPolicy

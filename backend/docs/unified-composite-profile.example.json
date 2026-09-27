@@ -24,6 +24,19 @@
       "1d": "CONFIRM"
     }
   },
+  "engine_weights": {
+    "technical": 15,
+    "ai": 10,
+    "orderflow": 10,
+    "smc": 15,
+    "whale": 5,
+    "funding_oi": 10,
+    "liquidation": 5,
+    "volume": 10,
+    "macro": 5,
+    "regime": 10,
+    "spot_bias": 5
+  },
   "bias_policy": {
     "required_direction": "ALIGN",
     "minimum_confirmations": 3,
