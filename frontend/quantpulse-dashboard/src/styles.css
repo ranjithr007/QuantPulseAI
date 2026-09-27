@@ -228,6 +228,37 @@ select:focus-visible {
   border-color: #e4eaf2;
 }
 
+/* Unified Strategy is authored as a light dashboard surface. The legacy
+   palette above intentionally remaps these semantic utilities for older
+   screens, so keep the light treatment scoped to this page. */
+.unified-strategy-page .bg-white {
+  background-color: #ffffff !important;
+}
+
+.unified-strategy-page .bg-slate-50 {
+  background-color: #f8fafc !important;
+}
+
+.unified-strategy-page .text-slate-900 {
+  color: #0f172a !important;
+}
+
+.unified-strategy-page .text-slate-800 {
+  color: #1e293b !important;
+}
+
+.unified-strategy-page .text-slate-700 {
+  color: #334155 !important;
+}
+
+.unified-strategy-page .text-slate-600 {
+  color: #475569 !important;
+}
+
+.unified-strategy-page .text-slate-500 {
+  color: #64748b !important;
+}
+
 /* Replay uses a light surface directly: legacy white/slate utilities above
    are inverted for older dashboard components and must not darken this card. */
 .qp-replay-panel {
