@@ -1,4 +1,5 @@
 FROM node:22-alpine AS build
+# Keep this service-root file in the deployment diff so Railway rebuilds the public dashboard.
 
 WORKDIR /app
 
