@@ -150,6 +150,9 @@ def execute_unified_paper_trade(request: UnifiedPaperExecutionRequest):
         raise HTTPException(400, "Symbol is not in the profile allowlist")
     if profile.mode == "LIVE_AUTO" or not profile.execution.paper_only:
         raise HTTPException(400, "Unified execution is paper-only")
+    current_validation_id = _profile_validation_id(profile)
+    if request.validation_id and request.validation_id != current_validation_id:
+        raise HTTPException(400, "Profile changed after validation; validate the current profile before executing")
 
     mark = get_current_paper_entry_mark(symbol) if request.entry_price is None else None
     entry = float(request.entry_price or (mark or {}).get("mark_price") or 0)
