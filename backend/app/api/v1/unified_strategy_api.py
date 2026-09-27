@@ -1,6 +1,8 @@
-"""Safe configuration validation for the Unified Composite strategy."""
+"""Safe configuration validation and paper activity for the Unified Composite strategy."""
 
 from datetime import datetime
+import hashlib
+import json
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -28,6 +30,12 @@ class UnifiedPaperExecutionRequest(BaseModel):
     timeframe: str = Field(default="1h", pattern="^(1h|2h|4h|1d)$")
     confidence: float | None = Field(default=None, ge=0, le=100)
     entry_price: float | None = Field(default=None, gt=0)
+    validation_id: str | None = Field(default=None, max_length=120)
+
+
+def _profile_validation_id(profile: UnifiedCompositeProfile) -> str:
+    payload = json.dumps(profile.model_dump(by_alias=True), sort_keys=True, separators=(",", ":"))
+    return "UPV-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12].upper()
 
 
 @router.post("/validate")
@@ -38,8 +46,51 @@ def validate_profile(profile: UnifiedCompositeProfile):
         "status": "VALID",
         "execution": "PAPER_ONLY",
         "orders_created": 0,
+        "validation_id": _profile_validation_id(profile),
         "profile": profile.model_dump(by_alias=True),
     }
+
+
+@router.get("/activity")
+def unified_paper_activity(limit: int = Query(default=20, ge=1, le=100)):
+    """Return the persisted Unified paper trades for the strategy page."""
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(PaperTrade)
+            .filter(PaperTrade.strategy_id == "UNIFIED_COMPOSITE")
+            .order_by(PaperTrade.opened_at.desc(), PaperTrade.id.desc())
+            .limit(limit)
+            .all()
+        )
+        trades = []
+        for trade in rows:
+            evidence = {}
+            try:
+                evidence = json.loads(trade.execution_evidence_json or "{}")
+            except (TypeError, ValueError):
+                pass
+            trades.append({
+                "id": trade.id,
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "entry_timeframe": trade.entry_timeframe,
+                "entry_price": trade.entry_price,
+                "stop_loss": trade.stop_loss,
+                "target1": trade.target1,
+                "target2": trade.target2,
+                "status": trade.status,
+                "exit_price": trade.exit_price,
+                "realized_pnl_inr": trade.realized_pnl_inr,
+                "pnl_percent": trade.pnl_percent,
+                "opened_at": trade.opened_at,
+                "validation_id": evidence.get("validation_id"),
+                "validation_status": evidence.get("validation_status", "NOT_RECORDED"),
+            })
+        return {"strategy_id": "UNIFIED_COMPOSITE", "trades": trades}
+    finally:
+        db.close()
 
 
 @router.post("/evaluate/{symbol}")
@@ -128,6 +179,7 @@ def execute_unified_paper_trade(request: UnifiedPaperExecutionRequest):
         open_count = len(repo.get_open_trades(db))
         if open_count >= profile.risk.maximum_open_positions:
             raise HTTPException(409, "Maximum open paper positions reached")
+        validation_id = request.validation_id or "NOT_VALIDATED"
         trade = PaperTrade(
             symbol=symbol, side=request.side, entry_price=entry,
             planned_entry_price=entry, stop_loss=stop, initial_stop_loss=stop,
@@ -144,7 +196,12 @@ def execute_unified_paper_trade(request: UnifiedPaperExecutionRequest):
             position_notional_inr=notional, leverage=leverage, margin_used_inr=margin,
             partial_realized_pnl_inr=0.0, fee_bps=7.5, status="OPEN",
             opened_at=datetime.utcnow(), created_at=datetime.utcnow(),
-            execution_evidence_json='{"source":"UNIFIED_COMPOSITE_MANUAL_BUTTON","paper_only":true}',
+            execution_evidence_json=json.dumps({
+                "source": "UNIFIED_COMPOSITE_MANUAL_BUTTON",
+                "paper_only": True,
+                "validation_id": validation_id,
+                "validation_status": "VALIDATED" if request.validation_id else "NOT_VALIDATED",
+            }, separators=(",", ":")),
         )
         db.add(trade)
         db.flush()
@@ -159,7 +216,8 @@ def execute_unified_paper_trade(request: UnifiedPaperExecutionRequest):
                 "trade": {"id": trade.id, "symbol": symbol, "side": request.side,
                            "entry_price": entry, "stop_loss": stop, "target1": target1,
                            "target2": target2, "position_notional_inr": notional,
-                           "margin_used_inr": margin, "mode": profile.mode}}
+                           "margin_used_inr": margin, "mode": profile.mode,
+                           "validation_id": validation_id}}
     except HTTPException:
         db.rollback()
         raise
