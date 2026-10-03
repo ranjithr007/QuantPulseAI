@@ -75,6 +75,30 @@ def test_execution_gates_endpoint_stays_independent_of_full_summary(monkeypatch)
     assert record["official_execution_allowed"] is False
 
 
+def test_summary_can_reuse_execution_gate_evidence_without_rescanning_trades(monkeypatch):
+    factory = _session_factory()
+    monkeypatch.setattr(strategy_api, "SessionLocal", factory)
+    monkeypatch.setattr(
+        strategy_api,
+        "load_official_strategy_evidence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("execution gate evidence was already loaded")
+        ),
+    )
+
+    payload = strategy_api.get_strategy_summary(
+        strategy_id=CORE_FUSION_STRATEGY_ID,
+        since_days=30,
+        candidate_limit=24,
+        include_ledger=False,
+        include_learning_diagnostics=False,
+        include_official_evidence=False,
+    )
+
+    assert payload["status"] == "READY"
+    assert payload["records"][0]["official_entry_evidence"] is None
+
+
 def test_narrow_execution_evidence_loader_keeps_selected_sql_rows():
     factory = _session_factory()
     with factory() as db:

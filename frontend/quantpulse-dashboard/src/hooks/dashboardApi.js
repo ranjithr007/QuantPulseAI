@@ -82,7 +82,7 @@ export async function loadMarketParticipationTrends({ signal } = {}) {
   return response || { source: "market_participation_trends", count: 0, records: [] };
 }
 
-export async function loadStrategySummary({ strategyId, sinceDays = 30, includeLedger = true, includeLearningDiagnostics = false, signal } = {}) {
+export async function loadStrategySummary({ strategyId, sinceDays = 30, includeLedger = true, includeLearningDiagnostics = false, includeOfficialEvidence = true, signal } = {}) {
   const response = await requestJson(
     "/strategies/summary",
     {
@@ -91,6 +91,7 @@ export async function loadStrategySummary({ strategyId, sinceDays = 30, includeL
       candidate_limit: 24,
       include_ledger: includeLedger,
       include_learning_diagnostics: includeLearningDiagnostics,
+      include_official_evidence: includeOfficialEvidence,
     },
     signal,
     45000

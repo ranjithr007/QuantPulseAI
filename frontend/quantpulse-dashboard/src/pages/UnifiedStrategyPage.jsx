@@ -26,7 +26,7 @@ export default function UnifiedStrategyPage() {
     const controller = new AbortController();
     setActivityLoading(true);
     Promise.allSettled([
-      loadStrategySummary({ includeLedger: true, signal: controller.signal }),
+      loadStrategySummary({ strategyId: "UNIFIED_COMPOSITE", includeLedger: false, signal: controller.signal }),
       getApi("unified-strategy/activity", controller.signal),
     ]).then(([summaryResult, unifiedResult]) => {
       if (controller.signal.aborted) return;

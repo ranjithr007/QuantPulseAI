@@ -27,6 +27,7 @@ try {
       json = {records:[{...record, official_entry_evidence:{status:"INSUFFICIENT_EVIDENCE",closed_trades:7,minimum_closed_trades:30,official_execution_allowed:false}}]};
     } else if (path.endsWith("/strategies/summary")) {
       summaries++;
+      assert.equal(new URL(route.request().url()).searchParams.get("include_official_evidence"), "false");
       status = summaryFailure || 200;
       json = {records:[{...record, description:`Snapshot ${summaries}`}],entry_strategy_holdout:{status:"COLLECTING_PROSPECTIVE_ENTRIES",maturation_hours:48,minimum_mature_trades_per_candidate:30,cohorts:[{strategy_id:"CORE_SIGNAL_ENTRY",strategy_version:"core_signal_entry_v1",label:"Core Signal Entry Candidate",valid_mature_entry_evidence:7,immature_entries:2,invalid_mature_entry_evidence:0}]},entry_strategy_holdout_outcome:{status:"PENDING_READINESS",automatic:true,report:null}};
     } else if (path.endsWith("/strategies/ledger")) {
@@ -55,6 +56,7 @@ try {
   await page.getByText("Snapshot 1",{exact:true}).waitFor();
   await page.getByText("7/30",{exact:true}).waitFor();
   await page.getByText(/Outcomes remain hidden until every cohort is ready/).waitFor();
+  await page.getByRole('button',{name:'Expand details'}).click();
   await page.getByText("₹1,87,654.00",{exact:true}).waitFor();
   assert.equal(gates,1); assert.equal(summaries,1); assert.equal(ledgers,1);
   await page.clock.runFor(60100);

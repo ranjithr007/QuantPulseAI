@@ -147,6 +147,7 @@ def get_strategy_summary(
     candidate_limit: int = Query(default=24, ge=1, le=200),
     include_ledger: bool = True,
     include_learning_diagnostics: bool = True,
+    include_official_evidence: bool = True,
 ):
     normalized = str(strategy_id or "").upper() or None
     if normalized and normalized not in STRATEGY_REGISTRY:
@@ -167,6 +168,7 @@ def get_strategy_summary(
             cutoff,
             include_ledger=include_ledger,
             include_learning_evaluations=(include_learning_diagnostics is True),
+            include_official_evidence=include_official_evidence,
         )
         records = [
             _strategy_record_from_data(
@@ -360,12 +362,16 @@ def _strategy_record_from_data(
     strategy_book_history = strategy_data.get("strategy_paper_history", {}).get(
         key, []
     )
-    official_entry_evidence = strategy_evidence_for_plan(
-        strategy_data.get("official_entry_evidence"),
-        {
-            "strategy_id": definition["id"],
-            "strategy_version": definition["version"],
-        },
+    official_entry_evidence = (
+        strategy_evidence_for_plan(
+            strategy_data.get("official_entry_evidence"),
+            {
+                "strategy_id": definition["id"],
+                "strategy_version": definition["version"],
+            },
+        )
+        if strategy_data.get("official_evidence_loaded", True)
+        else None
     )
     learning_evaluation = strategy_data.get("learning_evaluations", {}).get(key)
     if learning_evaluation and not include_learning_diagnostics:
@@ -443,6 +449,7 @@ def _load_strategy_data(
     *,
     include_ledger=True,
     include_learning_evaluations=True,
+    include_official_evidence=True,
 ):
     """Load aggregate coverage plus only the rows needed by visible candidates."""
 
@@ -577,9 +584,10 @@ def _load_strategy_data(
         strategy_ids,
         cutoff=cutoff,
     )
-    official_entry_evidence = load_official_strategy_evidence(
-        db,
-        strategy_ids,
+    official_entry_evidence = (
+        load_official_strategy_evidence(db, strategy_ids)
+        if include_official_evidence
+        else {}
     )
     if include_ledger:
         ledger_data = _load_strategy_ledger_data(
@@ -619,6 +627,7 @@ def _load_strategy_data(
         "official_performance": official_performance,
         "strategy_paper_performance": strategy_paper_performance,
         "official_entry_evidence": official_entry_evidence,
+        "official_evidence_loaded": include_official_evidence,
         "strategy_paper_lifetime_performance": (
             strategy_paper_lifetime_performance
         ),

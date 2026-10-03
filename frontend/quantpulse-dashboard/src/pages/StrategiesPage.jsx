@@ -44,18 +44,20 @@ export default function StrategiesPage() {
       setLoading(true);
       setLedgerLoading(true);
       let gateFailure = null;
+      let gatesLoaded = false;
       try {
         try {
           const gates = await loadStrategyExecutionGates({ signal });
           if (signal.aborted) return null;
           setPayload((current) => mergeStrategyGates(current, gates));
           setGatesLoadedAt(Date.now());
+          gatesLoaded = true;
         } catch (requestError) {
           gateFailure = requestError;
         }
 
         const [summaryResult, ledgerResult] = await Promise.allSettled([
-          loadStrategySummary({ includeLedger: false, signal }),
+          loadStrategySummary({ includeLedger: false, includeOfficialEvidence: !gatesLoaded, signal }),
           loadStrategyLedger({ signal }),
         ]);
         if (signal.aborted) return null;
@@ -305,9 +307,7 @@ function strategyKey(strategy) {
 
 function preserveLoadedLedger(response, current) {
   const previousByKey = new Map(
-    (current?.records || [])
-      .filter((strategy) => strategy.ledger_loaded)
-      .map((strategy) => [strategyKey(strategy), strategy])
+    (current?.records || []).map((strategy) => [strategyKey(strategy), strategy])
   );
   return {
     ...response,
@@ -316,10 +316,16 @@ function preserveLoadedLedger(response, current) {
       if (!previous) return strategy;
       return {
         ...strategy,
-        ledger_loaded: true,
-        strategy_paper_lifetime_performance: previous.strategy_paper_lifetime_performance,
-        strategy_paper_wallet: previous.strategy_paper_wallet,
-        strategy_paper_history: previous.strategy_paper_history,
+        ...(strategy.official_entry_evidence == null ? {
+          official_entry_evidence: previous.official_entry_evidence,
+          official_execution_allowed: previous.official_execution_allowed,
+        } : {}),
+        ...(previous.ledger_loaded ? {
+          ledger_loaded: true,
+          strategy_paper_lifetime_performance: previous.strategy_paper_lifetime_performance,
+          strategy_paper_wallet: previous.strategy_paper_wallet,
+          strategy_paper_history: previous.strategy_paper_history,
+        } : {}),
       };
     }),
   };
