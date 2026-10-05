@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
 from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, insert, select
 
 
@@ -46,3 +47,19 @@ def test_audit_detects_local_only_railway_only_and_conflicting_rows():
         assert connection.execute(select(table).order_by(table.c.id)).all()[1].value == "local"
     with railway.connect() as connection:
         assert connection.execute(select(table).order_by(table.c.id)).all()[1].value == "railway"
+
+
+def test_audit_can_limit_the_scan_to_named_tables():
+    local = create_engine("sqlite://")
+    railway = create_engine("sqlite://")
+    metadata = MetaData()
+    Table("wanted", metadata, Column("id", Integer, primary_key=True))
+    Table("other", metadata, Column("id", Integer, primary_key=True))
+    metadata.create_all(local)
+    metadata.create_all(railway)
+
+    report = audit_module.audit(local, railway, tables=["wanted"])
+
+    assert [record["table"] for record in report["tables"]] == ["wanted"]
+    with pytest.raises(ValueError, match="unknown shared tables: missing"):
+        audit_module.audit(local, railway, tables=["missing"])

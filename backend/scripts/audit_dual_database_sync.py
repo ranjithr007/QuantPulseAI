@@ -10,12 +10,13 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 from contextlib import closing
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import MetaData, Table, create_engine, func, inspect, select
+from sqlalchemy import MetaData, Table, create_engine, func, inspect, select, text
 from sqlalchemy.engine import make_url
 
 
@@ -116,21 +117,32 @@ def _row_digest(row, table):
     ).hexdigest()
 
 
-def audit(local_engine, railway_engine, *, scan_conflicts=False, batch_size=1000):
-    local_inspector = inspect(local_engine)
-    railway_inspector = inspect(railway_engine)
-    local_names = set(local_inspector.get_table_names()) - INTERNAL_TABLES
-    railway_names = set(railway_inspector.get_table_names()) - INTERNAL_TABLES
-    report = {
-        "read_only": True,
-        "local_backend": local_engine.url.get_backend_name(),
-        "railway_backend": railway_engine.url.get_backend_name(),
-        "local_only_tables": sorted(local_names - railway_names),
-        "railway_only_tables": sorted(railway_names - local_names),
-        "tables": [],
-    }
+def audit(local_engine, railway_engine, *, count_rows=False, scan_conflicts=False, batch_size=1000, tables=None):
     with local_engine.connect() as local, railway_engine.connect() as railway:
-        for name in sorted(local_names & railway_names):
+        if local_engine.url.get_backend_name() == "mssql":
+            local.execute(text("SET LOCK_TIMEOUT 5000"))
+        if railway_engine.url.get_backend_name() == "postgresql":
+            railway.execute(text("SET statement_timeout = '15s'"))
+        local_inspector = inspect(local)
+        railway_inspector = inspect(railway)
+        local_names = set(local_inspector.get_table_names()) - INTERNAL_TABLES
+        railway_names = set(railway_inspector.get_table_names()) - INTERNAL_TABLES
+        report = {
+            "read_only": True,
+            "local_backend": local_engine.url.get_backend_name(),
+            "railway_backend": railway_engine.url.get_backend_name(),
+            "local_only_tables": sorted(local_names - railway_names),
+            "railway_only_tables": sorted(railway_names - local_names),
+            "tables": [],
+        }
+        shared_names = local_names & railway_names
+        if tables:
+            unknown = set(tables) - shared_names
+            if unknown:
+                raise ValueError(f"unknown shared tables: {', '.join(sorted(unknown))}")
+            shared_names &= set(tables)
+        for name in sorted(shared_names):
+            print(f"checking {name}", file=sys.stderr, flush=True)
             local_shape = _shape(local_inspector, name)
             railway_shape = _shape(railway_inspector, name)
             compatible = local_shape == railway_shape and len(local_shape["primary_key"]) == 1
@@ -141,14 +153,19 @@ def audit(local_engine, railway_engine, *, scan_conflicts=False, batch_size=1000
                 "railway_shape": railway_shape,
             }
             if compatible:
-                local_table = Table(name, MetaData(), autoload_with=local_engine)
-                railway_table = Table(name, MetaData(), autoload_with=railway_engine)
-                record["local_rows"] = int(local.execute(select(func.count()).select_from(local_table)).scalar_one())
-                record["railway_rows"] = int(railway.execute(select(func.count()).select_from(railway_table)).scalar_one())
+                if count_rows or scan_conflicts:
+                    local_table = Table(name, MetaData(), autoload_with=local)
+                    railway_table = Table(name, MetaData(), autoload_with=railway)
                 if scan_conflicts:
-                    record["row_comparison"] = compare_rows(
+                    comparison = compare_rows(
                         local, railway, local_table, railway_table, batch_size=batch_size
                     )
+                    record["row_comparison"] = comparison
+                    record["local_rows"] = comparison["local_only"] + comparison["matching"] + comparison["conflicting"]
+                    record["railway_rows"] = comparison["railway_only"] + comparison["matching"] + comparison["conflicting"]
+                elif count_rows:
+                    record["local_rows"] = int(local.execute(select(func.count()).select_from(local_table)).scalar_one())
+                    record["railway_rows"] = int(railway.execute(select(func.count()).select_from(railway_table)).scalar_one())
             report["tables"].append(record)
     report["compatible_tables"] = sum(record["compatible"] for record in report["tables"])
     report["incompatible_tables"] = [
@@ -159,8 +176,10 @@ def audit(local_engine, railway_engine, *, scan_conflicts=False, batch_size=1000
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--count-rows", action="store_true", help="count every row in each compatible table")
     parser.add_argument("--scan-conflicts", action="store_true", help="stream all rows to identify primary-key conflicts")
     parser.add_argument("--batch-size", type=int, default=1000)
+    parser.add_argument("--table", action="append", dest="tables", help="audit only this shared table; repeat for several tables")
     args = parser.parse_args()
     if args.batch_size < 1:
         parser.error("--batch-size must be positive")
@@ -170,7 +189,7 @@ def main():
     local_engine = create_engine(local_url, pool_pre_ping=True, connect_args={"timeout": 5})
     railway_engine = create_engine(railway_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
     try:
-        print(json.dumps(audit(local_engine, railway_engine, scan_conflicts=args.scan_conflicts, batch_size=args.batch_size), indent=2))
+        print(json.dumps(audit(local_engine, railway_engine, count_rows=args.count_rows, scan_conflicts=args.scan_conflicts, batch_size=args.batch_size, tables=args.tables), indent=2))
     finally:
         local_engine.dispose()
         railway_engine.dispose()
