@@ -397,7 +397,9 @@ export async function loadPaperTradeHistory({ symbol, page = 1, limit = 10, incl
     "/paper-trade/trade-history",
     { symbol, page, limit, include_evidence: includeEvidence },
     signal,
-    15000
+    // Railway may need extra time to acquire a pooled connection after an idle period.
+    // Keep the request bounded, but avoid aborting normal PNL history loads at 15s.
+    30000
   );
   if (!response || response.status === "UNAVAILABLE" || !Array.isArray(response.records)) {
     throw new Error(response?.detail || "Trade history is unavailable; no page was loaded.");
