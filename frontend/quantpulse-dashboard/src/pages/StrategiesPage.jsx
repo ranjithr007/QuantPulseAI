@@ -15,7 +15,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { loadStrategyExecutionGates, loadStrategyLedger, loadStrategySummary, loadStrategyTradeAudit } from "../hooks/dashboardApi";
-import { formatPercent, formatSigned, formatTimeInIst } from "../utils/formatters";
+import { formatDateTimeInIst, formatPercent, formatSigned, formatTimeInIst } from "../utils/formatters";
 import { requestFailureMessage, retryDelay } from "../utils/requestRecovery";
 import { startVisiblePolling } from "../utils/visiblePolling";
 
@@ -660,7 +660,7 @@ function StrategyPaperHistory({ trades, loading = false }) {
                 <td><StatusBadge label={trade.status} tone={trade.status === "OPEN" ? "cyan" : trade.result === "WIN" ? "emerald" : "rose"} /></td>
                 <td>{price(trade.exit_price)}</td>
                 <td className={numberTone(trade.realized_pnl_inr)}>{trade.status === "OPEN" ? "Open" : `₹${number(trade.realized_pnl_inr, 2)} · ${formatSigned(trade.pnl_percent || 0, 2)}%`}</td>
-                <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(trade.opened_at)}</span></td>
+                <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatDateTimeInIst(trade.opened_at)}</span></td>
                 <td className="pr-3"><button type="button" disabled={auditLoadingId != null} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs disabled:cursor-wait disabled:opacity-60" aria-label={`View strategy audit ${trade.symbol} trade ${trade.id}`} onClick={() => openAudit(trade)}>{auditLoadingId === trade.id ? "Loading…" : "View audit"}</button></td>
               </tr>
             ))}
@@ -709,7 +709,7 @@ function CandidateTable({ candidates }) {
                   {candidate.regime_route ? <div className="mt-1 text-[10px] uppercase tracking-[0.1em] text-cyan-600">{candidate.regime_route.replaceAll("_", " ")}</div> : null}
                   {candidate.entry_location?.zone ? <div className="mt-0.5 text-[10px] text-slate-500">{candidate.entry_location.zone} · {candidate.entry_location.tests || 0} tests · {candidate.entry_location.rejection_confirmed ? "rejection confirmed" : "waiting for rejection"}</div> : null}
                 </td>
-                <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatTimeInIst(candidate.created_at)}</span></td>
+                <td className="pr-4 text-slate-500"><span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatDateTimeInIst(candidate.created_at)}</span></td>
               </tr>
             ))}
             {!candidates.length ? <tr><td colSpan="10" className="px-4 py-8 text-center text-slate-500">Waiting for the next strategy scan.</td></tr> : null}

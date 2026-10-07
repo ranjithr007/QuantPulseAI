@@ -115,6 +115,20 @@ export function formatTimeInIst(value, fallback = "N/A") {
   })} IST`;
 }
 
+export function formatDateTimeInIst(value, fallback = "N/A") {
+  if (!value) return fallback;
+  const date = parseTimestamp(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return `${date.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: IST_TIME_ZONE,
+  })} IST`;
+}
+
 export function timestampMillis(value, fallback = 0) {
   if (!value) return fallback;
   const timestamp = parseTimestamp(value).getTime();
