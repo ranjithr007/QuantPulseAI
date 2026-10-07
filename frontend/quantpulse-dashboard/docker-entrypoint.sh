@@ -16,4 +16,6 @@ case "$QUANTPULSE_API_UPSTREAM" in
 esac
 
 export QUANTPULSE_API_UPSTREAM
-exec nginx -g "daemon off;"
+# Preserve the official nginx image entrypoint so its envsubst template step
+# renders the Railway port and proxy configuration before nginx starts.
+exec /docker-entrypoint.sh nginx -g "daemon off;"
