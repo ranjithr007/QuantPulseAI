@@ -21,6 +21,8 @@ ENV PORT=8080
 ENV QUANTPULSE_API_UPSTREAM=https://quantpulseai-staging.up.railway.app
 
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY docker-entrypoint.sh /usr/local/bin/quantpulse-dashboard-entrypoint.sh
+RUN chmod +x /usr/local/bin/quantpulse-dashboard-entrypoint.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 8080
@@ -28,4 +30,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${PORT}/health" >/dev/null || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/usr/local/bin/quantpulse-dashboard-entrypoint.sh"]
