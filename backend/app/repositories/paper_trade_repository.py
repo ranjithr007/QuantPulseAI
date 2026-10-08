@@ -10,6 +10,7 @@ from app.database.sqlserver import USING_SQLITE_FALLBACK
 from app.paper_trading.exit_policy import PAPER_STAGED_EXIT_POLICY
 from app.paper_trading.exit_policy import PAPER_EXIT_MONITOR_TIMEFRAME
 from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
+from app.paper_trading.exit_policy import PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY
 from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.paper_trading.exit_policy import approved_adaptive_entry_levels, PAPER_ADAPTIVE_EXIT_POLICY
 from app.paper_trading.exit_policy import target1_protection_stop
@@ -24,6 +25,7 @@ from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRep
 from app.repositories.notification_repository import NotificationRepository
 from app.paper_trading.exit_lock import advance_exit_checkpoint
 from app.paper_trading.exit_evidence import entry_evidence_fields, record_exit_evidence
+from app.paper_trading.exit_evidence import read_evidence
 
 
 class PaperTradeRepository:
@@ -193,10 +195,19 @@ class PaperTradeRepository:
                 _price_precision(trade.entry_price),
             )
         current_stop = float(getattr(trade, "stop_loss", protection_stop))
+        lock_levels = PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY and bool(
+            read_evidence(getattr(trade, "execution_evidence_json", None))
+        )
         desired_stop = (
-            max(protection_stop, current_stop)
+            current_stop
+            if lock_levels
+            else max(protection_stop, current_stop)
             if str(trade.side).upper() == "LONG"
-            else min(protection_stop, current_stop)
+            else (
+                current_stop
+                if lock_levels
+                else min(protection_stop, current_stop)
+            )
         )
         values = {
             "exit_policy": PAPER_STAGED_EXIT_POLICY,
@@ -759,13 +770,14 @@ class PaperTradeRepository:
         trade.remaining_position_fraction = max(0.0, 1.0 - fraction)
         trade.target1_hit_at = candle_time or datetime.utcnow()
         trade.target1_exit_price = float(exit_price)
-        protected_stop = target1_protection_stop(
-            trade.side,
-            trade.entry_price,
-            trade.target1,
-            _price_precision(trade.entry_price),
-        )
-        trade.stop_loss = max(float(trade.stop_loss), protected_stop) if trade.side == "LONG" else min(float(trade.stop_loss), protected_stop)
+        if not PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY:
+            protected_stop = target1_protection_stop(
+                trade.side,
+                trade.entry_price,
+                trade.target1,
+                _price_precision(trade.entry_price),
+            )
+            trade.stop_loss = max(float(trade.stop_loss), protected_stop) if trade.side == "LONG" else min(float(trade.stop_loss), protected_stop)
         _ensure_trade_sizing_snapshot(trade)
         gross_leg_percent = _directional_pnl_percent(
             trade.side,

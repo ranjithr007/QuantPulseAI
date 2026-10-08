@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from app.paper_trading.fill_model import simulate_exit_fill
 from app.paper_trading.exit_policy import PAPER_TARGET1_FRACTION
+from app.paper_trading.exit_policy import PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY
 from app.paper_trading.exit_policy import is_staged_exit_policy
 from app.paper_trading.exit_policy import target1_protection_stop
 from app.paper_trading.exit_policy import target2_trail_trigger
@@ -64,6 +65,7 @@ def evaluate_paper_trade_exit(trade, candle):
 
 
 def _evaluate_staged_exit(trade, candle, high, low):
+    lock_levels = _lock_exit_levels(trade)
     target1_complete = getattr(trade, "target1_hit_at", None) is not None
     target_price = trade.target2 if target1_complete else trade.target1
 
@@ -108,10 +110,17 @@ def _evaluate_staged_exit(trade, candle, high, low):
             "exit_price": exit_fill["exit_fill_price"],
             "fill_profile": exit_fill,
             "remaining_position_fraction": 1.0 - target1_fraction,
-            "new_stop_loss": target1_protection_stop(
-                trade.side,
-                trade.entry_price,
-                trade.target1,
+            # Keep the decision shape stable for replay callers.  Official
+            # PaperTrade rows ignore this value because their entry snapshot
+            # is locked; replay and shadow rows continue to model protection.
+            "new_stop_loss": (
+                float(trade.stop_loss)
+                if lock_levels
+                else target1_protection_stop(
+                    trade.side,
+                    trade.entry_price,
+                    trade.target1,
+                )
             ),
             "candle_time": getattr(candle, "close_time", None) or candle.candle_time,
             "high_price": high,
@@ -128,7 +137,7 @@ def _evaluate_staged_exit(trade, candle, high, low):
             exit_fill,
         )
 
-    if target1_complete:
+    if target1_complete and not lock_levels:
         trail_trigger = target2_trail_trigger(trade.target1, trade.target2)
         if trade.side == "LONG":
             trail_trigger_hit = high >= trail_trigger
@@ -150,6 +159,19 @@ def _evaluate_staged_exit(trade, candle, high, low):
                 "high_price": high,
                 "low_price": low,
             }
+
+    if lock_levels:
+        return {
+            "paper_trade_id": trade.id,
+            "symbol": trade.symbol,
+            "side": trade.side,
+            "action": "HOLD",
+            "result": "OPEN",
+            "candle_time": candle.candle_time,
+            "high_price": high,
+            "low_price": low,
+            "target1_complete": target1_complete,
+        }
 
     trailing_stop = (
         _cost_safe_profit_protection_stop(trade, candle)
@@ -342,3 +364,13 @@ def _exit_decision(trade, candle, result, exit_price, fill_profile=None):
         "high_price": float(candle.high_price),
         "low_price": float(candle.low_price),
     }
+
+
+def _lock_exit_levels(trade):
+    """Lock persisted live PaperTrade levels while leaving replay and shadow research intact."""
+    evidence = read_evidence(getattr(trade, "execution_evidence_json", None))
+    return (
+        PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY
+        and trade.__class__.__name__ == "PaperTrade"
+        and bool(evidence)
+    )

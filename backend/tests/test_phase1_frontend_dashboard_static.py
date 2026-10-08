@@ -186,7 +186,7 @@ class Phase1FrontendDashboardStaticTests(unittest.TestCase):
         self.assertIn('rawRemaining === null', pnl_section)
         self.assertIn("QA evidence quarantined", pnl_section)
         self.assertIn("ledgerScope.quarantined_records", pnl_section)
-        self.assertIn('T1 closes 75% / protected stop / T2 closes 25%', pnl_section)
+        self.assertIn('T1 closes 75% / fixed stop / T2 closes 25%', pnl_section)
         self.assertIn("Deadline (IST)", pnl_section)
         self.assertIn("Closed (IST)", history)
         self.assertIn("Historical paper-trading edge is negative", pnl_section)

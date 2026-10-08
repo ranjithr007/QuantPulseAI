@@ -8,6 +8,7 @@ EVIDENCE_VERSION = "PAPER_EXIT_EVIDENCE_V1"
 MAX_EVIDENCE_BYTES = 8192
 DEFAULT_TRAILING_ACTIVATION_R = 0.0
 DEFAULT_EXIT_MANAGEMENT_PROFILE = "IMMEDIATE_TRAIL_V1"
+EXIT_LEVELS_LOCKED_KEY = "exit_levels_locked_after_entry"
 
 
 def read_evidence(value):
@@ -68,6 +69,7 @@ def entry_evidence_fields(candidate):
         "decision_snapshot_id": plan.get("strategy_decision_snapshot_id"),
         "trailing_activation_r": activation,
         "trailing_activation_source": activation_source,
+        EXIT_LEVELS_LOCKED_KEY: True,
     })
     return {"execution_evidence_json": encode_evidence(evidence), "trailing_activation_r": activation}
 

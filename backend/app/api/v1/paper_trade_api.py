@@ -47,6 +47,7 @@ from app.paper_trading.exit_policy import approval_target_for_policy
 from app.paper_trading.exit_policy import build_policy_trade_levels
 from app.paper_trading.exit_policy import PAPER_ADAPTIVE_EXIT_POLICY
 from app.paper_trading.exit_policy import target1_protection_stop
+from app.paper_trading.exit_policy import PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.repositories.paper_wallet_ledger_repository import PaperWalletLedgerRepository
 from app.repositories.automation_settings_repository import DEFAULT_AUTOMATION_SETTINGS
@@ -3611,7 +3612,7 @@ def _paper_trade_display_exit_levels(paper_trade):
                 policy["target1"],
                 _paper_trade_price_precision(entry_price),
             )
-            if target1_complete
+            if target1_complete and not PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY
             else policy["stop_loss"]
         ),
         "target1": policy["target1"],

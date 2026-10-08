@@ -1017,7 +1017,7 @@ function exitState(trade) {
 
 function exitPolicyLabel(trade) {
   if (stopBoundaryCrossed(trade)) return "Stop crossed; automatic exit pending";
-  if (isStagedExitPolicy(trade)) return "T1 closes 75% / protected stop / T2 closes 25%";
+  if (isStagedExitPolicy(trade)) return "T1 closes 75% / fixed stop / T2 closes 25%";
   return "Original trade policy";
 }
 

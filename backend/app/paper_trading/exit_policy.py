@@ -26,6 +26,9 @@ PAPER_TARGET1_FRACTION = 0.75
 PAPER_TARGET1_STOP_PROGRESS_FRACTION = 0.5
 PAPER_TARGET2_TRAIL_TRIGGER_FRACTION = 0.75
 PAPER_MAX_HOLD_HOURS = 48
+# Paper entry levels are snapshots.  Once a paper position is opened, the
+# monitor must not trail or otherwise rewrite its stop/target levels.
+PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY = True
 PAPER_ADAPTIVE_MIN_ATR_MULTIPLE = 1.0
 PAPER_ADAPTIVE_STRUCTURE_BUFFER_ATR = 0.25
 PAPER_ADAPTIVE_MAX_ATR_MULTIPLE = 2.5
@@ -57,6 +60,7 @@ def paper_exit_policy_for(symbol, timeframe):
         "target1_stop_progress_fraction": PAPER_TARGET1_STOP_PROGRESS_FRACTION,
         "target2_trail_trigger_fraction": PAPER_TARGET2_TRAIL_TRIGGER_FRACTION,
         "max_hold_hours": PAPER_MAX_HOLD_HOURS,
+        "lock_exit_levels_after_entry": PAPER_LOCK_EXIT_LEVELS_AFTER_ENTRY,
     }
 
 

@@ -426,10 +426,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             trade = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").one()
             self.assertEqual("PAPER_STAGED_EXIT_V2", trade.exit_policy)
             self.assertEqual(0.25, trade.remaining_position_fraction)
-            self.assertEqual(
-                round(trade.entry_price + (trade.target1 - trade.entry_price) * 0.5, 2),
-                trade.stop_loss,
-            )
+            self.assertEqual(round(trade.initial_stop_loss, 2), trade.stop_loss)
             db.add(
                 MarketCandle(
                     id=2,
@@ -718,10 +715,7 @@ class Phase1PaperTradeLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(trade.target1_hit_at)
             self.assertIsNotNone(trade.target1_exit_price)
             self.assertEqual(0.25, trade.remaining_position_fraction)
-            self.assertEqual(
-                round(trade.entry_price + (trade.target1 - trade.entry_price) * 0.5, 2),
-                trade.stop_loss,
-            )
+            self.assertEqual(round(trade.initial_stop_loss, 2), trade.stop_loss)
 
             db.add(
                 MarketCandle(
