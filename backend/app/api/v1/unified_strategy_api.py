@@ -121,6 +121,15 @@ def evaluate_profile(
             allowed = False
             reasons.append("Composite confidence is below the profile minimum")
         decision = report.get("bias") if allowed else "WAIT"
+        engine_scores = []
+        for item in report.get("engine_scores") or []:
+            weight = float(getattr(profile.engine_weights, item["name"], 0) or 0)
+            score = item.get("score")
+            engine_scores.append({
+                **item,
+                "configured_weight_percent": weight,
+                "weighted_contribution": round(float(score) * weight / 100, 2) if score is not None else None,
+            })
         return {
             "status": decision,
             "symbol": symbol,
@@ -129,6 +138,7 @@ def evaluate_profile(
             "reasons": reasons,
             "engine_policy": profile.engines.model_dump(by_alias=True),
             "risk": profile.risk.model_dump(),
+            "engine_scores": engine_scores,
             "orders_created": 0,
             "source_report": report,
         }
@@ -163,7 +173,7 @@ def execute_unified_paper_trade(request: UnifiedPaperExecutionRequest):
     if confidence < profile.entry.minimum_confidence:
         raise HTTPException(400, "Confidence is below the profile minimum")
     direction = 1 if request.side == "LONG" else -1
-    stop_percent = max(0.10, min(5.0, 0.75 * profile.risk.atr_multiplier))
+    stop_percent = max(0.10, min(5.0, profile.risk.stop_loss_percent))
     stop = entry * (1 - direction * stop_percent / 100)
     risk_distance = abs(entry - stop)
     target1 = entry + direction * risk_distance * profile.exit.target1_reward_to_risk

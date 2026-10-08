@@ -100,6 +100,7 @@ class UnifiedRiskPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     stop_mode: Literal["ATR", "STRUCTURE_ATR", "FIXED_PERCENT"]
+    stop_loss_percent: float = Field(default=1.125, gt=0, le=5)
     atr_multiplier: float = Field(gt=0, le=5)
     risk_per_trade_percent: float = Field(gt=0, le=1)
     maximum_leverage: float = Field(gt=0, le=1)

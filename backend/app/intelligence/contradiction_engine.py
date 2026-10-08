@@ -155,6 +155,16 @@ def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=9
     report["master_signal"] = master_signal
     report["current_price"] = current_price
     report["candle_time"] = candle.candle_time
+    report["engine_scores"] = build_engine_scores(
+        master_signal=master_signal,
+        feature=feature,
+        regime=regime,
+        orderflow=orderflow,
+        smc=smc,
+        derivative=derivative,
+        whale=whale,
+        heatmap=heatmap,
+    )
     report["freshness"]["candle"] = freshness["candle"]
     report["inputs"] = {
         "feature": freshness["feature"],
@@ -169,6 +179,89 @@ def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=9
     if cache is not None:
         cache[cache_key] = copy.deepcopy(report)
     return report
+
+
+def build_engine_scores(*, master_signal=None, feature=None, regime=None,
+                        orderflow=None, smc=None, derivative=None,
+                        whale=None, heatmap=None):
+    """Return the current score evidence in the names used by the UI.
+
+    Scores use a signed -100..100 scale.  Missing source evidence is kept as
+    unavailable instead of being represented as a misleading zero score.
+    """
+    components = {
+        item.get("name"): item
+        for item in (master_signal or {}).get("scoring_profile", {}).get("components", [])
+        if item.get("name")
+    }
+
+    rows = []
+    rows.append(_engine_score_row("technical", components.get("feature"), "master_signal.scoring_profile.feature"))
+    rows.append(_engine_score_row("ai", _score_item(master_signal, "score"), "master_signal.score"))
+    rows.append(_engine_score_row("orderflow", components.get("orderflow"), "master_signal.scoring_profile.orderflow"))
+    rows.append(_engine_score_row("smc", components.get("smc"), "master_signal.scoring_profile.smc"))
+    rows.append(_engine_score_row("whale", _score_item(whale, "whale_score"), "whale.whale_score"))
+    rows.append(_engine_score_row("funding_oi", _score_item(derivative, "score"), "derivative.score"))
+    rows.append(_heatmap_score_row(heatmap))
+    rows.append(_feature_score_row("volume", feature, ("VolumeScore", "volume_score"), "feature.volume_score"))
+    rows.append(_feature_score_row("macro", feature, ("MacroScore", "macro_score"), "feature.macro_score"))
+    rows.append(_engine_score_row("regime", components.get("regime"), "master_signal.scoring_profile.regime"))
+    rows.append(_engine_score_row("spot_bias", _score_item(master_signal, "score"), "master_signal.bias"))
+    return rows
+
+
+def _score_item(item, key):
+    if item is None:
+        return None
+    value = item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+    if value is None:
+        return None
+    return {"score": _safe_number(value, 0), "value": value}
+
+
+def _engine_score_row(name, item, source):
+    if item is None:
+        return {"name": name, "score": None, "available": False, "source": source}
+    score = item.get("score") if isinstance(item, dict) else getattr(item, "score", None)
+    return {
+        "name": name,
+        "score": round(_safe_number(score, 0), 2),
+        "available": True,
+        "source": source,
+        "direction": "LONG" if float(score or 0) > 0 else "SHORT" if float(score or 0) < 0 else "NEUTRAL",
+        "reason": item.get("reason") if isinstance(item, dict) else None,
+    }
+
+
+def _feature_score_row(name, feature, fields, source):
+    value = _get_value(feature, *fields)
+    if value is None:
+        return {"name": name, "score": None, "available": False, "source": source}
+    raw = _safe_number(value, 50)
+    score = max(-100, min(100, (raw - 50) * 2))
+    return {
+        "name": name,
+        "score": round(score, 2),
+        "available": True,
+        "source": source,
+        "direction": "LONG" if score > 0 else "SHORT" if score < 0 else "NEUTRAL",
+    }
+
+
+def _heatmap_score_row(heatmap):
+    if heatmap is None:
+        return {"name": "liquidation", "score": None, "available": False, "source": "heatmap.bias"}
+    bias = str(getattr(heatmap, "bias", "") or "").upper()
+    confidence = max(0, min(100, _safe_number(getattr(heatmap, "confidence", None), 0)))
+    score = confidence if "SHORT_LIQUIDATIONS" in bias else -confidence if "LONG_LIQUIDATIONS" in bias else 0
+    return {
+        "name": "liquidation",
+        "score": round(score, 2),
+        "available": True,
+        "source": "heatmap.bias",
+        "direction": "LONG" if score > 0 else "SHORT" if score < 0 else "NEUTRAL",
+        "reason": bias or None,
+    }
 
 
 def analyze_contradictions(
