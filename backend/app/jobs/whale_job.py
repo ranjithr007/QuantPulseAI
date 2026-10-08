@@ -19,7 +19,13 @@ def run_whale_job():
     db = SessionLocal()
 
     try:
-        symbols = SymbolRepository().get_active_symbols(db)
+        symbols = [
+            str(item.symbol).strip().upper()
+            for item in SymbolRepository().get_active_symbols(db)
+        ]
+        # Whale collection is network-bound. Release the symbol lookup
+        # transaction before the first provider request.
+        db.rollback()
         collector = WhaleCollector()
         repo = WhaleRepository()
         order_repo = OrderFlowRepository()
@@ -28,20 +34,20 @@ def run_whale_job():
         skipped_symbols = []
         failed_symbols = []
 
-        for item in symbols:
+        for symbol in symbols:
             try:
-                trades = collector.get_order_flow(item.symbol)
+                trades = collector.get_order_flow(symbol)
 
                 if not trades:
-                    print("No whale data:", item.symbol)
-                    skipped_symbols.append(item.symbol)
+                    print("No whale data:", symbol)
+                    skipped_symbols.append(symbol)
                     continue
                 # print(trades)
                 repo.save_many(db, trades["whales"])
 
-                previous_cvd = order_repo.get_last_cvd(db, item.symbol)
+                previous_cvd = order_repo.get_last_cvd(db, symbol)
                 trades["cumulative_delta"] = previous_cvd + trades["delta"]
-                history = order_repo.get_recent_flow(db, item.symbol)
+                history = order_repo.get_recent_flow(db, symbol)
 
                 abs_type, abs_strength = engine.detect_absorption(trades)
 
@@ -56,13 +62,13 @@ def run_whale_job():
                 trades["exhaustion_strength"] = ex_strength
 
                 order_repo.save(db, trades)
-                processed_symbols.append(item.symbol)
+                processed_symbols.append(symbol)
             except Exception as ex:
                 safe_rollback(db)
-                failed_symbols.append(item.symbol)
+                failed_symbols.append(symbol)
                 if not is_transient_network_error(ex):
                     print(
-                        f"Whale job error {item.symbol}: "
+                        f"Whale job error {symbol}: "
                         f"{summarize_network_error(ex)}"
                     )
                 continue

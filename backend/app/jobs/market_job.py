@@ -49,10 +49,16 @@ def run_market_job():
             max_attempts=MARKET_PROVIDER_MAX_ATTEMPTS,
         )
         repo = MarketRepository()
-        symbols = symbol_repo.get_active_symbols(db)
+        # Keep only plain values before ending the read transaction. SQLAlchemy
+        # expires ORM instances on rollback, so using ``symbol.symbol`` later
+        # would silently reacquire a connection while provider calls are in
+        # flight.
+        symbols = [
+            str(item.symbol).strip().upper()
+            for item in symbol_repo.get_active_symbols(db)
+        ]
         planned = []
-        for symbol in symbols:
-            symbol_name = symbol.symbol
+        for symbol_name in symbols:
             for timeframe in TIMEFRAMES:
                 try:
                     latest_candle_cursor = repo.get_collection_cursor(

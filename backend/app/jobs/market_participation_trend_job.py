@@ -39,6 +39,9 @@ def run_market_participation_trend_job(*, context=None):
                 for item in SymbolRepository().get_active_symbols(db)
             }
         )
+        # Provider and macro calls can take seconds. End the symbol lookup
+        # transaction before waiting on those external services.
+        db.rollback()
         collected = _collect_spot_candles(
             collector,
             [*symbols, "ETHBTC"],
@@ -63,6 +66,8 @@ def run_market_participation_trend_job(*, context=None):
             for row in timeframe_rows
         ]
         stored_spot_rows = SpotMarketRepository().save_many(db, raw_spot_rows)
+        # Do not hold the write transaction while waiting for FRED.
+        db.rollback()
         external_context = FredMacroCollector(
             settings.fred_api_key,
             timeout_seconds=settings.fred_timeout_seconds,

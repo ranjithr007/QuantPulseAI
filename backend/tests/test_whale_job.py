@@ -66,7 +66,8 @@ def test_whale_job_continues_when_one_symbol_has_no_data():
     assert whale_save.called
     assert flow_save.called
     assert fake_db.close.called
-    assert not fake_db.rollback.called
+    # The symbol lookup transaction is released before provider calls.
+    assert fake_db.rollback.call_count == 1
     assert result == {
         "status": "OK",
         "source": "whale_job",
@@ -118,5 +119,7 @@ def test_whale_job_isolates_one_symbol_failure_and_processes_the_next():
     assert result["failed"] == ["BNBUSDT"]
     assert result["processed"] == ["BTCUSDT"]
     assert flow_save.call_count == 1
-    assert fake_db.rollback.call_count == 1
+    # One rollback releases the symbol lookup transaction; the second
+    # isolates the failed symbol before the next provider request.
+    assert fake_db.rollback.call_count == 2
     assert fake_db.close.call_count == 1

@@ -13,6 +13,8 @@ def run_orderbook_snapshot_job():
     db = SessionLocal()
     try:
         symbols = [item.symbol for item in SymbolRepository().get_active_symbols(db)]
+        # Release the read transaction before the concurrent exchange calls.
+        db.rollback()
         collector = OrderBookCollector()
         collected = []
         with ThreadPoolExecutor(max_workers=6) as executor:
