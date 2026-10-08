@@ -11,8 +11,36 @@ const TIMEFRAMES = ["1h", "2h", "4h", "1d"];
 const POLICIES = ["OFF", "CONFIRM", "REQUIRED"];
 const ENGINE_NAMES = ["technical", "ai", "orderflow", "smc", "whale", "funding_oi", "liquidation", "volume", "macro", "regime"];
 const DEFAULT_ENGINE_WEIGHTS = { technical: 15, ai: 10, orderflow: 10, smc: 15, whale: 5, funding_oi: 10, liquidation: 5, volume: 10, macro: 5, regime: 10, spot_bias: 5 };
-const DEFAULT_PROFILE = { strategy_id: "UNIFIED_COMPOSITE", mode: "MANUAL_REVIEW", execution: { paper_only: true, live_enabled: false, allowed_symbols: ["BTCUSDT", "ETHUSDT"] }, engines: { technical: "REQUIRED", ai: "CONFIRM", orderflow: "CONFIRM", smc: "REQUIRED", whale: "CONFIRM", funding_oi: "CONFIRM", liquidation: "CONFIRM", volume: "REQUIRED", macro: "CONFIRM", regime: "REQUIRED", spot_bias: { "1h": "REQUIRED", "2h": "REQUIRED", "4h": "REQUIRED", "1d": "CONFIRM" } }, engine_weights: DEFAULT_ENGINE_WEIGHTS, bias_policy: { required_direction: "ALIGN", minimum_confirmations: 3, daily_opposite_blocks: true, macro_opposite_blocks: false, stale_input_action: "WAIT", contradiction_action: "WAIT" }, entry: { mode: "BREAKOUT_RETEST", minimum_confidence: 70, maximum_entry_slippage_percent: 0.05 }, exit: { target1_reward_to_risk: 1, target1_close_fraction: 0.5, target2_reward_to_risk: 2, trailing_activation_r: 1, protection_mode: "BREAKEVEN_AFTER_T1", maximum_hold_hours: 48 }, risk: { stop_mode: "STRUCTURE_ATR", stop_loss_percent: 1.125, atr_multiplier: 1.5, risk_per_trade_percent: 0.25, maximum_leverage: 1, maximum_open_positions: 2, daily_loss_limit_percent: 1, weekly_loss_limit_percent: 3, one_position_per_symbol: true } };
-function normalizeProfile(value) { return { ...DEFAULT_PROFILE, ...(value || {}), execution: { ...DEFAULT_PROFILE.execution, ...(value?.execution || {}) }, engines: { ...DEFAULT_PROFILE.engines, ...(value?.engines || {}), spot_bias: { ...DEFAULT_PROFILE.engines.spot_bias, ...(value?.engines?.spot_bias || {}) } }, engine_weights: { ...DEFAULT_ENGINE_WEIGHTS, ...(value?.engine_weights || {}) }, bias_policy: { ...DEFAULT_PROFILE.bias_policy, ...(value?.bias_policy || {}) }, entry: { ...DEFAULT_PROFILE.entry, ...(value?.entry || {}) }, exit: { ...DEFAULT_PROFILE.exit, ...(value?.exit || {}) }, risk: { ...DEFAULT_PROFILE.risk, ...(value?.risk || {}) } }; }
+const DEFAULT_PROFILE = { strategy_id: "UNIFIED_COMPOSITE", mode: "MANUAL_REVIEW", execution: { paper_only: true, live_enabled: false, allowed_symbols: SYMBOLS }, engines: { technical: "REQUIRED", ai: "CONFIRM", orderflow: "CONFIRM", smc: "REQUIRED", whale: "CONFIRM", funding_oi: "CONFIRM", liquidation: "CONFIRM", volume: "REQUIRED", macro: "CONFIRM", regime: "REQUIRED", spot_bias: { "1h": "REQUIRED", "2h": "REQUIRED", "4h": "REQUIRED", "1d": "CONFIRM" } }, engine_weights: DEFAULT_ENGINE_WEIGHTS, bias_policy: { required_direction: "ALIGN", minimum_confirmations: 3, daily_opposite_blocks: true, macro_opposite_blocks: false, stale_input_action: "WAIT", contradiction_action: "WAIT" }, entry: { mode: "BREAKOUT_RETEST", minimum_confidence: 70, maximum_entry_slippage_percent: 0.05 }, exit: { target1_reward_to_risk: 1, target1_close_fraction: 0.5, target2_reward_to_risk: 2, trailing_activation_r: 1, protection_mode: "BREAKEVEN_AFTER_T1", maximum_hold_hours: 48 }, risk: { stop_mode: "STRUCTURE_ATR", stop_loss_percent: 1.125, atr_multiplier: 1.5, risk_per_trade_percent: 0.25, maximum_leverage: 1, maximum_open_positions: SYMBOLS.length, daily_loss_limit_percent: 1, weekly_loss_limit_percent: 3, one_position_per_symbol: true } };
+function normalizeProfile(value) {
+  const stored = value || {};
+  const storedSymbols = stored.execution?.allowed_symbols;
+  const isLegacyTwoSymbolDefault = Array.isArray(storedSymbols)
+    && storedSymbols.length === 2
+    && storedSymbols.includes("BTCUSDT")
+    && storedSymbols.includes("ETHUSDT");
+  const storedMaxPositions = Number(stored.risk?.maximum_open_positions);
+  const isLegacyTwoPositionDefault = storedMaxPositions === 2;
+  return {
+    ...DEFAULT_PROFILE,
+    ...stored,
+    execution: {
+      ...DEFAULT_PROFILE.execution,
+      ...(stored.execution || {}),
+      allowed_symbols: isLegacyTwoSymbolDefault ? SYMBOLS : (storedSymbols || DEFAULT_PROFILE.execution.allowed_symbols),
+    },
+    engines: { ...DEFAULT_PROFILE.engines, ...(stored.engines || {}), spot_bias: { ...DEFAULT_PROFILE.engines.spot_bias, ...(stored.engines?.spot_bias || {}) } },
+    engine_weights: { ...DEFAULT_ENGINE_WEIGHTS, ...(stored.engine_weights || {}) },
+    bias_policy: { ...DEFAULT_PROFILE.bias_policy, ...(stored.bias_policy || {}) },
+    entry: { ...DEFAULT_PROFILE.entry, ...(stored.entry || {}) },
+    exit: { ...DEFAULT_PROFILE.exit, ...(stored.exit || {}) },
+    risk: {
+      ...DEFAULT_PROFILE.risk,
+      ...(stored.risk || {}),
+      maximum_open_positions: isLegacyTwoPositionDefault ? SYMBOLS.length : (stored.risk?.maximum_open_positions || DEFAULT_PROFILE.risk.maximum_open_positions),
+    },
+  };
+}
 function apiUrl(path) { return new URL(String(path).replace(/^\/+/, ""), API_BASE); }
 async function callApi(path, body) { const response = await fetch(apiUrl(path), { method: "POST", credentials: "include", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(body) }); return readApiResponse(response); }
 async function readApiResponse(response) { const payload = await response.json().catch(() => ({})); if (!response.ok) { const detail = payload.detail; const message = Array.isArray(detail) ? detail.map((item) => typeof item === "string" ? item : item?.msg || item?.detail || JSON.stringify(item)).join(" · ") : detail && typeof detail === "object" ? JSON.stringify(detail) : detail; throw new Error(message || "Unified strategy request failed"); } return payload; }
