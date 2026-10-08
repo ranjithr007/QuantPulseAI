@@ -1,5 +1,7 @@
 from collections import defaultdict
 
+from sqlalchemy import or_
+
 from app.database.models.paper_trade import PaperTrade
 from app.database.models.strategy_shadow_trade import StrategyShadowTrade
 from app.governance.evidence_policy import OFFICIAL_ENTRY_TIMEFRAMES
@@ -37,12 +39,15 @@ def load_official_strategy_evidence(db, strategy_ids=None):
             model.opened_at.label("opened_at"),
             model.closed_at.label("closed_at"),
             model.exit_evidence_json.label("exit_evidence_json"),
-        ).filter(model.status == "CLOSED")
+        ).filter(
+            model.status == "CLOSED",
+            model.entry_timeframe.in_(OFFICIAL_ENTRY_TIMEFRAMES),
+            or_(model.symbol.is_(None), ~model.symbol.like("QA%")),
+        )
         if normalized_ids:
             query = query.filter(model.strategy_id.in_(normalized_ids))
-        # Scope timeframe and QA records in the shared policy helper below.
-        # Keeping this predicate indexable also avoids SQL Server scans caused
-        # by applying LOWER/UPPER functions to every ledger row.
+        # Keeping these predicates indexable avoids SQL Server scans caused by
+        # applying LOWER/UPPER functions to every ledger row.
         return [dict(row._mapping) for row in query.all()]
 
     return build_official_strategy_evidence(

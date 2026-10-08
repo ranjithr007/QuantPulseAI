@@ -887,26 +887,35 @@ def _load_strategy_drawdowns(
 
 
 def _load_recent_strategy_rows(db, model, strategy_ids, *, per_strategy_limit):
-    ranked = db.query(
-        model.id.label("row_id"),
-        func.row_number()
-        .over(
-            partition_by=(model.strategy_id, model.strategy_version),
-            order_by=(model.created_at.desc(), model.id.desc()),
-        )
-        .label("row_number"),
-    ).filter(model.strategy_id.in_(strategy_ids)).subquery()
-    rows = (
-        db.query(model)
-        .join(ranked, ranked.c.row_id == model.id)
-        .filter(ranked.c.row_number <= per_strategy_limit)
-        .order_by(
-            model.strategy_id.asc(),
-            model.strategy_version.asc(),
-            model.created_at.desc(),
-            model.id.desc(),
-        )
+    # A row_number() window over the entire ledger forces PostgreSQL to sort
+    # every historical trade before it can discard all but the visible rows.
+    # The page only needs a small recent slice for each strategy revision, so
+    # discover the revisions first and let the composite strategy index satisfy
+    # one bounded ORDER BY/LIMIT query per revision.
+    pairs = (
+        db.query(model.strategy_id, model.strategy_version)
+        .filter(model.strategy_id.in_(strategy_ids))
+        .distinct()
         .all()
+    )
+    rows = []
+    for strategy_id, strategy_version in pairs:
+        rows.extend(
+            db.query(model)
+            .filter(model.strategy_id == strategy_id)
+            .filter(model.strategy_version == strategy_version)
+            .order_by(model.created_at.desc(), model.id.desc())
+            .limit(per_strategy_limit)
+            .all()
+        )
+    rows.sort(
+        key=lambda item: (
+            item.strategy_id,
+            item.strategy_version,
+            item.created_at,
+            item.id,
+        ),
+        reverse=True,
     )
     return _group_strategy_rows(rows)
 
