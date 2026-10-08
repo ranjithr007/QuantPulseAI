@@ -1,3 +1,4 @@
+// Railway dashboard deployment marker: this page must rebuild with frontend changes.
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { Activity, CheckCircle2, Clock3, FlaskConical, Layers3, Lock, Play, RefreshCw, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
