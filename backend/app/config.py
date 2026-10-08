@@ -95,9 +95,17 @@ class Settings:
             if "paper_trade_fast_exit" not in self.scheduler_job_ids:
                 self.scheduler_job_ids.append("paper_trade_fast_exit")
         self.database_url = os.getenv("QUANTPULSE_DATABASE_URL") or _build_sqlserver_url()
-        self.database_pool_size = int(os.getenv("QUANTPULSE_DATABASE_POOL_SIZE", "5"))
+        # The scheduler and API can legitimately have several concurrent
+        # database tasks.  Keep development small, but give production enough
+        # slots that one slow report cannot starve all request handlers.  Both
+        # values remain explicitly configurable through Railway variables.
+        default_pool_size = "10" if self.environment == "production" else "5"
+        default_max_overflow = "20" if self.environment == "production" else "5"
+        self.database_pool_size = int(
+            os.getenv("QUANTPULSE_DATABASE_POOL_SIZE", default_pool_size)
+        )
         self.database_max_overflow = int(
-            os.getenv("QUANTPULSE_DATABASE_MAX_OVERFLOW", "5")
+            os.getenv("QUANTPULSE_DATABASE_MAX_OVERFLOW", default_max_overflow)
         )
         self.database_pool_timeout_seconds = int(
             os.getenv("QUANTPULSE_DATABASE_POOL_TIMEOUT_SECONDS", "30")

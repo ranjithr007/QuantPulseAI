@@ -1,6 +1,15 @@
-"""Read-only PostgreSQL storage telemetry for capacity and retention decisions."""
+"""Read-only PostgreSQL storage telemetry for capacity and retention decisions.
 
+Storage telemetry is intentionally isolated from the application pool.  The
+endpoint is used while diagnosing database pressure, so waiting behind the
+same exhausted pool would hide the useful result behind a QueuePool timeout.
+"""
+
+from threading import Lock
+
+from sqlalchemy import create_engine
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool
 
 
 PROTECTED_EVIDENCE_TABLES = {
@@ -28,6 +37,43 @@ PROTECTED_EVIDENCE_TABLES = {
 }
 OPERATIONAL_RETENTION_TABLES = {"pipeline_runs", "pipeline_job_runs"}
 
+_TELEMETRY_ENGINE = None
+_TELEMETRY_URL = None
+_TELEMETRY_LOCK = Lock()
+
+
+def _telemetry_engine(engine):
+    """Return a short-lived connection engine separate from the app pool.
+
+    The fake engine used by unit tests and non-PostgreSQL backends do not carry
+    a renderable SQLAlchemy URL, so they continue using their supplied engine.
+    """
+
+    global _TELEMETRY_ENGINE, _TELEMETRY_URL
+    url = getattr(engine, "url", None)
+    render_url = getattr(url, "render_as_string", None)
+    if not callable(render_url):
+        return engine
+
+    url_text = render_url(hide_password=False)
+    if _TELEMETRY_ENGINE is not None and _TELEMETRY_URL == url_text:
+        return _TELEMETRY_ENGINE
+
+    with _TELEMETRY_LOCK:
+        if _TELEMETRY_ENGINE is None or _TELEMETRY_URL != url_text:
+            if _TELEMETRY_ENGINE is not None:
+                _TELEMETRY_ENGINE.dispose()
+            _TELEMETRY_ENGINE = create_engine(
+                url_text,
+                poolclass=NullPool,
+                pool_pre_ping=True,
+                connect_args={
+                    "options": "-c statement_timeout=5000 -c lock_timeout=2000",
+                },
+            )
+            _TELEMETRY_URL = url_text
+    return _TELEMETRY_ENGINE
+
 
 def build_database_storage_report(engine, settings, *, table_limit=25):
     backend = engine.url.get_backend_name()
@@ -50,7 +96,9 @@ def build_database_storage_report(engine, settings, *, table_limit=25):
 
     limit = max(1, min(100, int(table_limit)))
     try:
-        with engine.connect() as connection:
+        # Do not consume a slot from the already-busy application QueuePool.
+        # PostgreSQL statistics are read through a direct, non-pooled session.
+        with _telemetry_engine(engine).connect() as connection:
             database_bytes = int(
                 connection.execute(
                     text("SELECT pg_database_size(current_database())")

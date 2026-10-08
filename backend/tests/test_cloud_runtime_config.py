@@ -25,8 +25,8 @@ def test_production_api_role_is_cloud_safe_by_default(monkeypatch):
     assert settings.rate_limit_enabled is True
     assert settings.rate_limit_per_minute == 120
     assert settings.admin_rate_limit_per_minute == 30
-    assert settings.database_pool_size == 5
-    assert settings.database_max_overflow == 5
+    assert settings.database_pool_size == 10
+    assert settings.database_max_overflow == 20
     assert settings.database_pool_timeout_seconds == 30
     assert settings.database_pool_recycle_seconds == 1800
     assert settings.pipeline_retention_enabled is True

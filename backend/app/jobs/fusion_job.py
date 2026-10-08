@@ -15,10 +15,16 @@ def run_fusion_job(*, context=None):
     print("Running Fusion signal Collector...")
     db = SessionLocal()
     try:
-        symbols = SymbolRepository().get_active_symbols(db)
+        symbols = [
+            str(item.symbol).strip().upper()
+            for item in SymbolRepository().get_active_symbols(db)
+        ]
+        # Fusion reads its own evidence through the service.  Release the
+        # symbol lookup transaction before iterating over all provider/timeframe
+        # combinations so this job cannot hold a pool slot for the full cycle.
+        safe_rollback(db)
         results=[]
-        for item in symbols: 
-            symbol = item.symbol
+        for symbol in symbols:
             for timeframe in TIMEFRAMES:
                 try:
                     result = service.generate(db, symbol, timeframe, context=context)

@@ -18,13 +18,19 @@ def run_orderflow_job(*, context=None):
 
     try:
 
-        symbols = SymbolRepository().get_active_symbols(db)
+        symbols = [
+            str(item.symbol).strip().upper()
+            for item in SymbolRepository().get_active_symbols(db)
+        ]
+        # generate_orderflow owns the evidence reads/writes for each scope;
+        # this session is only needed for the initial symbol list.
+        safe_rollback(db)
         results = []
         errors = []
         expected_count = len(symbols) * len(TIMEFRAMES)
         for item in symbols:
 
-            symbol = item.symbol
+            symbol = item
 
             for tf in TIMEFRAMES:
                 try:
