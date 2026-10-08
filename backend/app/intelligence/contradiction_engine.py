@@ -47,6 +47,7 @@ def build_contradiction_report(db, symbol, timeframe="5m", stale_after_seconds=9
                 }
             ],
             "inputs": {},
+            "engine_scores": build_engine_scores(),
             "freshness": {
                 "candle": freshness_status(None, stale_after_seconds),
             },
