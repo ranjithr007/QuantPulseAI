@@ -94,7 +94,17 @@ def get_strategy_execution_gates(
     try:
         definitions = _display_strategy_definitions(db, normalized)
         strategy_ids = [definition["id"] for definition in definitions]
-        evidence_by_key = load_official_strategy_evidence(db, strategy_ids)
+        # The dashboard requests every strategy at once.  Rebuilding lifetime
+        # official evidence for that bulk request scans both trade ledgers and
+        # can starve the API when the Railway database is large.  Keep the
+        # bulk contract fail-closed and reserve the detailed evidence scan for
+        # a focused strategy request (the audit/detail views still get the
+        # exact evidence they need).
+        evidence_by_key = (
+            load_official_strategy_evidence(db, strategy_ids)
+            if normalized
+            else {}
+        )
         records = []
         for definition in definitions:
             evidence = strategy_evidence_for_plan(

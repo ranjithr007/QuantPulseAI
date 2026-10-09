@@ -75,6 +75,27 @@ def test_execution_gates_endpoint_stays_independent_of_full_summary(monkeypatch)
     assert record["official_execution_allowed"] is False
 
 
+def test_bulk_execution_gates_fail_closed_without_scanning_full_evidence(monkeypatch):
+    factory = _session_factory()
+    monkeypatch.setattr(strategy_api, "SessionLocal", factory)
+    monkeypatch.setattr(
+        strategy_api,
+        "load_official_strategy_evidence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bulk gate loads must not scan the full evidence ledgers")
+        ),
+    )
+
+    payload = strategy_api.get_strategy_execution_gates(strategy_id=None)
+
+    assert payload["status"] == "READY"
+    assert payload["strategy_count"] >= 1
+    assert all(
+        record["official_execution_allowed"] is False
+        for record in payload["records"]
+    )
+
+
 def test_summary_can_reuse_execution_gate_evidence_without_rescanning_trades(monkeypatch):
     factory = _session_factory()
     monkeypatch.setattr(strategy_api, "SessionLocal", factory)

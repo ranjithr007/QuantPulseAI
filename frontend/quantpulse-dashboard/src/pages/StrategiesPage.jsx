@@ -57,7 +57,12 @@ export default function StrategiesPage() {
         }
 
         const [summaryResult, ledgerResult] = await Promise.allSettled([
-          loadStrategySummary({ includeLedger: false, includeOfficialEvidence: !gatesLoaded, signal }),
+          loadStrategySummary({
+            includeLedger: false,
+            includeLearningDiagnostics: false,
+            includeOfficialEvidence: !gatesLoaded,
+            signal,
+          }),
           loadStrategyLedger({ signal }),
         ]);
         if (signal.aborted) return null;
